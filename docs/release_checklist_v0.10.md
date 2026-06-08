@@ -723,3 +723,107 @@
 - SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
 - Compensation state is independent from snapshots and lease state (each has its own persistence layer)
 - Does NOT replace lease renewal, snapshot, or business-level idempotency
+
+## Phase 16.2: Lease Backend Abstraction
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_lease_backend.py` — StateStoreLeaseBackend, InMemory, SQLite, factory, protocol tests
+- [x] `python -m pytest tests/unit/test_lease_coordinator.py` — LeaseCoordinator tests
+- [x] `python -m pytest tests/unit/test_lease_renewer_phase16_2.py` — LeaseRenewer with lease_backend tests
+- [x] `python -m pytest tests/unit/test_dag_executor_lease_backend.py` — DagExecutor lease backend tests
+- [x] `python -m pytest tests/unit/test_config_lease.py` — DagLeaseConfig tests
+- [x] Full test suite: 1206 passed, 0 failed (+75 new Phase 16.2 tests)
+- [x] No regressions in existing passing tests
+
+### Lease Backend Protocol
+
+- [x] `WorkflowLeaseBackend` Protocol — 5 async methods: acquire_run_lease, renew_run_lease, release_run_lease, get_run_lease, list_expired_leases
+- [x] Reuses existing models: WorkerIdentity, LeasePolicy, WorkflowRunLease, LeaseAcquireResult
+- [x] All datetime fields remain timezone-aware UTC
+
+### StateStoreLeaseBackend Adapter
+
+- [x] `StateStoreLeaseBackend` wraps any WorkflowStateStore as WorkflowLeaseBackend
+- [x] Delegates all 5 lease methods to underlying state store
+- [x] Preserves denied acquire behavior (returns LeaseAcquireResult with acquired=False)
+- [x] Preserves expired steal behavior (depends on policy.allow_steal_expired)
+
+### InMemoryWorkflowLeaseBackend
+
+- [x] Five-path acquire logic: no lease → acquire, released → acquire, expired+steal → steal, same-owner → refresh, different-owner → deny
+- [x] renew_run_lease — validates owner, released status, expiration; bumps version
+- [x] release_run_lease — sets released_at timestamp; validates owner
+- [x] get_run_lease — returns None for released/missing leases
+- [x] list_expired_leases — filters by expires_at <= cutoff, released_at IS NULL
+
+### SQLiteWorkflowLeaseBackend
+
+- [x] Auto-creates `workflow_run_leases` table on init (run_id PK, owner_id, timestamps, version)
+- [x] Indexes on expires_at and owner_id
+- [x] Five-path acquire logic (mirrors InMemory) with SQLite persistence
+- [x] renew/release/get/list_expired with DB persistence
+- [x] Cross-instance visibility (new backend instance sees leases from other instances)
+- [x] In-memory cache with DB re-sync on get_run_lease
+
+### LeaseCoordinator
+
+- [x] Wraps WorkflowLeaseBackend with default LeasePolicy
+- [x] acquire() — applies default policy when none provided; explicit overrides default
+- [x] renew() — same policy application
+- [x] release() — pass-through to backend
+- [x] get() — pass-through to backend
+- [x] list_expired() — pass-through with cutoff
+
+### LeaseRenewer Phase 16.2 Support
+
+- [x] New optional `lease_backend` parameter in __init__
+- [x] Backward compatible with legacy `state_store` parameter (auto-wraps via StateStoreLeaseBackend)
+- [x] `lease_backend` takes precedence when both provided
+- [x] `_renew_loop` uses `self._lease_backend` for renew calls
+- [x] Keeps `self._state_store` for terminal-state check (run status)
+- [x] lease_lost behavior unchanged
+- [x] stop behavior unchanged
+- [x] async context manager behavior unchanged
+
+### DagExecutor Lease Backend Integration
+
+- [x] New optional `lease_backend` and `lease_policy` parameters in __init__
+- [x] `_get_lease_backend()` — explicit > state_store > None priority
+- [x] `_acquire_lease()` — uses effective lease backend
+- [x] `_release_lease()` — uses effective lease backend
+- [x] `_make_renewer()` — creates LeaseRenewer with lease_backend for standalone backends, state_store for legacy
+- [x] execute() uses explicit lease_backend when provided
+- [x] resume() uses explicit lease_backend when provided
+- [x] Explicit lease_backend takes precedence over state_store
+- [x] No lease_backend and no state_store keeps old behavior (no lease operations)
+- [x] Lease acquire denied returns stable DagError
+
+### Config Support
+
+- [x] `DagLeaseConfig` — Pydantic model (backend="state_store", db_path=None, ttl_seconds=300, allow_steal_expired=True, renew_before_seconds=60)
+- [x] Backend validator: accepts "state_store", "memory", "sqlite"; rejects others with clear error
+- [x] ttl_seconds must be >= 1
+- [x] `_normalize_dag_lease` — maps `dag_lease` YAML key to `dag_lease_config`
+- [x] Old config without dag_lease remains valid
+- [x] Config threaded through config/loader → AgentApp → AppRunner → WorkflowExecutor → WorkflowExecutor → DagExecutor
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 16.2 section
+- [x] README.md limitations updated with Phase 16.2 notes
+- [x] README.md roadmap updated (Phase 16.2 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 16.2 section added
+
+### Known Limitations (v0.10.0 + Phase 16.2)
+
+- Lease backend abstraction is a coordination layer — does NOT guarantee exactly-once guarantee
+- NOT a distributed lock service (no Redis/etcd distributed lock)
+- No Celery / Temporal / distributed worker daemon
+- No automatic recovery daemon — resume is explicit via `app.resume_workflow_run()`
+- Default lease backend is state_store-backed (delegates to existing WorkflowStateStore)
+- Standalone memory/sqlite backends are single-process (memory) or cross-instance (sqlite) only
+- Lease renewal only works while the current process is alive
+- External side effect idempotency remains the business tool's responsibility
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- Lease backend does NOT replace lease renewal, snapshot, compensation, or business-level idempotency

@@ -440,6 +440,52 @@ All notable changes to Agent App Framework are documented here.
 - Compensation state is independent from snapshots and lease state (each has its own persistence layer)
 - Does NOT replace lease renewal, snapshot, or business-level idempotency
 
+## 0.10.0 (Phase 16.2: Lease Backend Abstraction)
+
+### Added
+
+- **`WorkflowLeaseBackend` Protocol** — pluggable interface for lease coordination (`acquire_run_lease`, `renew_run_lease`, `release_run_lease`, `get_run_lease`, `list_expired_leases`); reuses existing models (WorkerIdentity, LeasePolicy, WorkflowRunLease, LeaseAcquireResult)
+- **`StateStoreLeaseBackend`** — adapter wrapping `WorkflowStateStore` as a `WorkflowLeaseBackend`; preserves full backward compatibility with existing state store lease methods
+- **`InMemoryWorkflowLeaseBackend`** — standalone in-memory lease backend; five-path acquire logic (no lease, released, expired-steal, same-owner refresh, different-owner deny); supports renew, release, get, list_expired
+- **`SQLiteWorkflowLeaseBackend`** — standalone SQLite lease backend with `workflow_run_leases` table; cross-instance visibility; auto-creates tables and directories; in-memory cache with DB re-sync on `get_run_lease`
+- **`create_lease_backend()`** — factory function supporting "state_store", "memory", "sqlite" backend types
+- **`LeaseCoordinator`** — thin coordination layer over `WorkflowLeaseBackend`; applies default `LeasePolicy` when none provided; unified entry point for acquire/renew/release/get/list_expired
+- **`LeaseRenewer` Phase 16.2 support** — new optional `lease_backend` parameter; takes precedence over `state_store`; backward compatible with legacy `state_store` parameter (auto-wraps via `StateStoreLeaseBackend`)
+- **`DagExecutor` lease backend injection** — new optional `lease_backend` and `lease_policy` parameters; `_get_lease_backend()` returns explicit backend > state_store > None; `_acquire_lease()`, `_release_lease()`, `_make_renewer()` all use effective lease backend
+- **`WorkflowExecutor` lease backend helpers** — `_build_lease_backend()` creates backend from `DagLeaseConfig`; `_build_lease_policy()` creates `LeasePolicy` from config; passed to `DagExecutor` in both `run_workflow()` and `resume_workflow_run()`
+- **`DagLeaseConfig`** — Pydantic config model (backend="state_store", db_path=None, ttl_seconds=300, allow_steal_expired=True, renew_before_seconds=60); backend validator rejects unknown types
+- **Config support** — `runtime.dag_lease` (nested) or `runtime.dag_lease_config` (flat) in YAML; `_normalize_dag_lease` validator; threaded through config/loader → AgentApp → AppRunner → WorkflowExecutor → WorkflowExecutor → DagExecutor
+- **75 new Phase 16.2 tests** — StateStoreLeaseBackend (7), InMemory lease backend (11), SQLite lease backend (8), factory (7), protocol typing (3), LeaseCoordinator (10), LeaseRenewer (5), DagExecutor (8), config (6)
+
+### Changed
+
+- `RuntimeConfig` — new optional `dag_lease_config: DagLeaseConfig | None` field; `_normalize_dag_lease` model_validator
+- `DagExecutor.__init__()` — new optional `lease_backend` and `lease_policy` parameters
+- `DagExecutor._acquire_lease()` — uses `_get_lease_backend()` instead of direct state_store access
+- `DagExecutor._release_lease()` — uses `_get_lease_backend()` instead of direct state_store access
+- `DagExecutor._make_renewer()` — uses effective lease backend; detects standalone vs state_store backend
+- `LeaseRenewer.__init__()` — new optional `lease_backend` parameter; backward compatible with `state_store`
+- `LeaseRenewer._renew_loop()` — uses `self._lease_backend` for renew calls; keeps `self._state_store` for terminal-state check
+- `WorkflowExecutor.__init__()` — new optional `dag_lease_config` parameter; `_build_lease_backend()` and `_build_lease_policy()` helpers
+- `WorkflowExecutor.run_workflow()` — passes `lease_backend` and `lease_policy` to DagExecutor
+- `WorkflowExecutor.resume_workflow_run()` — passes `lease_backend` and `lease_policy` to DagExecutor
+- `AppRunner.__init__()` — new optional `dag_lease_config` parameter; passed to WorkflowExecutor
+- `AgentApp.__init__()` — new optional `dag_lease_config` parameter; passed through `_ensure_runner()`
+- `config/loader.py` — passes `dag_lease_config` from RuntimeConfig to AgentApp
+
+### Current Limitations
+
+- Lease backend abstraction is a coordination layer — does NOT provide exactly-once guarantee
+- NOT a distributed lock service (no Redis/etcd distributed lock)
+- No Celery / Temporal / distributed worker daemon
+- No automatic recovery daemon — resume is explicit via `app.resume_workflow_run()`
+- Default lease backend is state_store-backed (delegates to existing WorkflowStateStore)
+- Standalone memory/sqlite backends are single-process (memory) or cross-instance (sqlite) only
+- Lease renewal only works while the current process is alive
+- External side effect idempotency remains the business tool's responsibility
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- Lease backend does NOT replace lease renewal, snapshot, compensation, or business-level idempotency
+
 ## 0.8.0
 
 ### Added
