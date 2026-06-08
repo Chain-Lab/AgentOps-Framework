@@ -827,3 +827,83 @@
 - External side effect idempotency remains the business tool's responsibility
 - SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
 - Lease backend does NOT replace lease renewal, snapshot, compensation, or business-level idempotency
+
+## Phase 16.3: Lease Backend Observability & Health Checks
+
+### LeaseMetrics
+
+- [x] `LeaseMetrics` thread-safe collector implemented (`agent_app/runtime/lease_metrics.py`)
+- [x] Per-operation counters: acquire, renew, release, get, list_expired
+- [x] Counter types: attempts, successes, failures, exceptions, denied
+- [x] `threading.Lock` for mutation safety; immutable snapshot returns
+- [x] `LeaseOperationMetrics` dataclass with per-counter fields
+- [x] `LeaseMetricsSnapshot` immutable dataclass
+
+### MetricsWorkflowLeaseBackend
+
+- [x] `MetricsWorkflowLeaseBackend` wrapper in `agent_app/runtime/lease_backend.py`
+- [x] Transparent metrics recording on every backend operation
+- [x] Re-raises exceptions after recording (does not swallow errors)
+- [x] Denied acquires recorded as failures (not exceptions)
+- [x] Preserves underlying backend return values unchanged
+- [x] Graceful handling when `metrics=None`
+
+### LeaseBackendHealthChecker
+
+- [x] `LeaseBackendHealthChecker` in `agent_app/runtime/lease_health.py`
+- [x] `LeaseHealthStatus` StrEnum: HEALTHY, DEGRADED, UNHEALTHY
+- [x] `LeaseHealthCheckResult` Pydantic model with timezone-aware timestamps
+- [x] Backend-specific checks: memory (always ok), sqlite (query + active lease count), state_store (delegation test), metrics (inner backend), generic (non-destructive probe)
+- [x] Never raises — exceptions captured in result.error
+- [x] Propagates inner check errors to top-level error field when UNHEALTHY
+- [x] `_detect_backend_type()` for automatic backend type detection
+
+### LeaseCoordinator Observability
+
+- [x] `LeaseCoordinator.__init__()` accepts optional `metrics` parameter
+- [x] Auto-wraps backend with `MetricsWorkflowLeaseBackend` when metrics provided
+- [x] `metrics_snapshot()` returns snapshot or None (when no metrics)
+- [x] `health_check()` returns `LeaseHealthCheckResult` via `LeaseBackendHealthChecker`
+- [x] `diagnostics(include_expired_sample, expired_sample_limit)` assembles health + metrics + expired leases
+- [x] `LeaseDiagnostics` Pydantic model for operator visibility
+
+### Config Support
+
+- [x] `DagLeaseMetricsConfig` — `enabled: bool = False` (opt-in)
+- [x] `DagLeaseHealthConfig` — `enabled: bool = True`
+- [x] `DagLeaseConfig` extended with `metrics` and `health` fields
+- [x] Config plumbing: `dag_lease.metrics.enabled` and `dag_lease.health.enabled` in YAML
+
+### WorkflowExecutor Integration
+
+- [x] `_build_lease_metrics()` creates collector when metrics enabled
+- [x] `get_lease_health_checker()` creates health checker
+- [x] `get_lease_diagnostics()` assembles full diagnostic snapshot
+- [x] Metrics wrapping integrated into `_build_lease_backend()`
+
+### Tests
+
+- [x] `tests/unit/test_lease_metrics.py` — 14 tests (LeaseMetrics collector)
+- [x] `tests/unit/test_lease_observable_backend.py` — 10 tests (MetricsWorkflowLeaseBackend)
+- [x] `tests/unit/test_lease_health.py` — 7 tests (LeaseBackendHealthChecker)
+- [x] `tests/unit/test_lease_coordinator_phase16_3.py` — 12 tests (Coordinator metrics/health/diagnostics)
+- [x] `tests/unit/test_config_lease_phase16_3.py` — 10 tests (DagLeaseMetricsConfig, DagLeaseHealthConfig)
+- [x] Full test suite: 1272 passed, 0 failed (+66 new Phase 16.3 tests)
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 16.3 section
+- [x] README.md limitations updated with Phase 16.3 notes
+- [x] README.md roadmap updated (Phase 16.3 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 16.3 section added
+
+### Known Limitations (v0.10.0 + Phase 16.3)
+
+- Metrics are in-process only — not exported to Prometheus/OpenTelemetry (no external dependency)
+- Health checks are diagnostic only — do NOT guarantee backend availability or provide distributed recovery
+- NOT a distributed health protocol or liveness probe
+- Metrics are opt-in (`enabled=False` by default) to avoid overhead when not needed
+- No background metrics export or collection daemon
+- LeaseMetrics uses `threading.Lock` — not async-safe for cross-thread mutation
+- Health checks are non-destructive but do not test lease acquire/renew operations
+- Does NOT replace lease renewal, snapshot, compensation, or business-level idempotency

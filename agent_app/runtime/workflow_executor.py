@@ -774,6 +774,9 @@ class WorkflowExecutor:
     def _build_lease_backend(self) -> Any:
         """Build a lease backend from the dag_lease_config.
 
+        Phase 16.3: Wraps the backend with MetricsWorkflowLeaseBackend
+        if metrics are enabled.
+
         Returns:
             A WorkflowLeaseBackend instance, or None if not configured.
         """
@@ -784,17 +787,26 @@ class WorkflowExecutor:
             from agent_app.runtime.lease_backend import create_lease_backend
             backend_type = getattr(cfg, "backend", "state_store")
             if backend_type == "state_store":
-                return create_lease_backend(
+                backend = create_lease_backend(
                     backend_type="state_store",
                     state_store=getattr(self, "_dag_state_store", None),
                 )
             elif backend_type in ("memory", "sqlite"):
                 db_path = getattr(cfg, "db_path", None) or ".agent_app/workflow_leases.db"
-                return create_lease_backend(
+                backend = create_lease_backend(
                     backend_type=backend_type,
                     db_path=db_path,
                 )
-            return None
+            else:
+                return None
+
+            # Phase 16.3: Wrap with metrics if enabled
+            metrics = self._build_lease_metrics()
+            if metrics is not None and backend is not None:
+                from agent_app.runtime.lease_backend import MetricsWorkflowLeaseBackend
+                backend = MetricsWorkflowLeaseBackend(backend, metrics)
+
+            return backend
         except Exception:
             return None
 
@@ -814,6 +826,93 @@ class WorkflowExecutor:
                 allow_steal_expired=getattr(cfg, "allow_steal_expired", True),
                 renew_before_seconds=getattr(cfg, "renew_before_seconds", 60),
             )
+        except Exception:
+            return None
+
+    def _build_lease_metrics(self) -> Any:
+        """Build a LeaseMetrics instance from the dag_lease_config.
+
+        Returns:
+            A LeaseMetrics instance if metrics are enabled, None otherwise.
+        """
+        cfg = getattr(self, "_dag_lease_config", None)
+        if cfg is None:
+            return None
+        metrics_cfg = getattr(cfg, "metrics", None)
+        if metrics_cfg is None:
+            return None
+        if not getattr(metrics_cfg, "enabled", False):
+            return None
+        try:
+            from agent_app.runtime.lease_metrics import LeaseMetrics
+            return LeaseMetrics()
+        except Exception:
+            return None
+
+    def _build_lease_health_checker(self) -> Any:
+        """Build a LeaseBackendHealthChecker from the dag_lease_config.
+
+        Returns:
+            A LeaseBackendHealthChecker instance if health checks are
+            enabled, None otherwise.
+        """
+        cfg = getattr(self, "_dag_lease_config", None)
+        if cfg is None:
+            return None
+        health_cfg = getattr(cfg, "health", None)
+        if health_cfg is None:
+            return None
+        if not getattr(health_cfg, "enabled", True):
+            return None
+        try:
+            from agent_app.runtime.lease_health import LeaseBackendHealthChecker
+            # We create the checker lazily when needed (after backend is built)
+            return None  # checker is created in get_lease_health_checker()
+        except Exception:
+            return None
+
+    def get_lease_health_checker(self) -> Any:
+        """Get a LeaseBackendHealthChecker for the current lease backend.
+
+        Returns:
+            LeaseBackendHealthChecker or None if not available.
+        """
+        backend = self._build_lease_backend()
+        if backend is None:
+            return None
+        try:
+            from agent_app.runtime.lease_health import LeaseBackendHealthChecker
+            return LeaseBackendHealthChecker(backend)
+        except Exception:
+            return None
+
+    def get_lease_diagnostics(
+        self,
+        include_expired_sample: bool = False,
+        expired_sample_limit: int = 10,
+    ) -> Any:
+        """Collect lease backend diagnostics.
+
+        Args:
+            include_expired_sample: Include sample expired leases.
+            expired_sample_limit: Max sample size.
+
+        Returns:
+            LeaseDiagnostics dict or None if not available.
+        """
+        backend = self._build_lease_backend()
+        if backend is None:
+            return None
+        metrics = self._build_lease_metrics()
+        try:
+            from agent_app.runtime.lease_coordinator import get_lease_diagnostics
+            import asyncio
+            return asyncio.run(get_lease_diagnostics(
+                backend,
+                metrics=metrics,
+                include_expired_sample=include_expired_sample,
+                expired_sample_limit=expired_sample_limit,
+            ))
         except Exception:
             return None
 

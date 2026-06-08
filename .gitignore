@@ -3,7 +3,7 @@
 .pytest_cache
 .venv
 agent_app_framework.egg-info
-
+.codegraph
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

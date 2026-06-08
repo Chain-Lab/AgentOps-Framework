@@ -899,3 +899,138 @@ def create_lease_backend(
         f"Unknown lease backend type '{backend_type}'. "
         "Supported: 'state_store', 'memory', 'sqlite'."
     )
+
+
+# ---------------------------------------------------------------------------
+# Metrics wrapper (Phase 16.3)
+# ---------------------------------------------------------------------------
+
+
+class MetricsWorkflowLeaseBackend:
+    """Observable wrapper around a ``WorkflowLeaseBackend``.
+
+    Delegates all lease operations to the inner backend while recording
+    metrics via ``LeaseMetrics``.  Metrics are opt-in and do NOT change
+    the underlying backend behavior.
+
+    Usage::
+
+        inner = InMemoryWorkflowLeaseBackend()
+        metrics = LeaseMetrics()
+        backend = MetricsWorkflowLeaseBackend(inner, metrics)
+        result = await backend.acquire_run_lease(run_id, worker, policy)
+        # metrics now reflect the operation
+    """
+
+    def __init__(
+        self,
+        backend: WorkflowLeaseBackend,
+        metrics: Any = None,
+    ) -> None:
+        self._backend = backend
+        self._metrics = metrics
+
+    def _record(self, operation: str, outcome: str) -> None:
+        """Record a metric if metrics collector is available."""
+        if self._metrics is None:
+            return
+        method = getattr(self._metrics, f"record_{operation}_{outcome}", None)
+        if method is not None:
+            method()
+
+    async def acquire_run_lease(
+        self,
+        run_id: str,
+        worker: WorkerIdentity,
+        policy: LeasePolicy | None = None,
+    ) -> LeaseAcquireResult:
+        """Acquire a lease, recording metrics."""
+        self._record("acquire", "attempts")
+        try:
+            result = await self._backend.acquire_run_lease(run_id, worker, policy)
+            if result.acquired:
+                self._record("acquire", "success")
+            else:
+                # Any denied acquire is a failure (not an exception)
+                self._record("acquire", "failure")
+            return result
+        except Exception:
+            self._record("acquire", "exception")
+            raise
+
+    async def renew_run_lease(
+        self,
+        run_id: str,
+        worker: WorkerIdentity,
+        policy: LeasePolicy | None = None,
+    ) -> WorkflowRunLease:
+        """Renew a lease, recording metrics."""
+        self._record("renew", "attempts")
+        try:
+            result = await self._backend.renew_run_lease(run_id, worker, policy)
+            self._record("renew", "success")
+            return result
+        except KeyError:
+            # KeyError is the expected failure mode for lease operations
+            # (no lease, wrong owner, already released, expired)
+            self._record("renew", "failure")
+            raise
+        except Exception:
+            self._record("renew", "exception")
+            raise
+
+    async def release_run_lease(
+        self,
+        run_id: str,
+        worker: WorkerIdentity,
+    ) -> WorkflowRunLease:
+        """Release a lease, recording metrics."""
+        self._record("release", "attempts")
+        try:
+            result = await self._backend.release_run_lease(run_id, worker)
+            self._record("release", "success")
+            return result
+        except KeyError:
+            # KeyError is the expected failure mode
+            self._record("release", "failure")
+            raise
+        except Exception:
+            self._record("release", "exception")
+            raise
+
+    async def get_run_lease(
+        self,
+        run_id: str,
+    ) -> WorkflowRunLease | None:
+        """Get a lease, recording metrics."""
+        self._record("get", "attempts")
+        try:
+            result = await self._backend.get_run_lease(run_id)
+            if result is not None:
+                self._record("get", "success")
+            else:
+                self._record("get", "failure")
+            return result
+        except KeyError:
+            self._record("get", "failure")
+            raise
+        except Exception:
+            self._record("get", "exception")
+            raise
+
+    async def list_expired_leases(
+        self,
+        before: datetime | None = None,
+    ) -> list[WorkflowRunLease]:
+        """List expired leases, recording metrics."""
+        self._record("list_expired", "attempts")
+        try:
+            result = await self._backend.list_expired_leases(before)
+            self._record("list_expired", "success")
+            return result
+        except KeyError:
+            self._record("list_expired", "failure")
+            raise
+        except Exception:
+            self._record("list_expired", "exception")
+            raise

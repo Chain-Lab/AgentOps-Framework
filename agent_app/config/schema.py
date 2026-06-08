@@ -257,6 +257,41 @@ class LeaseRenewalConfig(BaseModel):
         return v
 
 
+class DagLeaseMetricsConfig(BaseModel):
+    """Configuration for lease backend metrics (Phase 16.3).
+
+    Metrics are in-process counters for operator visibility.  They do
+    NOT imply exactly-once execution and are NOT Prometheus/OpenTelemetry
+    exporters.
+
+    Attributes:
+        enabled: Whether to enable lease backend metrics collection.
+            Defaults to False (opt-in to avoid overhead).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable lease backend metrics collection",
+    )
+
+
+class DagLeaseHealthConfig(BaseModel):
+    """Configuration for lease backend health checks (Phase 16.3).
+
+    Health checks are lightweight, non-destructive diagnostics.  They do
+    NOT imply distributed recovery or self-healing.
+
+    Attributes:
+        enabled: Whether to enable lease backend health checks.
+            Defaults to True.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable lease backend health checks",
+    )
+
+
 class DagLeaseConfig(BaseModel):
     """Configuration for pluggable DAG lease backend (Phase 16.2).
 
@@ -274,6 +309,8 @@ class DagLeaseConfig(BaseModel):
             Defaults to True.
         renew_before_seconds: Renew the lease this many seconds before
             expiry.  Defaults to 60.
+        metrics: Metrics configuration (Phase 16.3).
+        health: Health check configuration (Phase 16.3).
     """
 
     backend: str = Field(
@@ -297,6 +334,14 @@ class DagLeaseConfig(BaseModel):
         default=60,
         ge=0,
         description="Renew lease this many seconds before expiry",
+    )
+    metrics: DagLeaseMetricsConfig | None = Field(
+        default=None,
+        description="Lease backend metrics configuration (Phase 16.3)",
+    )
+    health: DagLeaseHealthConfig | None = Field(
+        default=None,
+        description="Lease backend health check configuration (Phase 16.3)",
     )
 
     @field_validator("backend")
