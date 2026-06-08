@@ -1,0 +1,78 @@
+app:
+  name: research-assistant
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  session:
+    type: sqlite
+    path: .agent_app/sessions.db
+
+governance:
+  approvals:
+    type: memory
+  audit:
+    type: memory
+
+agents:
+  manager:
+    description: Orchestrator — delegates to specialists
+    model: gpt-4o
+    instructions: ./prompts/manager.md
+
+  researcher:
+    description: Research specialist — gathers information
+    model: gpt-4o
+    instructions: ./prompts/researcher.md
+
+  analyst:
+    description: Data analysis specialist
+    model: gpt-4o
+    instructions: ./prompts/analyst.md
+
+  writer:
+    description: Writing specialist — produces reports
+    model: gpt-4o
+    instructions: ./prompts/writer.md
+
+workflows:
+  research_assistant:
+    type: orchestrator
+    entry: manager
+    agents_as_tools:
+      - researcher
+      - analyst
+      - writer
+    routing:
+      rules:
+        - name: research_task
+          target: researcher
+          match_type: keyword
+          keywords:
+            - research
+            - 调研
+            - 研究
+            - search
+          priority: 10
+        - name: data_task
+          target: analyst
+          match_type: keyword
+          keywords:
+            - data
+            - 数据
+            - 分析
+            - analyze
+          priority: 20
+        - name: writing_task
+          target: writer
+          match_type: keyword
+          keywords:
+            - write
+            - 写
+            - 总结
+            - 报告
+            - report
+            - summary
+          priority: 30

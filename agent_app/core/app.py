@@ -1,0 +1,691 @@
+"""AgentApp — the primary user-facing entry point."""
+
+from __future__ import annotations
+
+import uuid
+from typing import TYPE_CHECKING, Any, AsyncIterator
+
+from agent_app.core.agent_spec import AgentSpec
+from agent_app.core.tool_spec import ToolSpec
+from agent_app.core.workflow import Workflow, WorkflowType
+from agent_app.governance.approval import ApprovalRequest, ApprovalStatus
+
+if TYPE_CHECKING:
+    from agent_app.registry.agent_registry import AgentRegistry
+    from agent_app.registry.tool_registry import ToolRegistry
+    from agent_app.registry.workflow_registry import WorkflowRegistry
+    from agent_app.runtime.app_runner import AppRunner
+    from agent_app.runtime.approval_store import ApprovalStore
+    from agent_app.runtime.run_state import RunStateStore
+    from agent_app.runtime.session import SessionStore
+    from agent_app.runtime.streaming import StreamEvent
+
+
+class AgentApp:
+    """Top-level application object that composes registries, config, and runner.
+
+    Args:
+        registry: Optional shared registry bundle. When omitted, a fresh
+                  default set of registries is created.
+        session_store: Optional session history store.
+        approval_store: Optional approval persistence store.
+        dag_state_store: Optional DAG workflow execution state store (Phase 14.0).
+        lease_renewal_config: Optional lease renewal config (Phase 15.2).
+        dag_lease_config: Optional DAG lease backend config (Phase 16.2).
+    """
+
+    def __init__(
+        self,
+        registry: Any = None,
+        session_store: Any = None,
+        approval_store: Any = None,
+        backend: Any = None,
+        run_state_store: Any = None,
+        trace_collector: Any = None,
+        dag_state_store: Any = None,
+        lease_renewal_config: Any = None,
+        dag_snapshot_config: Any = None,
+        dag_compensation_config: Any = None,
+        dag_lease_config: Any = None,
+    ) -> None:
+        from agent_app.registry.agent_registry import AgentRegistry
+        from agent_app.registry.tool_registry import ToolRegistry
+        from agent_app.registry.workflow_registry import WorkflowRegistry
+
+        if registry is not None:
+            self.agent_registry = registry.agent_registry  # type: ignore[assignment]
+            self.tool_registry = registry.tool_registry  # type: ignore[assignment]
+            self.workflow_registry = registry.workflow_registry  # type: ignore[assignment]
+        else:
+            from agent_app.tools.decorator import get_default_registry
+
+            self.agent_registry = AgentRegistry()
+            self.tool_registry = get_default_registry()
+            self.workflow_registry = WorkflowRegistry()
+
+        self.session_store = session_store
+        self.approval_store = approval_store
+        self._backend = backend
+        self._run_state_store = run_state_store
+        self._dag_state_store = dag_state_store
+        # Phase 15.2: Lease renewal config (best-effort background renewal)
+        self._lease_renewal_config = lease_renewal_config
+        # Phase 16.0: Snapshot config (DAG execution recovery points)
+        self._dag_snapshot_config = dag_snapshot_config
+        # Phase 16.1: Compensation persistence config
+        self._dag_compensation_config = dag_compensation_config
+        # Phase 16.2: DAG lease backend config
+        self._dag_lease_config = dag_lease_config
+        self._runner: AppRunner | None = None
+        self._native_agents: dict[str, Any] = {}
+        self.trace_collector = trace_collector
+
+    # ------------------------------------------------------------------
+    # Registration helpers
+    # ------------------------------------------------------------------
+
+    def register_agent(self, spec: AgentSpec) -> None:
+        """Register an AgentSpec."""
+        self.agent_registry.register(spec.name, spec)
+
+    def register_tool(self, spec: ToolSpec, fn: Any = None) -> None:
+        """Register a ToolSpec with an optional callable."""
+        self.tool_registry.register(spec.name, spec, fn=fn)
+
+    def register_workflow(self, wf: Workflow) -> None:
+        """Register a Workflow."""
+        self.workflow_registry.register(wf.name, wf)
+
+    # ------------------------------------------------------------------
+    # Run / Stream
+    # ------------------------------------------------------------------
+
+    async def run(
+        self,
+        workflow: str | None = None,
+        agent: str | None = None,
+        input: str = "",
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+        session_id: str | None = None,
+        permissions: list[str] | None = None,
+        worker: Any = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a run against the given workflow or agent.
+
+        Args:
+            workflow: Workflow name to execute.
+            agent: Agent name (shortcut for single-agent).
+            input: User input.
+            user_id: End-user ID.
+            tenant_id: Tenant ID.
+            session_id: Session / conversation ID.
+            permissions: Granted permissions.
+            worker: Optional worker identity for lease management (Phase 15).
+            idempotency_key: Optional idempotency key for duplicate prevention (Phase 15.1).
+            **kwargs: Extra forwarded to the backend.
+        """
+        self._ensure_runner()
+
+        # -- Workflow dispatch (handoff / orchestrator) --
+        if workflow is not None:
+            try:
+                wf = self.workflow_registry.get(workflow)
+            except KeyError:
+                from agent_app.core.result import AppRunResult
+                return AppRunResult(
+                    run_id=str(uuid.uuid4()),
+                    status="failed",
+                    error={"type": "KeyError", "message": f"Workflow '{workflow}' not found."},
+                )
+            if wf.type != WorkflowType.SINGLE:
+                return await self._run_workflow(
+                    wf, input, user_id, tenant_id, session_id, permissions, worker, idempotency_key
+                )
+
+        return await self._runner.run(
+            workflow=workflow,
+            agent=agent,
+            input=input,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            app=self,
+            permissions=permissions,
+            worker=worker,
+            idempotency_key=idempotency_key,
+            **kwargs,
+        )
+
+    async def _run_workflow(
+        self,
+        workflow: Workflow,
+        input: str,
+        user_id: str,
+        tenant_id: str,
+        session_id: str | None,
+        permissions: list[str] | None,
+        worker: Any = None,
+        idempotency_key: str | None = None,
+    ) -> Any:
+        """Dispatch non-SINGLE workflows.
+
+        Phase 11: If the backend supports ``run_workflow()`` (e.g.
+        ``OpenAIAgentsBackend``), delegate to it. Otherwise use the
+        framework's ``WorkflowExecutor`` with DryRun heuristics.
+
+        Phase 15: Accepts optional worker identity for lease management.
+
+        Phase 15.1: Accepts optional idempotency_key for duplicate prevention.
+        """
+        from agent_app.core.context import RunContext
+
+        context = RunContext(
+            run_id=str(uuid.uuid4()),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            permissions=permissions or [],
+        )
+
+        # Phase 11: delegate to backend if it supports multi-agent workflows
+        backend = getattr(self, "_backend", None)
+        if (
+            backend is not None
+            and hasattr(backend, "run_workflow")
+            and type(backend).__name__ != "DryRunBackend"
+        ):
+            return await backend.run_workflow(
+                workflow=workflow,
+                input=input,
+                context=context,
+            )
+
+        # Fallback: framework WorkflowExecutor (DryRun path)
+        return await self._runner._workflow_executor.run_workflow(
+            workflow=workflow,
+            input=input,
+            context=context,
+            app_runner=self._runner,
+            permissions=permissions,
+            worker=worker,
+            idempotency_key=idempotency_key,
+        )
+
+    async def resume_workflow_run(
+        self,
+        workflow: str,
+        run_id: str,
+        input: str = "",
+        permissions: list[str] | None = None,
+        resume_policy: Any = None,
+        worker: Any = None,
+        idempotency_key: str | None = None,
+    ) -> Any:
+        """Resume a persisted DAG workflow run.
+
+        Phase 14.1: Looks up the DAG workflow by name and delegates to
+        ``AppRunner.resume_workflow_run()``.
+
+        Phase 15: Accepts optional worker identity for lease management.
+
+        Phase 15.1: Accepts optional idempotency_key for duplicate prevention.
+
+        Args:
+            workflow: Name of the DAG workflow to resume.
+            run_id: The persisted workflow run ID.
+            input: Original user input.
+            permissions: Granted permissions.
+            resume_policy: Optional ResumePolicy controlling retry/skip behavior.
+            worker: Optional worker identity for lease management (Phase 15).
+
+        Returns:
+            AppRunResult with the resumed execution outcome.
+        """
+        self._ensure_runner()
+        return await self._runner.resume_workflow_run(
+            workflow=workflow,
+            run_id=run_id,
+            input=input,
+            permissions=permissions,
+            resume_policy=resume_policy,
+            worker=worker,
+            idempotency_key=idempotency_key,
+        )
+
+    async def stream(
+        self,
+        workflow: str | None = None,
+        agent: str | None = None,
+        input: str = "",
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+        session_id: str | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream events for a workflow or single agent run."""
+        self._ensure_runner()
+        async for event in self._runner.stream(
+            workflow=workflow,
+            agent=agent,
+            input=input,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            app=self,
+            **kwargs,
+        ):
+            yield event
+
+    # ------------------------------------------------------------------
+    # Approval lifecycle
+    # ------------------------------------------------------------------
+
+    async def approve(
+        self,
+        approval_id: str,
+        approved_by: str,
+        reason: str | None = None,
+    ) -> ApprovalRequest:
+        """Approve a pending approval request.
+
+        Args:
+            approval_id: The approval to approve.
+            approved_by: Identity of the approver.
+            reason: Optional reason.
+
+        Returns:
+            Updated ApprovalRequest with status APPROVED.
+
+        Raises:
+            KeyError: If approval_id not found.
+            ValueError: If approval is not pending.
+        """
+        if self.approval_store is None:
+            raise RuntimeError(
+                "No approval_store configured on this AgentApp. "
+                "Pass approval_store=... when creating the app."
+            )
+        req = await self.approval_store.approve(approval_id, approved_by, reason)
+        # -- Phase 12: approval.approved --
+        await self._record_trace_event(
+            event_type="approval.approved",
+            approval_id=approval_id,
+            data={
+                "approval_id": approval_id,
+                "tool_name": getattr(req, "tool_name", None),
+                "status": req.status.value if hasattr(req, "status") else "approved",
+            },
+        )
+        return req
+
+    async def reject(
+        self,
+        approval_id: str,
+        rejected_by: str,
+        reason: str | None = None,
+    ) -> ApprovalRequest:
+        """Reject a pending approval request.
+
+        Args:
+            approval_id: The approval to reject.
+            rejected_by: Identity of the rejector.
+            reason: Optional reason.
+
+        Returns:
+            Updated ApprovalRequest with status REJECTED.
+        """
+        if self.approval_store is None:
+            raise RuntimeError(
+                "No approval_store configured on this AgentApp. "
+                "Pass approval_store=... when creating the app."
+            )
+        req = await self.approval_store.reject(approval_id, rejected_by, reason)
+        # -- Phase 12: approval.rejected --
+        await self._record_trace_event(
+            event_type="approval.rejected",
+            approval_id=approval_id,
+            data={
+                "approval_id": approval_id,
+                "tool_name": getattr(req, "tool_name", None),
+                "status": req.status.value if hasattr(req, "status") else "rejected",
+            },
+        )
+        return req
+
+    async def list_pending_approvals(
+        self, tenant_id: str | None = None
+    ) -> list[ApprovalRequest]:
+        """List pending approval requests.
+
+        Args:
+            tenant_id: Optional tenant filter.
+
+        Returns:
+            List of pending ApprovalRequest instances.
+        """
+        if self.approval_store is None:
+            return []
+        return await self.approval_store.list_pending(tenant_id=tenant_id)
+
+    async def resume(
+        self,
+        run_id: str,
+        approval_id: str | None = None,
+    ) -> Any:
+        """Resume a run that was interrupted for approval.
+
+        Phase 9: Framework-level resume backed by RunStateStore.
+        Reads the InterruptedRun from the store, checks approval status,
+        and returns an appropriate AppRunResult.
+
+        For DryRunBackend: returns a completed stub result.
+        For OpenAI backend: returns a completed stub with a note that
+        native OpenAI RunState resume is not yet implemented.
+
+        Args:
+            run_id: Original run ID.
+            approval_id: The approval that was resolved (optional).
+
+        Returns:
+            AppRunResult reflecting the resumed outcome.
+        """
+        from agent_app.core.result import AppRunResult
+
+        # -- Phase 12: run_state.resumed --
+        await self._record_trace_event(
+            event_type="run_state.resumed",
+            run_id=run_id,
+            data={"approval_id": approval_id},
+        )
+
+        # -- Phase 9: Load from RunStateStore --
+        if self._run_state_store is not None:
+            try:
+                interrupted = await self._run_state_store.get(run_id)
+            except KeyError:
+                await self._record_trace_event(
+                    event_type="run.failed",
+                    run_id=run_id,
+                    status="failed",
+                    error={"type": "run_not_found", "message": f"Run '{run_id}' not found."},
+                )
+                return AppRunResult(
+                    run_id=run_id,
+                    status="failed",
+                    error={
+                        "type": "run_not_found",
+                        "message": f"Run '{run_id}' not found in run state store.",
+                    },
+                )
+
+            # Check if all approvals are resolved
+            pending_approvals = await self._check_pending_approvals(
+                interrupted.approval_ids
+            )
+
+            if pending_approvals:
+                # Still pending — return interrupted
+                await self._record_trace_event(
+                    event_type="run.interrupted",
+                    run_id=run_id,
+                    status="interrupted",
+                )
+                return AppRunResult(
+                    run_id=run_id,
+                    status="interrupted",
+                    interruptions=interrupted.interruptions,
+                    latency_ms=0,
+                )
+
+            # All approvals resolved — check for rejections
+            has_rejection = await self._check_rejected_approvals(
+                interrupted.approval_ids
+            )
+            if has_rejection:
+                # Mark as completed with rejection message
+                await self._run_state_store.mark_completed(run_id)
+                rejected_by = await self._get_rejection_info(
+                    interrupted.approval_ids
+                )
+                await self._record_trace_event(
+                    event_type="run.completed",
+                    run_id=run_id,
+                    status="completed",
+                    data={"reason": rejected_by.get("reason", "No reason provided.")},
+                )
+                return AppRunResult(
+                    run_id=run_id,
+                    status="completed",
+                    final_output=(
+                        f"Run '{run_id}' was rejected. "
+                        f"Reason: {rejected_by.get('reason', 'No reason provided.')}"
+                    ),
+                    latency_ms=0,
+                )
+
+            # All approved — resume
+            await self._run_state_store.mark_resumed(run_id)
+
+            # -- Phase 10: Dispatch to backend resume for OpenAI --
+            backend = getattr(self._runner, "backend", None) if self._runner else None
+            if (
+                backend is not None
+                and hasattr(backend, "resume")
+                and getattr(backend, "_hitl_mode", None) == "native"
+                and interrupted.backend_state
+            ):
+                # Resolve agent_spec for resume
+                try:
+                    agent_spec = self.agent_registry.get(interrupted.agent_name)
+                except KeyError:
+                    agent_spec = None
+
+                if agent_spec is not None:
+                    # Build approval decisions from ApprovalStore
+                    approvals = []
+                    if self.approval_store is not None:
+                        for apv_id in interrupted.approval_ids:
+                            try:
+                                req = await self.approval_store.get(apv_id)
+                                approvals.append({
+                                    "approval_id": apv_id,
+                                    "status": req.status.value,
+                                })
+                            except KeyError:
+                                pass
+
+                    context = interrupted.context
+                    resume_result = await backend.resume(
+                        agent_spec=agent_spec,
+                        context=context,
+                        backend_state=interrupted.backend_state,
+                        approvals=approvals,
+                    )
+                    await self._record_trace_event(
+                        event_type="run.completed",
+                        run_id=run_id,
+                        status=resume_result.status,
+                    )
+                    return resume_result
+
+            result = AppRunResult(
+                run_id=run_id,
+                status="completed",
+                final_output=(
+                    f"Run '{run_id}' approved and resumed. "
+                    f"(Framework-level resume — native backend resume not implemented.)"
+                ),
+                latency_ms=0,
+            )
+            await self._record_trace_event(
+                event_type="run.completed",
+                run_id=run_id,
+                status="completed",
+            )
+            return result
+
+        # -- Fallback: legacy approval store path --
+        if self.approval_store is None:
+            return AppRunResult(
+                run_id=run_id,
+                status="failed",
+                error={
+                    "type": "no_run_state_store",
+                    "message": "No run_state_store or approval_store configured.",
+                },
+            )
+
+        try:
+            req = await self.approval_store.get(approval_id)  # type: ignore[union-attr]
+        except KeyError:
+            return AppRunResult(
+                run_id=run_id,
+                status="failed",
+                error={
+                    "type": "approval_not_found",
+                    "message": f"Approval '{approval_id}' not found.",
+                },
+            )
+
+        if req.status.value == "approved":
+            return AppRunResult(
+                run_id=run_id,
+                status="completed",
+                final_output=(
+                    f"Tool '{req.tool_name}' was approved by "
+                    f"{req.resolved_by}. Execution simulated (Phase 3 stub)."
+                ),
+            )
+        if req.status.value == "rejected":
+            return AppRunResult(
+                run_id=run_id,
+                status="completed",
+                final_output=(
+                    f"Tool '{req.tool_name}' was rejected. "
+                    f"Reason: {req.reason or 'No reason provided.'}"
+                ),
+            )
+        return AppRunResult(
+            run_id=run_id,
+            status="interrupted",
+            interruptions=[{
+                "type": "approval_required",
+                "approval_id": approval_id,
+                "tool_name": req.tool_name,
+                "arguments": req.arguments,
+                "risk_level": req.risk_level,
+            }],
+        )
+
+    async def _check_pending_approvals(self, approval_ids: list[str]) -> bool:
+        """Check if any approval IDs are still pending."""
+        if not approval_ids:
+            return False
+        if self.approval_store is None:
+            return False
+        for apv_id in approval_ids:
+            try:
+                req = await self.approval_store.get(apv_id)
+                from agent_app.governance.approval import ApprovalStatus
+                if req.status == ApprovalStatus.PENDING:
+                    return True
+            except KeyError:
+                continue
+        return False
+
+    async def _check_rejected_approvals(self, approval_ids: list[str]) -> bool:
+        """Check if any approval IDs were rejected."""
+        if not approval_ids:
+            return False
+        if self.approval_store is None:
+            return False
+        from agent_app.governance.approval import ApprovalStatus
+        for apv_id in approval_ids:
+            try:
+                req = await self.approval_store.get(apv_id)
+                if req.status == ApprovalStatus.REJECTED:
+                    return True
+            except KeyError:
+                continue
+        return False
+
+    async def _get_rejection_info(self, approval_ids: list[str]) -> dict[str, Any]:
+        """Get info about the first rejected approval."""
+        if self.approval_store is None:
+            return {"reason": "Unknown"}
+        from agent_app.governance.approval import ApprovalStatus
+        for apv_id in approval_ids:
+            try:
+                req = await self.approval_store.get(apv_id)
+                if req.status == ApprovalStatus.REJECTED:
+                    return {"reason": req.reason or "No reason provided."}
+            except KeyError:
+                continue
+        return {"reason": "Unknown"}
+
+    # ------------------------------------------------------------------
+    # Escape hatch
+    # ------------------------------------------------------------------
+
+    async def _record_trace_event(
+        self,
+        event_type: str,
+        run_id: str | None = None,
+        approval_id: str | None = None,
+        status: str | None = None,
+        error: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a trace event if a trace_collector is configured."""
+        collector = getattr(self, "trace_collector", None)
+        if collector is None:
+            return
+        try:
+            from agent_app.observability.events import RunEvent
+            event = RunEvent(
+                event_type=event_type,
+                trace_id="",
+                run_id=run_id,
+                approval_id=approval_id,
+                status=status,
+                error=error,
+                data=data or {},
+            )
+            await collector.record(event)
+        except Exception:
+            pass  # Never let observability break the main flow
+
+    def get_native_agent(self, name: str) -> Any:
+        """Return the underlying OpenAI Agents SDK Agent object (if compiled)."""
+        if name not in self._native_agents:
+            raise KeyError(
+                f"Agent '{name}' has not been compiled yet. "
+                "Call app.run() first or compile manually."
+            )
+        return self._native_agents[name]
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _ensure_runner(self) -> None:
+        if self._runner is None:
+            from agent_app.runtime.app_runner import AppRunner
+            self._runner = AppRunner(
+                agent_registry=self.agent_registry,
+                tool_registry=self.tool_registry,
+                workflow_registry=self.workflow_registry,
+                session_store=self.session_store,
+                approval_store=self.approval_store,
+                backend=self._backend,
+                run_state_store=self._run_state_store,
+                trace_collector=getattr(self, "trace_collector", None),
+                dag_state_store=getattr(self, "_dag_state_store", None),
+                lease_renewal_config=getattr(self, "_lease_renewal_config", None),
+                dag_snapshot_config=getattr(self, "_dag_snapshot_config", None),
+                dag_compensation_config=getattr(self, "_dag_compensation_config", None),
+                dag_lease_config=getattr(self, "_dag_lease_config", None),
+            )

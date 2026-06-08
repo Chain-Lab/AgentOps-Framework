@@ -1,0 +1,48 @@
+name: research_assistant_eval
+description: Research assistant orchestrator regression tests
+
+defaults:
+  workflow: research_assistant
+  user_id: eval_user
+  tenant_id: eval_tenant
+
+cases:
+  - id: research_delegates_to_researcher
+    input: "research the latest AI trends"
+    expect:
+      status: completed
+      agent_calls:
+        - researcher
+      routing_decisions:
+        - research_task
+
+  - id: data_delegates_to_analyst
+    input: "analyze the sales data"
+    expect:
+      status: completed
+      agent_calls:
+        - analyst
+      routing_decisions:
+        - data_task
+
+  - id: report_delegates_to_writer
+    input: "write a summary report"
+    expect:
+      status: completed
+      agent_calls:
+        - writer
+      routing_decisions:
+        - writing_task
+
+  - id: mixed_delegates_multiple
+    input: "research AI trends, analyze the data, and write a report"
+    expect:
+      status: completed
+      agent_calls:
+        - researcher
+        - analyst
+        - writer
+      routing_decisions:
+        - research_task
+        - data_task
+        - writing_task

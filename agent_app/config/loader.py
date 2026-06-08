@@ -1,0 +1,406 @@
+"""Config loader — loads agentapp.yaml into AppConfig and wires up AgentApp."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import yaml
+
+from agent_app.config.schema import AgentConfig, AppConfig, ToolConfig
+from agent_app.core.agent_spec import AgentSpec
+from agent_app.core.routing import RoutingMatchType, RoutingPolicy, RoutingRule
+from agent_app.core.tool_spec import ToolSpec
+from agent_app.core.workflow import Workflow
+from agent_app.registry.agent_registry import AgentRegistry
+from agent_app.registry.tool_registry import ToolRegistry
+from agent_app.registry.workflow_registry import WorkflowRegistry
+
+if TYPE_CHECKING:
+    from agent_app.core.app import AgentApp
+
+
+def _import_tools_module(base_dir: Path) -> None:
+    """Try to import a ``tools`` module from *base_dir* so that any
+    ``@tool``-decorated functions are registered in the global default registry.
+
+    Silently ignored if no such module exists or it was already imported.
+    """
+    import importlib.util
+    import sys
+
+    candidate = base_dir / "tools.py"
+    if not candidate.exists():
+        return
+    # Skip if already imported (e.g. the caller already imported it).
+    module_name = candidate.stem
+    if module_name in sys.modules:
+        return
+    # Ensure the directory is on sys.path so the import works reliably.
+    dir_str = str(base_dir)
+    if dir_str not in sys.path:
+        sys.path.insert(0, dir_str)
+    spec = importlib.util.spec_from_file_location(module_name, candidate)
+    if spec is not None and spec.loader is not None:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
+
+def _load_prompt(instructions: str, base_dir: Path) -> str:
+    """Return instructions text, loading from file if it looks like a path."""
+    candidate = (base_dir / instructions).resolve()
+    if candidate.exists():
+        return candidate.read_text(encoding="utf-8")
+    # Not a file path — treat as inline text.
+    return instructions
+
+
+def _parse_routing_policy(wf_body: dict[str, Any]) -> RoutingPolicy | None:
+    """Parse a routing policy from a workflow YAML body.
+
+    Returns ``None`` if no ``routing`` key is present.
+    """
+    routing_cfg = wf_body.get("routing")
+    if not routing_cfg:
+        return None
+    rules: list[RoutingRule] = []
+    for rule_cfg in routing_cfg.get("rules", []):
+        match_type_str = rule_cfg.get("match_type", "keyword")
+        try:
+            match_type = RoutingMatchType(match_type_str)
+        except ValueError:
+            raise ValueError(
+                f"Invalid match_type '{match_type_str}' in routing rule '{rule_cfg.get('name', '?')}'"
+            )
+        rules.append(RoutingRule(
+            name=rule_cfg["name"],
+            target=rule_cfg["target"],
+            match_type=match_type,
+            keywords=rule_cfg.get("keywords", []),
+            pattern=rule_cfg.get("pattern"),
+            priority=rule_cfg.get("priority", 100),
+            reason=rule_cfg.get("reason"),
+            metadata=rule_cfg.get("metadata", {}),
+        ))
+    return RoutingPolicy(name=f"{wf_body.get('name', 'default')}_policy", rules=rules)
+
+
+def load_config(path: str | Path) -> AppConfig:
+    """Load and validate an ``agentapp.yaml`` file.
+
+    Args:
+        path: Path to the YAML configuration file.
+
+    Returns:
+        A validated :class:`AppConfig` instance.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        ValueError: If the YAML is malformed or fails Pydantic validation.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if raw is None:
+        raw = {}
+    try:
+        return AppConfig(**raw)
+    except Exception as exc:
+        raise ValueError(f"Invalid config '{path}': {exc}") from exc
+
+
+def build_app(
+    config_path: str | Path,
+    extra_tools: list[tuple[ToolSpec, Any]] | None = None,
+) -> AgentApp:
+    """Build an :class:`AgentApp` from a YAML config file.
+
+    Reads agents, tools, and workflows from the config, resolves
+    instruction file paths relative to the config file's directory,
+    and registers everything.
+
+    Tools registered via the ``@tool`` decorator (global default registry)
+    are automatically included.
+
+    Session configuration (``runtime.session`` in YAML) is applied when
+    present; otherwise the app uses no session store.
+
+    Args:
+        config_path: Path to ``agentapp.yaml``.
+        extra_tools: Additional (ToolSpec, callable) pairs to register
+                     before processing the config's tool list.
+
+    Returns:
+        A fully configured :class:`AgentApp`.
+    """
+    from agent_app.core.app import AgentApp
+    from agent_app.governance.audit import InMemoryAuditLogger, SQLiteAuditLogger
+    from agent_app.runtime.approval_store import InMemoryApprovalStore, SQLiteApprovalStore
+    from agent_app.governance.permission import DefaultPermissionChecker
+    from agent_app.runtime.session import SessionStore
+    from agent_app.runtime.session_manager import create_session_store
+    from agent_app.tools.decorator import get_default_registry
+
+    config_path = Path(config_path)
+    base_dir = config_path.resolve().parent
+    config = load_config(config_path)
+
+    # Auto-import tools module from config directory so @tool decorators
+    # register themselves in the global default registry.
+    _import_tools_module(base_dir)
+
+    agent_registry = AgentRegistry()
+    tool_registry = ToolRegistry()
+    workflow_registry = WorkflowRegistry()
+
+    # -- Session store --
+    session_store: SessionStore | None = None
+    runtime_cfg = getattr(config, "runtime", None)
+    if runtime_cfg and runtime_cfg.session_type != "memory":
+        session_store = create_session_store(
+            store_type=runtime_cfg.session_type,
+            db_path=runtime_cfg.session_path,
+        )
+
+    # -- Run state store (Phase 9) --
+    run_state_store: Any = None
+    if runtime_cfg:
+        from agent_app.runtime.run_state_store import create_run_state_store
+        run_state_store = create_run_state_store(
+            store_type=runtime_cfg.run_state_type,
+            db_path=runtime_cfg.run_state_path,
+        )
+
+    # -- Workflow state store (Phase 14.0) --
+    dag_state_store: Any = None
+    if runtime_cfg and getattr(runtime_cfg, "workflow_state_type", None):
+        from agent_app.runtime.dag_state_store import create_workflow_state_store
+        dag_state_store = create_workflow_state_store(
+            store_type=runtime_cfg.workflow_state_type,
+            db_path=runtime_cfg.workflow_state_path,
+        )
+
+    # -- Governance: approval store --
+    gov = getattr(config, "governance", None)
+    approval_cfg = gov.approvals if gov else None
+    if approval_cfg and approval_cfg.type == "sqlite":
+        approval_store: Any = SQLiteApprovalStore(db_path=approval_cfg.path or ".agent_app/approvals.db")
+    else:
+        approval_store = InMemoryApprovalStore()
+
+    # -- Governance: audit logger --
+    audit_cfg = gov.audit if gov else None
+    if audit_cfg and audit_cfg.type == "sqlite":
+        audit_logger: Any = SQLiteAuditLogger(db_path=audit_cfg.path or ".agent_app/audit.db")
+    else:
+        audit_logger = InMemoryAuditLogger()
+
+    # -- Merge tools from global default registry (registered via @tool) --
+    default_tr = get_default_registry()
+    for name in default_tr.list():
+        entry = default_tr.get_entry(name)
+        tool_registry.register(name, entry.spec, fn=entry.fn)
+
+    # -- Extra tools --
+    if extra_tools:
+        for spec, fn in extra_tools:
+            tool_registry.register(spec.name, spec, fn=fn)
+
+    # -- Tools declared in config (may override or supplement) --
+    for tool_cfg in config.tools:
+        spec = ToolSpec(
+            name=tool_cfg.name,
+            description="",
+            risk_level=tool_cfg.risk_level,
+            requires_approval=tool_cfg.requires_approval,
+            permissions=tool_cfg.permissions,
+        )
+        if not tool_registry.exists(spec.name):
+            tool_registry.register(spec.name, spec)
+
+    # -- Agents --
+    for agent_cfg in config.agents:
+        spec = AgentSpec(
+            name=agent_cfg.name,
+            description=agent_cfg.description,
+            model=agent_cfg.model or config.models.get("default"),
+            instructions=_load_prompt(agent_cfg.instructions, base_dir),
+            tools=agent_cfg.tools,
+            handoffs=agent_cfg.handoffs,
+            guardrails=agent_cfg.guardrails,
+        )
+        agent_registry.register(spec.name, spec)
+
+    # -- Workflows --
+    wf_defs = config.workflows
+    for wf_name, wf_body in wf_defs.items():
+        wf_type = wf_body.get("type", "single")
+        routing_policy = _parse_routing_policy(wf_body)
+        if wf_type == "single":
+            wf = Workflow.single(agent=wf_body.get("agent", wf_name), name=wf_name)
+        elif wf_type == "handoff":
+            wf = Workflow.handoff(
+                entry=wf_body["entry"],
+                agents=wf_body.get("agents", []),
+                name=wf_name,
+            )
+        elif wf_type == "orchestrator":
+            wf = Workflow.orchestrator(
+                manager=wf_body.get("entry", wf_name),
+                agents_as_tools=wf_body.get("agents_as_tools", []),
+                name=wf_name,
+            )
+        elif wf_type == "dag":
+            wf_retry_cfg = wf_body.get("retry")
+            wf = Workflow.dag(
+                name=wf_name,
+                nodes=wf_body.get("nodes", []),
+                execution_mode=wf_body.get("execution_mode", "sequential"),
+                max_concurrency=wf_body.get("max_concurrency"),
+                retry=wf_retry_cfg,
+                timeout_seconds=wf_body.get("timeout_seconds"),
+                deadline_seconds=wf_body.get("deadline_seconds"),
+            )
+        else:
+            wf = Workflow(name=wf_name, type=wf_type, entry=wf_body.get("entry"))
+        if routing_policy is not None:
+            wf.routing_policy = routing_policy
+        workflow_registry.register(wf.name, wf)
+
+    # -- Backend --
+    backend = _create_backend(
+        runtime_cfg,
+        agent_registry,
+        tool_registry,
+        approval_store=approval_store,
+        audit_logger=audit_logger,
+        permission_checker=(
+            DefaultPermissionChecker() if gov else None
+        ),
+    )
+
+    # -- Observability: trace collector (Phase 12) --
+    trace_collector: Any = None
+    obs_cfg = getattr(config, "observability", None)
+    if obs_cfg and obs_cfg.tracing and obs_cfg.tracing.type != "noop":
+        tracing_type = obs_cfg.tracing.type
+        if tracing_type == "memory":
+            from agent_app.observability.collector import InMemoryTraceCollector
+            trace_collector = InMemoryTraceCollector(
+                max_traces=obs_cfg.tracing.max_traces,
+                max_events_per_trace=obs_cfg.tracing.max_events_per_trace,
+            )
+        elif tracing_type == "jsonl":
+            from agent_app.observability.exporters import JSONLTraceCollector
+            path = obs_cfg.tracing.path or ".agent_app/traces.jsonl"
+            trace_collector = JSONLTraceCollector(path=path)
+
+    return AgentApp(
+        registry=_bundle(agent_registry, tool_registry, workflow_registry),
+        session_store=session_store,
+        approval_store=approval_store,
+        backend=backend,
+        run_state_store=run_state_store,
+        dag_state_store=dag_state_store,
+        trace_collector=trace_collector,
+        lease_renewal_config=getattr(runtime_cfg, "lease_renewal_config", None),
+        dag_snapshot_config=getattr(runtime_cfg, "dag_snapshot_config", None),
+        dag_compensation_config=getattr(runtime_cfg, "dag_compensation_config", None),
+        dag_lease_config=getattr(runtime_cfg, "dag_lease_config", None),
+    )
+
+
+def _create_backend(
+    runtime_cfg: Any,
+    agent_registry: Any,
+    tool_registry: Any,
+    approval_store: Any = None,
+    audit_logger: Any = None,
+    permission_checker: Any = None,
+) -> Any:
+    """Create the execution backend based on runtime config.
+
+    Args:
+        runtime_cfg: RuntimeConfig instance (or None).
+        agent_registry: AgentRegistry for OpenAIAgentsBackend.
+        tool_registry: ToolRegistry for OpenAIAgentsBackend.
+        approval_store: Approval store for governance (Phase 8).
+        audit_logger: Audit logger for governance (Phase 8).
+        permission_checker: Permission checker for governance (Phase 8).
+
+    Returns:
+        A backend instance implementing AgentBackend.
+
+    Raises:
+        ValueError: If backend type is unknown.
+        RuntimeError: If openai backend requested but SDK not installed.
+    """
+    from agent_app.runtime.backends import DryRunBackend
+    from agent_app.runtime.tool_executor import ToolExecutor
+
+    if runtime_cfg is None or runtime_cfg.backend == "dry_run":
+        return DryRunBackend()
+
+    if runtime_cfg.backend == "openai":
+        # Eagerly validate that the SDK is available.
+        from agent_app.adapters.openai_agents import _load_agents_sdk
+        _load_agents_sdk()  # raises RuntimeError if missing
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        # Phase 8: Build governance components if not provided
+        tool_executor: ToolExecutor | None = None
+        if approval_store is not None and audit_logger is not None:
+            from agent_app.governance.permission import DefaultPermissionChecker
+            tool_executor = ToolExecutor(
+                tool_registry=tool_registry,
+                approval_store=approval_store,
+                permission_checker=permission_checker or DefaultPermissionChecker(),
+                audit_logger=audit_logger,
+            )
+
+        # Phase 10: Extract hitl_mode from openai config
+        hitl_mode = "wrapper"  # default
+        openai_cfg = getattr(runtime_cfg, "openai", None)
+        if isinstance(openai_cfg, dict):
+            hitl_mode = openai_cfg.get("hitl_mode", "wrapper")
+
+        return OpenAIAgentsBackend(
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            raise_on_missing=True,
+            tool_executor=tool_executor,
+            approval_store=approval_store,
+            audit_logger=audit_logger,
+            permission_checker=permission_checker,
+            hitl_mode=hitl_mode,
+            trace_collector=trace_collector,
+        )
+
+    raise ValueError(
+        f"Unknown backend '{runtime_cfg.backend}'. "
+        "Supported: 'dry_run', 'openai'."
+    )
+
+
+class _RegistryBundle:
+    """Lightweight container so AgentApp can share a single registry set."""
+
+    def __init__(
+        self,
+        agent_registry: AgentRegistry,
+        tool_registry: ToolRegistry,
+        workflow_registry: WorkflowRegistry,
+    ) -> None:
+        self.agent_registry = agent_registry
+        self.tool_registry = tool_registry
+        self.workflow_registry = workflow_registry
+
+
+def _bundle(
+    ar: AgentRegistry,
+    tr: ToolRegistry,
+    wr: WorkflowRegistry,
+) -> _RegistryBundle:
+    return _RegistryBundle(ar, tr, wr)

@@ -1,0 +1,78 @@
+name: customer_support_branch_eval
+description: IF_ELSE and SWITCH branch node tests (Phase 13.7)
+
+defaults:
+  workflow: refund_if_else_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - customer:read
+    - refund:calculate
+    - notification:send
+
+cases:
+  # IF_ELSE: paid order → then branch (calculate_refund) executes
+  - id: if_else_paid_order_then_branch
+    input: "I want a refund for order 123"
+    expect:
+      status: completed
+      node_results:
+        route_refund:
+          status: completed
+          condition_result: true
+
+  # IF_ELSE: shipped order → else branch (send_non_refund_notice) executes
+  - id: if_else_shipped_order_else_branch
+    input: "I want a refund for order 456"
+    expect:
+      status: completed
+      node_results:
+        route_refund:
+          status: completed
+          condition_result: false
+
+  # IF_ELSE: both branches produce output
+  - id: if_else_both_branches_produce_output
+    input: "I want a refund for order 789"
+    expect:
+      status: completed
+      node_results:
+        route_refund:
+          status: completed
+          then_status: completed
+          else_status: skipped
+
+  # SWITCH: paid → calculate_refund branch
+  - id: switch_paid_calculates_refund
+    input: "I want a refund for order 123"
+    workflow: refund_switch_dag
+    expect:
+      status: completed
+      node_results:
+        route_by_status:
+          status: completed
+          matched_value: "paid"
+
+  # SWITCH: shipped → send_return_instructions branch
+  - id: switch_shipped_return_instructions
+    input: "I want a refund for order 456"
+    workflow: refund_switch_dag
+    expect:
+      status: completed
+      node_results:
+        route_by_status:
+          status: completed
+          matched_value: "shipped"
+
+  # SWITCH: unknown status → default branch
+  - id: switch_unknown_default_branch
+    input: "I want a refund for order 999"
+    workflow: refund_switch_dag
+    expect:
+      status: completed
+      node_results:
+        route_by_status:
+          status: completed
+          matched_value: null
+          matched_case_index: -1

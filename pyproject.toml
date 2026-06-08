@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-app-framework"
+version = "0.9.0"
+description = "A production-oriented application framework built on top of OpenAI Agents SDK."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "AgentOps Team" }]
+keywords = ["agent", "openai", "llm", "framework"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "typing-extensions>=4.0",
+]
+
+[project.optional-dependencies]
+openai = [
+    "openai-agents>=0.2.0",
+]
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+otel = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+all = [
+    "openai-agents>=0.2.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "openai_smoke: tests that require OPENAI_API_KEY and call the real OpenAI API (skipped by default)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[project.scripts]
+agentapp = "agent_app.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_app*", "tests*"]

@@ -1,0 +1,53 @@
+name: customer_support_function_dag_eval
+description: FUNCTION DAG workflow tests (Phase 13.4 + 13.5)
+
+defaults:
+  workflow: refund_function_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - customer:read
+    - refund:calculate
+
+cases:
+  # Phase 13.4: Basic function DAG flow
+  - id: extract_and_query_paid_order
+    input: "I want a refund for order 123"
+    expect:
+      status: completed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed
+        calculate_refund:
+          status: completed
+
+  - id: extract_and_query_shipped_order
+    input: "I want a refund for order 456"
+    expect:
+      status: completed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed
+        calculate_refund:
+          status: skipped
+
+  # Phase 13.5: Permission denied — missing refund:calculate permission
+  - id: permission_denied_missing_permission
+    input: "I want a refund for order 123"
+    permissions:
+      - order:read
+      - customer:read
+    expect:
+      status: failed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed
+        calculate_refund:
+          status: failed

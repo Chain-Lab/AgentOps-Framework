@@ -1,0 +1,52 @@
+eval:
+  name: customer_support_deadline_dag
+  description: >
+    Evaluates DAG workflow-level deadline enforcement.
+    Tests that deadlines are respected, nodes are cancelled/skipped correctly,
+    and deadline events are recorded.
+
+  workflows:
+    - refund_deadline_dag
+
+  graders:
+    - type: llm
+      model: gpt-4o
+
+cases:
+  - name: deadline_success
+    description: Workflow completes within deadline
+    workflow: refund_deadline_dag
+    input:
+      message: "I need a refund for order #12345"
+    expected:
+      workflow_status: completed
+      contains_output:
+        - refund
+
+  - name: deadline_exceeded
+    description: Workflow exceeds deadline and fails
+    workflow: refund_deadline_dag
+    input:
+      message: "I need a refund for order #99999"
+    expected:
+      workflow_status: failed
+      error_type: timeout
+
+  - name: deadline_prevents_downstream_execution
+    description: Downstream nodes are skipped when deadline exceeded
+    workflow: refund_deadline_dag
+    input:
+      message: "Refund for order #12345"
+    expected:
+      workflow_status: failed
+      skipped_nodes_exist: true
+
+  - name: deadline_metadata_present
+    description: Deadline error contains required metadata
+    workflow: refund_deadline_dag
+    input:
+      message: "I need a refund for order #12345"
+    expected:
+      error_contains:
+        - type
+        - message

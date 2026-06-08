@@ -1,0 +1,33 @@
+app:
+  name: openai-basic
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  backend: openai
+  session:
+    type: memory
+
+agents:
+  assistant:
+    description: A basic assistant with math and account tools
+    model: gpt-4o
+    instructions: ./prompts/assistant.md
+    tools:
+      - math.add
+      - account.delete
+
+tools:
+  - name: math.add
+    type: function
+    risk_level: low
+    permissions: []
+
+  - name: account.delete
+    type: function
+    risk_level: high
+    requires_approval: true
+    permissions:
+      - account:delete

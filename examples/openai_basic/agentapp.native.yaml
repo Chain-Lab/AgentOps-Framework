@@ -1,0 +1,48 @@
+app:
+  name: openai-basic-native-hitl
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  backend: openai
+  openai:
+    hitl_mode: native
+  run_state:
+    type: sqlite
+    path: .agent_app/openai_basic_run_states.db
+  session:
+    type: memory
+
+governance:
+  approvals:
+    type: sqlite
+    path: .agent_app/openai_basic_approvals.db
+  audit:
+    type: sqlite
+    path: .agent_app/openai_basic_audit.db
+  permissions:
+    mode: default
+
+agents:
+  assistant:
+    description: A basic assistant with math and account tools (native HITL)
+    model: gpt-4o
+    instructions: ./prompts/assistant.md
+    tools:
+      - math.add
+      - account.delete
+
+tools:
+  - name: math.add
+    type: function
+    risk_level: low
+    permissions: []
+
+  - name: account.delete
+    type: function
+    risk_level: high
+    requires_approval: true
+    permissions:
+      - account:delete

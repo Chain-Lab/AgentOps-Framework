@@ -1,0 +1,49 @@
+app:
+  name: openai-research-assistant
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  backend: openai
+  openai:
+    hitl_mode: wrapper
+  session:
+    type: memory
+
+governance:
+  approvals:
+    type: memory
+  audit:
+    type: memory
+
+agents:
+  manager:
+    description: Orchestrator — delegates to specialists
+    model: gpt-4o
+    instructions: You are a research manager. Delegate tasks to the appropriate specialist agents based on the user's request.
+
+  researcher:
+    description: Research specialist — gathers information
+    model: gpt-4o
+    instructions: You are a research specialist. Gather and synthesize information on given topics.
+
+  analyst:
+    description: Data analysis specialist
+    model: gpt-4o
+    instructions: You are a data analysis specialist. Analyze data and provide insights.
+
+  writer:
+    description: Writing specialist — produces reports
+    model: gpt-4o
+    instructions: You are a writing specialist. Produce clear, well-structured reports and summaries.
+
+workflows:
+  research_assistant:
+    type: orchestrator
+    entry: manager
+    agents_as_tools:
+      - researcher
+      - analyst
+      - writer

@@ -1,0 +1,50 @@
+name: customer_support_compensation_eval
+description: Compensation / rollback regression tests (Phase 13.9)
+
+defaults:
+  workflow: refund_compensation_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - customer:read
+    - refund:calculate
+
+cases:
+  # Case 1: Successful workflow — no compensation triggered
+  - id: successful_workflow_no_compensation
+    input: "I want a refund for order ORD-001"
+    expect:
+      status: completed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed
+        calculate_refund:
+          status: completed
+
+  # Case 2: Failed workflow triggers compensation for completed nodes
+  - id: failed_workflow_triggers_compensation
+    input: "I want a refund for order ORD-002"
+    expect:
+      status: failed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed
+
+  # Case 3: Missing permission causes failure → compensation
+  - id: permission_denied_triggers_compensation
+    input: "I want a refund for order ORD-003"
+    permissions:
+      - order:read
+      - customer:read
+    expect:
+      status: failed
+      node_results:
+        extract_order:
+          status: completed
+        query_order:
+          status: completed

@@ -1,0 +1,51 @@
+name: customer_support_subworkflow_eval
+description: SUBWORKFLOW node tests (Phase 13.6)
+
+defaults:
+  workflow: refund_with_subworkflow
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - customer:read
+    - refund:calculate
+
+cases:
+  # Basic subworkflow execution — paid order triggers calculate_refund
+  - id: subworkflow_paid_order
+    input: "I want a refund for order 123"
+    expect:
+      status: completed
+      node_results:
+        refund_flow:
+          status: completed
+
+  # Shipped order — calculate_refund skipped inside subworkflow, but subworkflow completes
+  - id: subworkflow_shipped_order
+    input: "I want a refund for order 456"
+    expect:
+      status: completed
+      node_results:
+        refund_flow:
+          status: completed
+
+  # Permission denied — missing refund:calculate permission
+  - id: subworkflow_permission_denied
+    input: "I want a refund for order 123"
+    permissions:
+      - order:read
+      - customer:read
+    expect:
+      status: failed
+      node_results:
+        refund_flow:
+          status: failed
+
+  # Input mapping — subworkflow receives correct message
+  - id: subworkflow_input_mapping
+    input: "I want a refund for order 789"
+    expect:
+      status: completed
+      node_results:
+        refund_flow:
+          status: completed

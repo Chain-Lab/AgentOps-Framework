@@ -1,0 +1,18 @@
+name: customer_support_dag_eval
+description: DAG workflow regression tests (Phase 13)
+
+defaults:
+  workflow: refund_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - refund:create
+
+cases:
+  - id: dag_sequential_execution
+    input: "query order 123"
+    expect:
+      status: interrupted
+      # request_refund node requires approval, so DAG is interrupted
+      # but query_order node completes first (sequential execution)

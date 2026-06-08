@@ -1,0 +1,725 @@
+# v0.10.0 Release Checklist
+
+## Tests
+
+- [x] `python -m pytest tests/unit/test_dag.py` — 294 passed, 0 failed (Phase 13.9.1 stabilization complete)
+- [x] 30 compensation tests passing (TestCompensationConfigLoading, TestSequentialCompensation, TestParallelCompensation, TestDeadlineCompensation, TestTimeoutRetryCompensation, TestBranchCompensation, TestCompensationEvents)
+- [x] No regressions in existing passing tests
+
+## Phase 13.9: Compensation Handlers + Rollback
+
+- [x] `CompensationStatus` enum (NOT_STARTED, RUNNING, COMPLETED, PARTIAL, FAILED, SKIPPED)
+- [x] `NodeCompensationResult` model (node_id, status, started_at, completed_at, attempts, error, output)
+- [x] `WorkflowCompensationResult` model (status, compensated_nodes, skipped_nodes, failed_nodes, results)
+- [x] `CompensationError` exception class
+- [x] `DagNode.compensate` field (function, inputs, timeout_seconds, retry)
+- [x] `DagWorkflow.compensation` field (enabled, trigger_on, continue_on_failure, timeout_seconds)
+- [x] `_should_trigger_compensation()` — gating logic based on status and policy
+- [x] `_get_compensation_candidates()` — reverse completion order selection of COMPLETED nodes with compensate config
+- [x] `_execute_compensation()` — main orchestration loop with best-effort semantics
+- [x] `_execute_compensation_handler()` — individual handler execution with timeout
+- [x] `_resolve_compensation_inputs()` — input mapping resolution for handlers
+- [x] 7 compensation event types recorded (WORKFLOW/NODE started/completed/failed/skipped)
+- [x] Sequential executor integration — compensation after workflow failure
+- [x] Parallel executor integration — compensation after workflow failure
+- [x] `Workflow.dag()` accepts `compensation` parameter with validation
+- [x] Config validation: compensation must be dict; trigger_on values validated
+- [x] Backward compatibility: old configs without compensation load unchanged
+- [x] 30 new Phase 13.9 tests
+
+## Phase 13.8: Workflow-level Deadline
+
+- [x] `NodeType.FUNCTION` enum value added
+- [x] `FunctionRegistry` with `@workflow_function` decorator
+- [x] `_execute_function_node()` in DagExecutor
+- [x] `_resolve_function_inputs()` for input mapping
+- [x] `_resolve_path()` for nested access
+- [x] Workflow.dag() handles `function` field for FUNCTION nodes
+- [x] Config loader passes `function` field from YAML
+- [x] 53 new Phase 13.4 tests
+
+## Phase 13.5: FUNCTION Node Permissions
+
+- [x] Function-level permissions from registry metadata
+- [x] Node-level permissions from YAML config
+- [x] Permission check against execution_context["permissions"]
+- [x] FUNCTION_PERMISSION_DENIED event recording
+- [x] DagError with dict args for permission_denied
+- [x] 37 new Phase 13.5 tests
+
+## Phase 13.6: Subworkflow Node
+
+- [x] `NodeType.SUBWORKFLOW` enum value added
+- [x] `DagNode.subworkflow_name` field
+- [x] `_execute_subworkflow_node()` in DagExecutor
+- [x] WorkflowRegistry lookup with KeyError handling
+- [x] DAG type validation
+- [x] Cycle detection via `_subworkflow_chain`
+- [x] Input mapping reuse (`_resolve_function_inputs`)
+- [x] Permission inheritance
+- [x] Output wrapping with metadata
+- [x] Status propagation (subworkflow_failed error type)
+- [x] SUBWORKFLOW_STARTED/COMPLETED/FAILED events
+- [x] Workflow.dag() handles subworkflow nodes
+- [x] 19 new Phase 13.6 tests
+
+## Phase 13.7: Conditional Branch DSL Extensions
+
+- [x] `condition.py` extended with IN, NOT IN, STARTS_WITH, ENDS_WITH operators
+- [x] `InExpression` AST node added
+- [x] Comma support in tokenizer
+- [x] `NodeType.IF_ELSE` enum value added
+- [x] `NodeType.SWITCH` enum value added
+- [x] `DagNode.then`, `DagNode.else_branch`, `DagNode.switch_expr`, `DagNode.cases` fields
+- [x] `_execute_if_else_node()` in DagExecutor
+- [x] `_execute_switch_node()` in DagExecutor
+- [x] `IfElseResult` model with condition_result, then_status, else_status
+- [x] `SwitchResult` model with matched_value, matched_case_index
+- [x] `resolve_expression_value()` for switch expression evaluation
+- [x] `_result:<id>` in execution_context for condition evaluators
+- [x] Workflow.dag() handles if_else/switch nodes
+- [x] Config loader handles `else` alias → `else_branch`, `default` in input
+- [x] 37 new Phase 13.7 tests
+
+## Phase 13.8: Workflow-level Deadline
+
+- [x] `deadline_seconds` field on `DagWorkflow` with `gt=0` validation
+- [x] `WorkflowDeadlineExceededError` exception class
+- [x] `_DeadlineState` helper with `remaining()`, `is_exceeded()`, `check()`, `effective_timeout()`
+- [x] Sequential deadline enforcement — checks before each node; marks remaining as SKIPPED
+- [x] Parallel deadline enforcement — `asyncio.wait` with deadline timeout; best-effort cancellation
+- [x] Deadline-aware retry — `min(node_timeout, remaining_deadline)` as effective timeout; backoff capped
+- [x] Subworkflow deadline inheritance — `min(parent_remaining, child_configured)`
+- [x] IF_ELSE/SWITCH deadline inheritance — branches share parent's absolute deadline
+- [x] `WORKFLOW_DEADLINE_EXCEEDED` event with metadata (deadline_seconds, elapsed, node IDs)
+- [x] `NODE_CANCELLED_BY_DEADLINE` event for cancelled nodes
+- [x] `Workflow.dag()` factory accepts `deadline_seconds`; validates > 0
+- [x] Config loader passes `deadline_seconds` from YAML
+- [x] 34 new Phase 13.8 tests (6 config + 6 state + 7 sequential + 5 parallel + 4 retry + 3 branch + 3 events)
+- [x] `refund_deadline_dag` example workflow with 5s deadline
+
+## customer_support Examples
+
+- [x] `refund_dag` — basic sequential DAG (Phase 13.1)
+- [x] `refund_parallel_dag` — parallel execution (Phase 13.2)
+- [x] `refund_conditional_dag` — conditional node execution (Phase 13.3)
+- [x] `refund_function_dag` — function nodes with input mapping (Phase 13.4)
+- [x] `refund_subworkflow` — subworkflow definition (Phase 13.6)
+- [x] `refund_with_subworkflow` — parent DAG using subworkflow (Phase 13.6)
+- [x] `refund_if_else_dag` — if/else conditional branching (Phase 13.7)
+- [x] `refund_switch_dag` — switch multi-way routing (Phase 13.7)
+- [x] `refund_compensation_dag` — compensation with rollback handlers (Phase 13.9)
+
+## Eval Suites
+
+- [x] `customer_support_dag.yaml` — basic DAG eval
+- [x] `customer_support_parallel_dag.yaml` — parallel DAG eval
+- [x] `customer_support_conditional_dag.yaml` — conditional DAG eval
+- [x] `customer_support_function_dag.yaml` — function DAG eval
+- [x] `customer_support_subworkflow.yaml` — subworkflow eval (4 cases)
+- [x] `customer_support_branch.yaml` — if_else/switch eval (6 cases)
+- [x] `customer_support_compensation.yaml` — compensation eval (3 cases)
+
+## Phase 13.9.1: Regression Stabilization + Release Baseline Recovery
+
+- [x] Fixed 3-value unpacking of `execute()` return (4-tuple) in 3 locations:
+  - `tests/unit/test_dag.py` — 62 occurrences
+  - `tests/unit/test_dag.py` — 2 occurrences (`_, status, _`)
+  - `agent_app/runtime/workflow_executor.py:552` — `AppRunner._run_dag_workflow`
+  - `agent_app/workflows/dag.py:1987` — `_execute_subworkflow_node`
+- [x] All 294 DAG tests pass (was 215 pass / 79 fail)
+- [x] Full test suite: 871 passed, 5 skipped, 0 failed (+82 new Phase 14.1 tests)
+- [x] No compensation logic changes — only return value compatibility fixes
+- [x] Backward compatibility verified: all callers now handle 4-tuple
+
+## Phase 14.0: Persisted DAG Execution State + Crash Recovery Foundation
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_dag_run_state.py` — 53 passed, 0 failed (Phase 14.0)
+- [x] `python -m pytest tests/unit/test_dag.py` — 294 passed, 0 failed
+- [x] Full test suite: 842 passed, 2 warnings, 0 failed (Phase 14.0 baseline)
+- [x] No regressions in existing passing tests
+
+### State Models
+
+- [x] `WorkflowRunState` — run_id, workflow_name, status, input, output, error, timestamps, metadata
+- [x] `NodeExecutionState` — run_id, node_id, node_type, status, input, output, error, attempts, timestamps
+- [x] `WorkflowEventState` — event_id, run_id, node_id, event_type, payload, created_at
+- [x] `CompensationExecutionState` — run_id, node_id, handler_name, status, error, timestamps
+- [x] `RecoveryPlan` — resumable, completed_nodes, interrupted_nodes, failed_nodes, compensation_started, reason
+
+### Store Implementations
+
+- [x] `WorkflowStateStore` protocol — async CRUD interface for runs, nodes, events, compensations
+- [x] `InMemoryWorkflowStateStore` — in-memory dict-based implementation
+- [x] `SQLiteWorkflowStateStore` — SQLite-backed with auto-create tables, JSON serialization, ISO datetime
+- [x] `create_workflow_state_store()` factory — memory/sqlite types
+- [x] `_build_recovery_plan()` shared recovery logic
+
+### DAG Executor Integration
+
+- [x] `DagExecutor.__init__()` — optional `state_store` and `run_id` parameters
+- [x] `DagExecutor.execute()` — creates workflow run record, persists final status
+- [x] Node state persistence — sequential and parallel modes
+- [x] Event persistence — workflow.started, workflow.completed/failed
+- [x] Compensation state persistence — started/completed/failed for each handler
+- [x] No state_store preserves old behavior (backward compatible)
+
+### Config Support
+
+- [x] `runtime.workflow_state.type` — memory (default) or sqlite
+- [x] `runtime.workflow_state.path` — SQLite db path
+- [x] Nested dict config: `workflow_state: {type: sqlite, path: ...}`
+- [x] Flat string config: `workflow_state: memory`
+- [x] Config loader wires store creation and passes to AgentApp
+
+### Call Chain
+
+- [x] `AgentApp.__init__()` — `dag_state_store` parameter
+- [x] `AgentApp._ensure_runner()` — passes `dag_state_store` to AppRunner
+- [x] `AgentApp._run_workflow()` — passes `dag_state_store` to WorkflowExecutor
+- [x] `AppRunner.__init__()` — `dag_state_store` parameter
+- [x] `WorkflowExecutor.__init__()` — `dag_state_store` parameter
+- [x] `WorkflowExecutor._run_dag()` — passes `state_store` and `run_id` to DagExecutor
+
+## Documentation
+
+- [x] CHANGELOG.md updated with all Phase 13.x features
+- [x] README.md DAG Workflows section added
+- [x] README.md limitations updated
+- [x] README.md roadmap updated (v0.10 DAG ✅)
+- [x] `docs/release_checklist_v0.10.md` created
+
+## Known Limitations (v0.10.0)
+
+- Local asyncio concurrency only — not distributed DAG execution
+- No Temporal / Celery backend
+- Retry not applied to interrupted (approval) nodes
+- Compensation timeout is shared across all handlers (not per-handler)
+- Compensation is best-effort — no guarantee of completion; handler failures are logged but not retried at workflow level
+- Parallel compensation order is based on completion timestamp (may vary between runs)
+- Subworkflow compensation delegates to parent (no independent subworkflow compensation yet)
+- Condition DSL is safe subset — no arbitrary Python expressions, no function calls
+- Deadline cancellation is best-effort — external side effects may have already occurred
+- No visual DAG editor
+- Switch expression must resolve to a single value (not complex expressions)
+- Subworkflow output wrapping may change in future versions
+- RecoveryPlan is inspect/planning only — no automatic resumption of interrupted nodes
+- No distributed locking or worker lease mechanism
+- No exactly-once execution guarantee
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- State store is DAG-specific — does not cover SINGLE/HANDOFF/ORCHESTRATOR workflow types
+
+## Phase 14.1: DAG Resume Semantics
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_dag_run_state.py` — 82 passed, 0 failed (53 Phase 14.0 + 29 Phase 14.1)
+- [x] `python -m pytest tests/unit/test_dag.py` — 294 passed, 0 failed
+- [x] Full test suite: 871 passed, 5 skipped, 0 failed
+- [x] No regressions in existing passing tests
+
+### Resume Models
+
+- [x] `ResumePolicy` — retry_failed, retry_interrupted, skip_completed, allow_after_compensation_started
+- [x] `NodeResumeDecision` — node_id, action (skip/retry/run/blocked), reason
+- [x] `ResumePlan` — resumable, decisions, completed_nodes, skipped_nodes, retry_nodes, blocked_nodes, reason
+- [x] `ResumeResult` — run_id, status, resumed, skipped_nodes, retried_nodes, final_output, error
+
+### Store Resume Methods
+
+- [x] `WorkflowStateStore.build_resume_plan(run_id, policy)` — policy-driven per-node decisions
+- [x] `WorkflowStateStore.get_node_outputs(run_id)` — dict of node_id → output
+- [x] `_build_resume_plan()` — shared logic in dag_state_store.py; handles all node statuses
+- [x] `InMemoryWorkflowStateStore.list_runs()` — list all persisted runs
+- [x] `SQLiteWorkflowStateStore.list_runs()` — list all persisted runs
+
+### Resume Plan Logic
+
+- [x] Completed nodes with output → "skip" (reuse persisted output)
+- [x] Completed nodes without output → "blocked" (cannot safely resume)
+- [x] Interrupted nodes (RUNNING without completed_at) → "retry" if policy allows
+- [x] Failed nodes → "retry" if retry_failed=True, else "blocked"
+- [x] Pending nodes → "run" (never executed)
+- [x] Skipped nodes → "skip"
+- [x] Compensation started (compensation records exist) → resumable=False
+- [x] Blocked nodes don't prevent overall resume (handled downstream)
+
+### DagExecutor.resume()
+
+- [x] Validates state_store and run_id configured
+- [x] Loads persisted WorkflowRunState, NodeExecutionState list, CompensationExecutionState list
+- [x] Records workflow.resume_started event (trace collector + state store)
+- [x] Blocks if compensation started (unless policy allows)
+- [x] Injects persisted outputs for completed/skipped nodes into execution_context
+- [x] Records node.skipped_completed events
+- [x] Executes retry/run nodes in topological order
+- [x] Supports condition checking, deadline checking, downstream skipping
+- [x] Persists resumed node states after each execution
+- [x] Records final workflow status (resume_completed or resume_failed)
+- [x] Optionally triggers compensation if workflow fails during resume
+- [x] Returns 4-tuple: (results, overall_status, final_output, compensation_result)
+
+### API Wiring
+
+- [x] `AgentApp.resume_workflow_run(workflow, run_id, input, permissions, resume_policy)` — public API
+- [x] `AppRunner.resume_workflow_run(workflow, run_id, ...)` — looks up workflow, delegates to WorkflowExecutor
+- [x] `WorkflowExecutor.resume_workflow_run(workflow, run_id, ...)` — reconstructs DagWorkflow, creates DagExecutor, calls resume()
+- [x] `WorkflowExecutor.__init__()` — new `app_runner` parameter for DAG agent node execution during resume
+- [x] `AppRunner.__init__()` — creates WorkflowExecutor with `app_runner=self`
+- [x] `AgentApp._run_workflow()` — uses AppRunner's WorkflowExecutor (shares dag_state_store)
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 14.1 section
+- [x] README.md limitations updated with resume semantics notes
+- [x] `docs/release_checklist_v0.10.md` Phase 14.1 section added
+
+### Known Limitations (v0.10.0 + Phase 14.1)
+
+- Resume is explicit (user calls `app.resume_workflow_run()`); no automatic resume on app restart
+- `allow_after_compensation_started` is accepted but not implemented (default False blocks resume)
+- Parallel compensation order is based on completion timestamp (may vary between runs)
+- Deadline cancellation is best-effort — external side effects may have already occurred
+- Subworkflow compensation delegates to parent (no independent subworkflow compensation yet)
+- No distributed execution, Temporal/Celery backend, or visual DAG editor
+
+## Phase 15: Distributed Execution Readiness
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_dag_run_state.py` — 123 passed, 0 failed (Phase 14.0 + 14.1 + 15)
+- [x] `python -m pytest tests/unit/test_dag.py` — 294 passed, 0 failed
+- [x] Full test suite: 912 passed, 2 warnings, 0 failed (+41 new Phase 15 tests)
+- [x] No regressions in existing passing tests
+
+### Phase 15 Models
+
+- [x] `WorkerIdentity` — worker_id, hostname, process_id, app_version, metadata
+- [x] `LeaseStatus` — ACQUIRED, DENIED, EXPIRED, RELEASED
+- [x] `WorkflowRunLease` — run_id, owner_id, acquired_at, expires_at, renewed_at, released_at, version
+- [x] `LeasePolicy` — ttl_seconds, allow_steal_expired, renew_before_seconds
+- [x] `LeaseAcquireResult` — acquired, run_id, owner_id, lease, reason, current_owner_id, expires_at
+- [x] `IdempotencyRecord` — key, run_id, operation, created_at, result_ref
+
+### WorkflowStateStore Protocol Extension
+
+- [x] `acquire_run_lease(run_id, worker, policy)` — acquire lease on a workflow run
+- [x] `renew_run_lease(run_id, worker, policy)` — renew existing lease (owner only)
+- [x] `release_run_lease(run_id, worker)` — release held lease (owner only)
+- [x] `get_run_lease(run_id)` — get current active lease
+- [x] `list_expired_leases(before)` — list expired, unreleased leases
+- [x] `put_idempotency_record(record)` — store idempotency record
+- [x] `get_idempotency_record(key)` — retrieve idempotency record
+
+### InMemory Store Lease Implementation
+
+- [x] `_leases` dict storage (run_id → WorkflowRunLease)
+- [x] `_idempotency` dict storage (key → IdempotencyRecord)
+- [x] Acquire: no existing lease → success; released lease → success; active lease by same owner → refresh; active lease by different owner → deny
+- [x] Renew: owner only; non-owner → KeyError
+- [x] Release: owner only; non-owner → KeyError; already released → KeyError
+- [x] Expired steal: allow_steal_expired=True → success; allow_steal_expired=False → deny
+- [x] list_expired_leases: returns only expired, unreleased leases
+
+### SQLite Store Lease Implementation
+
+- [x] `workflow_run_leases` table (run_id PK, owner_id, acquired_at, expires_at, renewed_at, released_at, version)
+- [x] `workflow_idempotency` table (key PK, run_id, operation, created_at, result_ref)
+- [x] `_sync_leases_from_db()` — loads active leases into memory cache on init
+- [x] `_sync_idempotency_from_db()` — loads idempotency records into memory cache on init
+- [x] acquire persists to SQLite; visible to new store instances
+- [x] renew persists to SQLite; version incremented
+- [x] release persists to SQLite; released_at set
+- [x] list_expired_leases queries SQLite directly (cross-instance)
+- [x] Old DB without lease/idempotency tables migrates automatically (OperationalError handling)
+- [x] Row-to-model converters: `_row_to_lease()`, `_row_to_idempotency()`
+
+### DagExecutor Lease Integration
+
+- [x] `DagExecutor.__init__()` — new optional `worker` parameter
+- [x] `_get_worker()` — returns explicit worker or generates/caches default WorkerIdentity
+- [x] `_acquire_lease()` — acquires lease before execute/resume; raises DagError if denied
+- [x] `_release_lease()` — releases lease after execute/resume; handles KeyError gracefully
+- [x] `DagExecutor.execute()` — wraps execution in try/acquire/finally/release
+- [x] `DagExecutor.resume()` — acquires lease after resume plan validation; wraps in try/finally/release
+- [x] Lease events persisted: `workflow.lease_acquired`, `workflow.lease_released`
+
+### Worker Identity Plumbing
+
+- [x] `AgentApp.run()` — new optional `worker` parameter; forwarded to WorkflowExecutor
+- [x] `AgentApp._run_workflow()` — new optional `worker` parameter; forwarded to WorkflowExecutor
+- [x] `AgentApp.resume_workflow_run()` — new optional `worker` parameter; forwarded to AppRunner
+- [x] `WorkflowExecutor.run_workflow()` — new optional `worker` parameter; forwarded to `_run_dag()`
+- [x] `WorkflowExecutor._run_dag()` — new optional `worker` parameter; passed to DagExecutor
+- [x] `WorkflowExecutor.resume_workflow_run()` — new optional `worker` parameter; passed to DagExecutor
+- [x] `AppRunner.resume_workflow_run()` — new optional `worker` parameter; forwarded to WorkflowExecutor
+
+### Idempotency
+
+- [x] InMemory store: put/get/overwrite idempotency records
+- [x] SQLite store: put/get/persist across instances
+- [x] Duplicate key behavior is deterministic (overwrite)
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 15 section
+- [x] README.md limitations updated with Phase 15 notes
+- [x] README.md roadmap updated (Phase 15 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 15 section added
+
+### Known Limitations (v0.10.0 + Phase 15)
+
+- Lease is best-effort coordination — does not provide exactly-once guarantee
+- No Celery / Temporal / distributed worker backend
+- No automatic recovery daemon
+- No node-level distributed scheduling
+- No cross-process streaming fanout
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- Lease TTL is in-memory checked; no background renewal daemon
+- Idempotency records stored but not enforced at API level (Phase 15.1+)
+
+## Phase 15.1: API-level Idempotency Enforcement
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_dag_run_state.py` — 157 passed, 0 failed (123 Phase 14.0+14.1+15 + 34 Phase 15.1)
+- [x] `python -m pytest tests/unit/test_dag.py` — 294 passed, 0 failed
+- [x] Full test suite: 944 passed, 5 skipped, 0 failed (+32 new Phase 15.1 tests)
+- [x] No regressions in existing passing tests
+
+### Request Fingerprinting
+
+- [x] `compute_request_fingerprint()` — SHA-256 of deterministic JSON (sorted keys, no whitespace, `default=str`)
+- [x] Transient field exclusion — `idempotency_key`, `worker`, `trace_id`, `request_id`, `correlation_id` excluded from fingerprint
+- [x] `build_execute_payload()` — minimal payload with semantic fields only (workflow_name, agent_name, input, session_id, tenant_id, user_id, run_id, permissions)
+- [x] `build_resume_payload()` — minimal payload with semantic fields only (run_id, input, tenant_id, user_id, approval_id, permissions)
+- [x] Same payload produces same fingerprint regardless of dict insertion order
+- [x] Different input produces different fingerprint
+- [x] Nested dicts recursively filtered for transient fields
+
+### Scope Isolation
+
+- [x] `compute_scope(tenant_id, operation)` — produces `"{tenant_id}:{operation}"` namespace
+- [x] Different tenants have different scopes (no cross-tenant key collision)
+- [x] Same tenant, different operations have different scopes
+- [x] Scope used as composite key component in both InMemory and SQLite stores
+
+### Error Types
+
+- [x] `IdempotencyError` — base error with idempotency_key, scope, operation, existing_run_id, to_dict()
+- [x] `DuplicateIdempotencyKeyError` — same key + same fingerprint (true duplicate request)
+- [x] `IdempotencyKeyMismatchError` — same key + different fingerprint (replay attack / client error)
+
+### InMemory Atomic Reservation
+
+- [x] Composite key `"{scope}:{record.key}"` for proper scope isolation
+- [x] Key does not exist → create record, return it
+- [x] Key exists + same fingerprint → raise `DuplicateIdempotencyKeyError`
+- [x] Key exists + different fingerprint → raise `IdempotencyKeyMismatchError`
+- [x] Error fields populated correctly (key, scope, operation, existing_run_id)
+
+### SQLite Atomic Reservation
+
+- [x] Schema: `PRIMARY KEY (scope, key)` with UNIQUE constraint
+- [x] Explicit `BEGIN`/`COMMIT`/`ROLLBACK` transaction for atomicity
+- [x] `IntegrityError` caught to determine conflict type (duplicate vs mismatch)
+- [x] Cross-instance visibility — duplicate rejected by different SQLite store instances
+- [x] Scope isolation verified across instances
+- [x] Schema migration: `_add_idempotency_columns()` handles old databases without scope column
+- [x] Old schema backward compatible: `_row_to_idempotency()` uses `setdefault` for missing columns
+
+### DagExecutor Integration
+
+- [x] `_enforce_idempotency()` called before lease acquire in `execute()`
+- [x] `_enforce_idempotency()` called before lease acquire in `resume()`
+- [x] Worker identity cached (`_cached_worker`) for consistent fingerprinting
+- [x] Current input cached (`_current_input`) for fingerprinting (RunContext has no input field)
+- [x] Duplicate key → DagError wrapping `DuplicateIdempotencyKeyError`
+- [x] Key mismatch → DagError wrapping `IdempotencyKeyMismatchError`
+- [x] No key → no enforcement (old behavior preserved)
+- [x] No state_store → no enforcement (old behavior preserved)
+
+### API Plumbing
+
+- [x] `AgentApp.run()` — optional `idempotency_key` parameter
+- [x] `AgentApp.resume_workflow_run()` — optional `idempotency_key` parameter
+- [x] `AppRunner.run()` — optional `idempotency_key` parameter
+- [x] `AppRunner.resume_workflow_run()` — optional `idempotency_key` parameter
+- [x] `WorkflowExecutor.run_workflow()` — optional `idempotency_key` parameter
+- [x] `WorkflowExecutor.resume_workflow_run()` — optional `idempotency_key` parameter
+- [x] `DagExecutor.__init__()` — optional `idempotency_key` parameter
+
+### FastAPI Integration
+
+- [x] `Idempotency-Key` HTTP header extraction with priority over body
+- [x] `RunRequest.idempotency_key` field in JSON body
+- [x] `/runs` endpoint supports idempotency enforcement
+- [x] `/runs/{run_id}/resume` endpoint supports idempotency enforcement
+- [x] `DuplicateIdempotencyKeyError` → HTTP 409 Conflict
+- [x] `IdempotencyKeyMismatchError` → HTTP 409 Conflict
+- [x] `_is_idempotency_error()` helper identifies idempotency errors in result.error
+- [x] `_extract_idempotency_error()` helper handles DagError wrapping and direct IdempotencyError
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 15.1 section
+- [x] README.md idempotency section added
+- [x] README.md limitations updated with idempotency notes
+- [x] `docs/release_checklist_v0.10.md` Phase 15.1 section added
+
+### Known Limitations (v0.10.0 + Phase 15.1)
+
+- Best-effort API-level duplicate prevention — NOT exactly-once execution
+- Without `idempotency_key`: old behavior unchanged (no enforcement)
+- With `idempotency_key`: single-use enforcement before side-effect-producing operations
+- No Celery / Temporal / distributed worker backend
+- No automatic recovery daemon
+- No node-level distributed scheduling
+- No cross-process streaming fanout
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- Lease TTL is in-memory checked; no background renewal daemon
+- Scope defaults to `{tenant_id}:{operation}`; cannot be customized per-request
+- Fingerprint is best-effort; semantically identical payloads with different serialization will produce different fingerprints
+
+## Phase 15.2: Background Lease Renewal / Heartbeat
+
+### Implementation
+
+- [x] `LeaseRenewer` class in `agent_app/runtime/lease_renewer.py`
+- [x] `LeaseLostError` exception class with `to_dict()` method
+- [x] `LeaseRenewer.start()` — creates asyncio background task
+- [x] `LeaseRenewer.stop()` — idempotent, waits for task completion
+- [x] `LeaseRenewer.__aenter__/__aexit__` — async context manager support
+- [x] `_renew_loop()` — background loop with interval sleep, run status check, renewal attempt
+- [x] `lease_lost` flag set on renewal failure
+- [x] `_last_error` captures the exception that caused lease loss
+- [x] Auto-stop on terminal run states (completed/failed/partial)
+
+### Store API
+
+- [x] `renew_run_lease()` added to `WorkflowStateStore` protocol
+- [x] `InMemoryWorkflowStateStore.renew_run_lease()` — validates owner, release, expiration
+- [x] `SQLiteWorkflowStateStore.renew_run_lease()` — same validation with SQLite persistence
+- [x] Expired lease detection: `now >= expires_at` raises KeyError
+- [x] Released lease detection: `released_at is not None` raises KeyError
+- [x] Non-owner renewal rejection
+
+### DagExecutor Integration
+
+- [x] `DagExecutor.__init__()` — new optional `lease_renewal_config` parameter
+- [x] `_make_renewer()` — creates LeaseRenewer or returns None
+- [x] `execute()` — starts renewer before DAG, stops in finally, deferred LeaseLostError
+- [x] `resume()` — same pattern for resume path
+- [x] `_get_worker_sync()` — synchronous worker access for error reporting
+- [x] Idempotency ordering preserved (enforce → acquire → renewer start → execute → renewer stop → release)
+
+### Config
+
+- [x] `LeaseRenewalConfig` Pydantic model in `agent_app/config/schema.py`
+- [x] `RuntimeConfig.lease_renewal_config` field
+- [x] `_normalize_lease_renewal` validator for nested YAML support
+- [x] Config loader passes `lease_renewal_config` to AgentApp
+
+### Parameter Plumbing
+
+- [x] `AgentApp.__init__()` → `_ensure_runner()` → AppRunner
+- [x] `AppRunner.__init__()` → WorkflowExecutor
+- [x] `WorkflowExecutor.__init__()` → DagExecutor
+- [x] `WorkflowExecutor._run_dag()` passes config to DagExecutor
+- [x] `WorkflowExecutor.resume_workflow_run()` passes config to DagExecutor
+
+### Tests (28 new tests)
+
+- [x] `TestLeaseRenewer` (6): start/stop, context manager, lease_lost on failure, no pending tasks, skip completed runs
+- [x] `TestInMemoryLeaseRenewal` (6): renew after acquire, non-owner fails, nonexistent run, expired fails, extends TTL, after release fails
+- [x] `TestSQLiteLeaseRenewal` (5): renew succeeds, non-owner fails, persists across instances, expired fails, after release fails
+- [x] `TestDagExecutorLeaseRenewal` (5): no renew when disabled, renewer created when enabled, no renew without store, lease_lost error, idempotency ordering
+- [x] `TestLeaseRenewalConfig` (5): defaults, custom values, invalid interval, invalid TTL, backward compat
+
+### Acceptance Criteria
+
+- [x] LeaseRenewer starts/stops cleanly
+- [x] LeaseRenewer sets lease_lost=True on renewal failure
+- [x] Expired leases cannot be renewed
+- [x] Released leases cannot be renewed
+- [x] Non-owner renewal rejected
+- [x] DagExecutor raises LeaseLostError when renewer loses lease
+- [x] renew_enabled=False disables auto-renewal
+- [x] Default interval = ttl_seconds / 3
+- [x] No Celery/Temporal/distributed daemon
+- [x] No exactly-once claims
+
+### Known Limitations (Phase 15.2)
+
+- Best-effort in-process renewal — NOT exactly-once
+- Only works while process is alive
+- No distributed worker backend
+- Renewal failure → lease_lost → stable error requiring manual resume
+
+## Phase 16.0: DAG Persistence Snapshots and Enhanced Resume
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_dag_snapshot.py` — 43 passed, 0 failed (Phase 16.0 models/store/config)
+- [x] `python -m pytest tests/unit/test_dag_executor_snapshot.py` — 19 passed, 0 failed (Phase 16.0 DagExecutor integration)
+- [x] Full test suite: 1034 passed, 5 skipped, 0 failed (+62 new Phase 16.0 tests)
+- [x] No regressions in existing passing tests
+
+### Snapshot Data Models
+
+- [x] `DagSnapshotStatus` — StrEnum: RUNNING, COMPLETED, FAILED, PARTIAL, INTERRUPTED
+- [x] `DagNodeSnapshot` — node_id, status, attempts, output, error, started_at, completed_at
+- [x] `DagRunSnapshot` — snapshot_id, run_id, workflow_name, status, schema_version, completed/failed/current/pending_node_ids, nodes, execution_context, pending_approvals, compensation_state, created_at, updated_at
+- [x] `to_json()` / `from_json()` — timezone-aware ISO datetime serialization; schema_version preserved
+- [x] `snapshot_status_is_resumable()` — running/partial/failed/interrupted = True; completed = False
+
+### Snapshot Error Types
+
+- [x] `SnapshotWriteError` — run_id, message, to_dict()
+- [x] `SnapshotCorruptionError` — run_id, message, to_dict()
+- [x] `SnapshotUnsupportedVersionError` — run_id, version, to_dict()
+- [x] All errors have stable `type` field for API error mapping
+
+### Store Snapshot Methods
+
+- [x] `save_run_snapshot(snapshot)` — persist or overwrite by snapshot_id
+- [x] `get_latest_run_snapshot(run_id)` — most recent by updated_at
+- [x] `list_run_snapshots(run_id)` — ordered by updated_at ascending
+- [x] `delete_run_snapshots(run_id)` — remove all snapshots for a run
+- [x] InMemory: `_snapshots: dict[str, list[DagRunSnapshot]]`
+- [x] SQLite: `dag_run_snapshots` table with `snapshot_json` TEXT column
+- [x] SQLite index: `idx_dag_run_snapshots_run_updated` on (run_id, updated_at)
+- [x] Snapshot corruption: invalid JSON → `SnapshotCorruptionError`
+- [x] Unsupported version: schema_version != 1 → `SnapshotUnsupportedVersionError`
+
+### DagSnapshotConfig
+
+- [x] `enabled` (default True) — master switch for snapshot persistence
+- [x] `store` (default "memory") — "memory" or "sqlite"
+- [x] `path` (default None) — SQLite db path (required when store="sqlite")
+- [x] `save_on_node_start` (default True) — snapshot when node begins
+- [x] `save_on_node_complete` (default True) — snapshot when node completes
+- [x] `save_on_interrupt` (default True) — snapshot on interrupt (e.g., approval wait)
+- [x] `save_on_failure` (default True) — snapshot on node/workflow failure
+- [x] Pydantic validation: `store` must be "memory" or "sqlite"
+
+### DagExecutor Snapshot Integration
+
+- [x] `_is_snapshot_enabled()` — checks state_store, run_id, snapshot_config.enabled
+- [x] `_build_snapshot()` — constructs DagRunSnapshot from execution state
+- [x] `_save_snapshot()` — async save with SnapshotWriteError wrapping
+- [x] `_maybe_save_snapshot()` — best-effort save (logs warning on failure)
+- [x] `execute()` — saves initial "running" snapshot after lease acquire
+- [x] `execute()` — saves "completed" snapshot on successful finish
+- [x] `execute()` — saves "failed" snapshot in finally block when exception occurs
+- [x] `_execute_sequential()` — calls `_maybe_save_snapshot()` after each node and on failure
+- [x] `_execute_parallel()` — calls `_maybe_save_snapshot()` after each node batch
+- [x] Snapshot write failure → stable `SnapshotWriteError` for initial/final, warning for intermediate
+
+### DagExecutor Resume with Snapshots
+
+- [x] `resume()` — reads `get_latest_run_snapshot()` when snapshot enabled
+- [x] Schema version validation — only v1 supported; unsupported → `SnapshotUnsupportedVersionError`
+- [x] Run ID validation — mismatch → `SnapshotRunIdMismatchError`
+- [x] Completed snapshot → idempotent return `([], "completed", None, None)`
+- [x] Non-resumable snapshot (running/partial/failed/interrupted) → falls through to existing resume logic
+- [x] Snapshot errors caught by `except Exception` → fall through to existing resume logic (graceful degradation)
+- [x] Snapshot data used to rebuild execution_context for resume
+
+### Config Support
+
+- [x] `RuntimeConfig.dag_snapshot_config` — DagSnapshotConfig field
+- [x] `_normalize_dag_snapshot` validator — nested YAML `dag_snapshot: {...}` → `dag_snapshot_config`
+- [x] Config loader passes `dag_snapshot_config` to AgentApp
+- [x] AgentApp → AppRunner → WorkflowExecutor → DagExecutor plumbing
+- [x] Backward compatible: no `dag_snapshot` in config → `dag_snapshot_config=None` → snapshots enabled by default
+
+### Acceptance Criteria
+
+- [x] Snapshots written at key state transitions (running, node start/complete/fail, interrupt, completion)
+- [x] Snapshots survive process exit and lease expiry
+- [x] Resume reads latest snapshot to skip completed nodes
+- [x] Completed snapshot returns idempotent result (no re-execution)
+- [x] Snapshot write failure raises stable error (not silently swallowed)
+- [x] Corruption/version errors caught and fall through gracefully
+- [x] 1034 tests passing, 0 failures
+- [x] No Celery / Temporal / Redis / etcd / automatic recovery daemon
+- [x] Snapshot is recovery aid, NOT transaction log, NOT exactly-once guarantee
+
+## Phase 16.1: Compensation State Persistence
+
+### Tests
+
+- [x] `python -m pytest tests/unit/test_compensation_state.py` — 40 passed, 0 failed
+- [x] `python -m pytest tests/unit/test_compensation_store.py` — 25 passed, 0 failed
+- [x] `python -m pytest tests/unit/test_dag_executor_compensation_persistence.py` — 32 passed, 0 failed
+- [x] Full test suite: 1131 passed, 5 skipped, 0 failed (+97 new Phase 16.1 tests)
+- [x] No regressions in existing passing tests
+
+### Compensation State Models
+
+- [x] `CompensationActionStatus` — StrEnum: PENDING, RUNNING, COMPLETED, FAILED, SKIPPED
+- [x] `CompensationRunStatus` — StrEnum: NOT_REQUIRED, PENDING, RUNNING, COMPLETED, PARTIAL_FAILED, FAILED
+- [x] `CompensationActionState` — action_id (auto-generated), run_id, workflow_name, node_id, compensating_for_node_id, status, attempts, max_attempts, input, output, error, idempotency_key, started_at, completed_at
+- [x] `CompensationExecutionState` — compensation_id (auto-generated), run_id, workflow_name, status, schema_version, actions dict, action_order list, timestamps
+- [x] Auto-generated IDs via `default_factory` (Pydantic v2 compatible)
+- [x] `model_validator(mode="after")` syncs action_order with actions keys
+- [x] State transition methods: mark_running(), mark_completed(), mark_partial_failed(), mark_failed()
+- [x] Action transition methods: mark_running(), mark_completed(), mark_failed(), mark_skipped(), can_retry()
+- [x] Query methods: get_action(), get_pending_actions(), get_failed_retryable_actions(), get_completed_actions()
+- [x] Serialization: `serialize_compensation_state()` / `deserialize_compensation_state()` with json.dumps
+
+### Compensation State Store
+
+- [x] `CompensationStateStore` protocol — async CRUD interface
+- [x] `save_compensation_state()` — create or update
+- [x] `get_compensation_state(run_id)` — retrieve by run_id
+- [x] `update_compensation_action(run_id, action)` — update single action, recompute status
+- [x] `list_compensation_states(workflow_name=None)` — list with optional filter
+- [x] `delete_compensation_state(run_id)` — remove all state for a run
+- [x] `create_compensation_state_store(store_type, db_path)` — factory function
+- [x] InMemory: dict keyed by run_id; supports all CRUD operations
+- [x] SQLite: `dag_compensation_states` table with compensation_id PK, run_id UNIQUE
+- [x] SQLite indexes: idx_dag_compensation_states_run_id, idx_dag_compensation_states_workflow_status
+- [x] Corrupted JSON handling: `list_compensation_states()` skips corrupted entries
+
+### DagExecutor Compensation Persistence
+
+- [x] `_init_compensation_store()` — lazy init from config (memory/sqlite)
+- [x] `_is_compensation_persistence_enabled()` — checks config + store state
+- [x] `_get_max_compensation_attempts()` — reads max_attempts from config
+- [x] `_is_resume_incomplete_compensation()` — reads resume_incomplete from config
+- [x] `_create_compensation_state()` — builds state from compensation candidates with correct node references
+- [x] `_save_compensation_state()` — persists with SnapshotWriteError on failure
+- [x] `_update_compensation_action()` — updates single action in store (best-effort, catches exceptions)
+- [x] `_get_compensation_state()` — retrieves persisted state for current run
+- [x] `_resume_compensation()` — resumes from persisted state: skips completed, retries failed within max_attempts, executes pending
+- [x] execute() integration — calls `_init_compensation_store()` after renewer start; creates state before compensation loop
+- [x] resume() integration — loads persisted state; calls `_resume_compensation()` when incomplete compensation found
+
+### Config Support
+
+- [x] `DagCompensationConfig` — Pydantic model (enabled=True, store="memory", path=None, max_attempts=1, resume_incomplete=True)
+- [x] Store validator rejects unknown types (ValueError → Pydantic ValidationError)
+- [x] `_normalize_dag_compensation` — maps `dag_compensation` YAML key to `dag_compensation_config`
+- [x] Config loader passes `dag_compensation_config` to AgentApp
+- [x] AgentApp → AppRunner → WorkflowExecutor → DagExecutor plumbing
+
+### Documentation
+
+- [x] CHANGELOG.md updated with Phase 16.1 section
+- [x] README.md limitations updated with Phase 16.1 notes
+- [x] README.md roadmap updated (Phase 16.1 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 16.1 section added
+
+### Known Limitations (v0.10.0 + Phase 16.1)
+
+- Compensation state is a recovery aid — does NOT guarantee exactly-once execution
+- NOT a distributed transaction log (no Celery/Temporal/Redis/etcd)
+- No automatic recovery daemon — resume is explicit via `app.resume_workflow_run()`
+- External side effect idempotency remains the business tool's responsibility
+- SQLite store uses stdlib sqlite3 — no connection pooling or WAL mode
+- Compensation state is independent from snapshots and lease state (each has its own persistence layer)
+- Does NOT replace lease renewal, snapshot, or business-level idempotency

@@ -1,0 +1,26 @@
+name: customer_support_conditional_dag_eval
+description: Conditional DAG workflow tests (Phase 13.3)
+
+defaults:
+  workflow: refund_conditional_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - refund:create
+    - customer:read
+
+cases:
+  - id: condition_true_executes_refund
+    input: "query order 123 for customer cust_001"
+    expect:
+      status: interrupted
+      # query_order completes (status=paid), condition is true,
+      # so request_refund executes and requires approval → interrupted
+
+  - id: condition_false_skips_refund
+    input: "query order 456 for customer cust_001"
+    expect:
+      status: completed
+      # query_order returns status=shipped, condition is false,
+      # so request_refund is skipped → DAG completes

@@ -1,0 +1,19 @@
+name: customer_support_parallel_dag_eval
+description: Parallel DAG workflow regression tests (Phase 13.2)
+
+defaults:
+  workflow: refund_parallel_dag
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - refund:create
+    - customer:read
+
+cases:
+  - id: parallel_dag_executes
+    input: "query order 123 for customer cust_001"
+    expect:
+      status: interrupted
+      # request_refund node requires approval, so DAG is interrupted
+      # query_order and check_customer both complete (parallel independent nodes)

@@ -1,0 +1,54 @@
+app:
+  name: openai-customer-support
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  backend: openai
+  openai:
+    hitl_mode: wrapper
+  session:
+    type: memory
+
+governance:
+  approvals:
+    type: memory
+  audit:
+    type: memory
+
+agents:
+  triage:
+    description: Entry point — routes users to the right specialist
+    model: gpt-4o
+    instructions: You are a customer support triage agent. Route users to the appropriate specialist based on their request.
+
+  refund:
+    description: Handles refund requests
+    model: gpt-4o
+    instructions: You are a refund specialist. Help customers with refund requests and order issues.
+    tools:
+      - order.query
+      - refund.request
+
+  billing:
+    description: Handles billing and invoice queries
+    model: gpt-4o
+    instructions: You are a billing specialist. Help customers with billing and invoice questions.
+    tools:
+      - order.query
+
+  technical_support:
+    description: Handles technical issues and errors
+    model: gpt-4o
+    instructions: You are a technical support specialist. Help customers with technical problems and errors.
+
+workflows:
+  customer_support:
+    type: handoff
+    entry: triage
+    agents:
+      - refund
+      - billing
+      - technical_support

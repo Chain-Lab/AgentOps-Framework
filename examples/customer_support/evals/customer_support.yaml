@@ -1,0 +1,56 @@
+name: customer_support_eval
+description: Customer support agent regression tests (multi-agent handoff)
+
+defaults:
+  workflow: customer_support
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - refund:create
+
+cases:
+  - id: order_query_success
+    input: "query order 123"
+    expect:
+      status: completed
+      output_contains:
+        - "order"
+        - "123"
+
+  - id: refund_requires_approval
+    input: "refund order 123"
+    expect:
+      status: interrupted
+      handoffs:
+        - from_agent: triage
+          to_agent: refund
+      routing_decisions:
+        - refund_intent
+      approvals_required:
+        - refund.request
+      trace_events:
+        - run.started
+        - run.interrupted
+
+  - id: billing_query_success
+    input: "invoice order 123"
+    expect:
+      status: completed
+      handoffs:
+        - from_agent: triage
+          to_agent: billing
+      routing_decisions:
+        - billing_intent
+      output_contains:
+        - "order"
+
+  - id: technical_support_routed
+    input: "system error bug"
+    expect:
+      status: completed
+      handoffs:
+        - from_agent: triage
+          to_agent: technical_support
+      routing_decisions:
+        - technical_intent

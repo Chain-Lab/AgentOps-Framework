@@ -1,0 +1,370 @@
+app:
+  name: customer-support
+  environment: dev
+
+models:
+  default: gpt-4o
+
+runtime:
+  session:
+    type: sqlite
+    path: .agent_app/sessions.db
+
+governance:
+  approvals:
+    type: memory
+  audit:
+    type: memory
+
+agents:
+  triage:
+    description: Entry point — routes users to the right specialist
+    model: gpt-4o
+    instructions: ./prompts/triage.md
+
+  refund:
+    description: Handles refund requests
+    model: gpt-4o
+    instructions: ./prompts/refund.md
+    tools:
+      - order.query
+      - refund.request
+
+  billing:
+    description: Handles billing and invoice queries
+    model: gpt-4o
+    instructions: ./prompts/billing.md
+    tools:
+      - order.query
+
+  technical_support:
+    description: Handles technical issues and errors
+    model: gpt-4o
+    instructions: ./prompts/technical_support.md
+
+workflows:
+  customer_support:
+    type: handoff
+    entry: triage
+    agents:
+      - refund
+      - billing
+      - technical_support
+    routing:
+      rules:
+        - name: refund_intent
+          target: refund
+          match_type: keyword
+          keywords:
+            - refund
+            - 退款
+            - 退货
+            - 退钱
+          priority: 10
+          reason: matched refund intent
+        - name: billing_intent
+          target: billing
+          match_type: keyword
+          keywords:
+            - invoice
+            - 发票
+            - billing
+            - 账单
+            - 付款
+          priority: 20
+          reason: matched billing intent
+        - name: technical_intent
+          target: technical_support
+          match_type: keyword
+          keywords:
+            - error
+            - 报错
+            - 技术
+            - bug
+            - 故障
+            - 问题
+          priority: 30
+          reason: matched technical issue
+        - name: default_triage
+          target: triage
+          match_type: default
+          priority: 999
+          reason: fallback to triage
+
+  refund_dag:
+    type: dag
+    nodes:
+      - id: query_order
+        type: tool
+        ref: order.query
+      - id: request_refund
+        type: tool
+        ref: refund.request
+        depends_on:
+          - query_order
+
+  refund_parallel_dag:
+    type: dag
+    execution_mode: parallel
+    max_concurrency: 2
+    nodes:
+      - id: query_order
+        type: tool
+        ref: order.query
+      - id: check_customer
+        type: tool
+        ref: customer.lookup
+      - id: request_refund
+        type: tool
+        ref: refund.request
+        depends_on:
+          - query_order
+          - check_customer
+
+  refund_conditional_dag:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: query_order
+        type: tool
+        ref: order.query
+      - id: check_customer
+        type: tool
+        ref: customer.lookup
+      - id: request_refund
+        type: tool
+        ref: refund.request
+        depends_on:
+          - query_order
+          - check_customer
+        condition:
+          expr: "nodes.query_order.output.status == 'paid'"
+
+  refund_function_dag:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - query_order
+        condition:
+          expr: "nodes.query_order.output.status == 'paid'"
+        inputs:
+          order_total: nodes.query_order.output.amount
+          used_coupon: nodes.query_order.output.used_coupon
+
+  refund_subworkflow:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - query_order
+        condition:
+          expr: "nodes.query_order.output.status == 'paid'"
+        inputs:
+          order_total: nodes.query_order.output.amount
+          used_coupon: nodes.query_order.output.used_coupon
+
+  refund_with_subworkflow:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: refund_flow
+        type: subworkflow
+        workflow: refund_subworkflow
+        inputs:
+          message: input.message
+
+  refund_if_else_dag:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: route_refund
+        type: if_else
+        depends_on:
+          - query_order
+        inputs:
+          condition: "nodes.query_order.output.status == 'paid'"
+        then:
+          - calculate_refund
+        else_branch:
+          - send_non_refund_notice
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - route_refund
+        inputs:
+          order_total: nodes.query_order.output.amount
+          used_coupon: nodes.query_order.output.used_coupon
+
+      - id: send_non_refund_notice
+        type: tool
+        ref: notification.send
+        depends_on:
+          - route_refund
+
+  refund_switch_dag:
+    type: dag
+    execution_mode: sequential
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: route_by_status
+        type: switch
+        depends_on:
+          - query_order
+        switch_expr: "nodes.query_order.output.status"
+        cases:
+          - value: "paid"
+            node_ids:
+              - calculate_refund
+          - value: "shipped"
+            node_ids:
+              - send_return_instructions
+        default:
+          - send_unsupported_notice
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - route_by_status
+        inputs:
+          order_total: nodes.query_order.output.amount
+
+      - id: send_return_instructions
+        type: tool
+        ref: notification.send
+        depends_on:
+          - route_by_status
+
+      - id: send_unsupported_notice
+        type: tool
+        ref: notification.send
+        depends_on:
+          - route_by_status
+
+  refund_deadline_dag:
+    type: dag
+    execution_mode: sequential
+    deadline_seconds: 5.0
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - query_order
+        inputs:
+          order_total: nodes.query_order.output.amount
+
+  # Phase 13.9: Compensation DAG workflow
+  refund_compensation_dag:
+    type: dag
+    execution_mode: sequential
+    compensation:
+      enabled: true
+      continue_on_failure: true
+      timeout_seconds: 5.0
+    nodes:
+      - id: extract_order
+        type: function
+        function: order.extract_order_id
+        inputs:
+          text: input.message
+        compensate:
+          function: order.revert_extraction
+
+      - id: query_order
+        type: tool
+        ref: order.query
+        depends_on:
+          - extract_order
+        inputs:
+          order_id: nodes.extract_order.output.order_id
+
+      - id: calculate_refund
+        type: function
+        function: refund.calculate_amount
+        depends_on:
+          - query_order
+        condition:
+          expr: "nodes.query_order.output.status == 'paid'"
+        inputs:
+          order_total: nodes.query_order.output.amount
+        compensate:
+          function: refund.revert_calculation
