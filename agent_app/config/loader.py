@@ -311,7 +311,7 @@ def build_app(
             path = obs_cfg.tracing.path or ".agent_app/traces.jsonl"
             trace_collector = JSONLTraceCollector(path=path)
 
-    return AgentApp(
+    app = AgentApp(
         registry=_bundle(agent_registry, tool_registry, workflow_registry),
         session_store=session_store,
         approval_store=approval_store,
@@ -326,6 +326,9 @@ def build_app(
         dag_lease_backend=dag_lease_backend,
         audit_logger=audit_logger,
     )
+    # Phase 17: Store recovery config for auto-recovery policy
+    app._recovery_config = getattr(runtime_cfg, "recovery_config", None)
+    return app
 
 
 def _create_backend(

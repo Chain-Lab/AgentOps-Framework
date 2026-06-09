@@ -82,6 +82,8 @@ class AgentApp:
         self._dag_lease_backend = dag_lease_backend
         # Phase 16.5: Audit logger for recovery events
         self._audit_logger = audit_logger
+        # Phase 17: Recovery config for auto-recovery policy
+        self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
         self._native_agents: dict[str, Any] = {}
         self.trace_collector = trace_collector
@@ -367,6 +369,374 @@ class AgentApp:
             recovered_by=recovered_by,
             resume_policy=resume_policy,
         )
+
+    def create_recovery_daemon(
+        self,
+        policy: Any = None,
+    ) -> Any:
+        """Create an automatic recovery daemon.
+
+        The daemon is **not** started automatically.  Call
+        ``await daemon.run_once()`` or ``await daemon.run_forever()``
+        explicitly.
+
+        Args:
+            policy: Optional AutoRecoveryPolicy.  If not provided, the
+                policy from config (if any) is used, or the default
+                conservative policy (disabled, dry-run).
+
+        Returns:
+            RecoveryDaemon instance.
+
+        Raises:
+            RuntimeError: If required dependencies are not configured.
+        """
+        if self._dag_state_store is None:
+            raise RuntimeError(
+                "Recovery daemon requires a workflow state store. "
+                "Configure workflow_state in your agentapp.yaml."
+            )
+        if getattr(self, "_dag_lease_backend", None) is None:
+            raise RuntimeError(
+                "Recovery daemon requires a lease backend. "
+                "Configure dag_lease in your agentapp.yaml."
+            )
+        from agent_app.runtime.recovery_daemon import RecoveryDaemon
+        from agent_app.runtime.recovery_models import AutoRecoveryPolicy
+        from agent_app.runtime.recovery_scanner import RecoveryScanner
+        from agent_app.runtime.recovery_service import RecoveryService
+
+        if policy is None:
+            # Try to load from config
+            cfg = getattr(self, "_dag_lease_config", None)
+            recovery_cfg = getattr(self, "_recovery_config", None)
+            if recovery_cfg and "auto" in recovery_cfg:
+                policy = AutoRecoveryPolicy(**recovery_cfg["auto"])
+            else:
+                policy = AutoRecoveryPolicy()  # default: disabled, dry-run
+
+        scanner = RecoveryScanner(
+            self._dag_state_store,
+            getattr(self, "_dag_lease_backend", None),
+        )
+        service = RecoveryService(
+            app=self,
+            state_store=self._dag_state_store,
+            lease_backend=self._dag_lease_backend,
+            audit_logger=getattr(self, "_audit_logger", None),
+        )
+        return RecoveryDaemon(
+            scanner=scanner,
+            recovery_service=service,
+            policy=policy,
+            audit_logger=getattr(self, "_audit_logger", None),
+        )
+
+    # ------------------------------------------------------------------
+    # Recovery observability & admin APIs (Phase 18)
+    # ------------------------------------------------------------------
+
+    def get_recovery_system_status(self) -> Any:
+        """Return a snapshot of the recovery subsystem's configuration.
+
+        Phase 18: Read-only status for admin dashboards and CLI.
+
+        Returns:
+            RecoverySystemStatus describing availability and configuration.
+        """
+        from agent_app.runtime.recovery_models import (
+            AutoRecoveryPolicy,
+            RecoveryDaemonTickResult,
+            RecoverySystemStatus,
+        )
+
+        has_store = self._dag_state_store is not None
+        has_lease = getattr(self, "_dag_lease_backend", None) is not None
+
+        # Load policy from config or use default
+        recovery_cfg = getattr(self, "_recovery_config", None)
+        policy: AutoRecoveryPolicy | None = None
+        if recovery_cfg and "auto" in recovery_cfg:
+            try:
+                policy = AutoRecoveryPolicy(**recovery_cfg["auto"])
+            except Exception:
+                policy = AutoRecoveryPolicy()
+        else:
+            policy = AutoRecoveryPolicy()
+
+        return RecoverySystemStatus(
+            enabled=policy.enabled,
+            dry_run=policy.dry_run,
+            daemon_configured=has_store and has_lease,
+            scanner_available=has_store,
+            recovery_service_available=has_store and has_lease,
+            policy=policy,
+        )
+
+    async def run_recovery_scan_once(
+        self,
+        policy: Any = None,
+    ) -> Any:
+        """Execute a single recovery scan cycle (dry-run by default).
+
+        Phase 18: Public API for triggering scan-once without managing
+        a RecoveryDaemon directly.  Always dry-run unless overridden
+        via the policy argument.
+
+        Args:
+            policy: Optional AutoRecoveryPolicy.  If not provided,
+                uses the config policy or a default dry-run policy.
+
+        Returns:
+            RecoveryDaemonTickResult with the scan outcome.
+
+        Raises:
+            RuntimeError: If required dependencies are not configured.
+        """
+        from agent_app.runtime.recovery_models import AutoRecoveryPolicy
+        from agent_app.runtime.recovery_scanner import RecoveryScanner
+
+        if self._dag_state_store is None:
+            raise RuntimeError(
+                "Recovery scan requires a workflow state store. "
+                "Configure workflow_state in your agentapp.yaml."
+            )
+
+        # Build policy: default to dry-run
+        if policy is None:
+            recovery_cfg = getattr(self, "_recovery_config", None)
+            if recovery_cfg and "auto" in recovery_cfg:
+                try:
+                    policy = AutoRecoveryPolicy(**recovery_cfg["auto"])
+                except Exception:
+                    policy = AutoRecoveryPolicy(dry_run=True)
+            else:
+                policy = AutoRecoveryPolicy(dry_run=True)
+        else:
+            # Ensure dry-run unless explicitly set
+            if not hasattr(policy, "dry_run"):
+                policy = AutoRecoveryPolicy(**policy.model_dump(), dry_run=True)
+
+        scanner = RecoveryScanner(
+            self._dag_state_store,
+            getattr(self, "_dag_lease_backend", None),
+        )
+        from agent_app.runtime.recovery_models import RecoveryDaemonTickResult
+
+        scan_config = self._build_scan_config_from_policy(policy)
+        try:
+            scan_result = await scanner.scan(scan_config)
+        except Exception as exc:
+            return RecoveryDaemonTickResult(
+                scanned_count=0,
+                dry_run=True,
+                failures=[{"error": f"Scan failed: {exc}"}],
+            )
+
+        candidates = scan_result.candidates[: policy.max_candidates_per_scan]
+
+        selected_run_ids: list[str] = []
+        skipped: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            skip_reason = self._should_skip_candidate(candidate, policy)
+            if skip_reason is not None:
+                skipped.append({
+                    "run_id": candidate.run_id,
+                    "reason": skip_reason,
+                    "recommendation": candidate.recommendation.value,
+                })
+            else:
+                selected_run_ids.append(candidate.run_id)
+
+        return RecoveryDaemonTickResult(
+            scanned_count=scan_result.total_scanned,
+            selected_count=len(selected_run_ids),
+            recovered_count=0,  # dry-run: no actual recovery
+            skipped_count=len(skipped),
+            failed_count=len(failures),
+            dry_run=True,
+            selected_run_ids=selected_run_ids,
+            recovered_run_ids=[],
+            skipped=skipped,
+            failures=failures,
+        )
+
+    async def recover_run(
+        self,
+        run_id: str,
+        workflow: str = "",
+        dry_run: bool = True,
+        recovered_by: str = "admin-api",
+    ) -> Any:
+        """Manually trigger recovery for a specific run.
+
+        Phase 18: Thin wrapper around ``recover_workflow_run`` that
+        defaults to dry-run.  Actual recovery requires ``dry_run=False``.
+
+        Args:
+            run_id: The run ID to recover.
+            workflow: Name of the workflow the run belongs to.
+            dry_run: If True (default), only inspect — do not recover.
+            recovered_by: Identity of the operator / caller.
+
+        Returns:
+            ManualRecoveryResult with outcome details.
+
+        Raises:
+            RuntimeError: If required dependencies are not configured.
+        """
+        if dry_run:
+            # Dry-run: just inspect the candidate
+            try:
+                candidate = await self.inspect_recovery_candidate(run_id)
+            except KeyError:
+                from agent_app.runtime.recovery_models import ManualRecoveryResult
+                return ManualRecoveryResult(
+                    run_id=run_id,
+                    attempted=False,
+                    error={"type": "not_found", "message": f"Run '{run_id}' not found."},
+                )
+            from agent_app.runtime.recovery_models import ManualRecoveryResult
+            return ManualRecoveryResult(
+                run_id=run_id,
+                attempted=False,
+                status="dry_run",
+                error={
+                    "type": "dry_run",
+                    "message": "Dry-run: no recovery attempted.",
+                    "candidate": candidate.model_dump(mode="json"),
+                },
+            )
+
+        # Live recovery: delegate to recover_workflow_run
+        return await self.recover_workflow_run(
+            workflow=workflow,
+            run_id=run_id,
+            recovered_by=recovered_by,
+        )
+
+    async def get_recovery_history(
+        self,
+        run_id: str,
+        limit: int = 50,
+    ) -> list[Any]:
+        """Query audit events related to a specific run.
+
+        Phase 18: Provides recovery history for admin dashboards.
+
+        Args:
+            run_id: The run ID to query history for.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of AuditEvent instances, sorted by timestamp.
+            Returns empty list if no audit logger is configured.
+        """
+        audit_logger = getattr(self, "_audit_logger", None)
+        if audit_logger is None:
+            return []
+        try:
+            events = audit_logger.list_events(run_id=run_id)
+            return events[-limit:]
+        except Exception:
+            return []
+
+    def _build_scan_config_from_policy(self, policy: Any) -> Any:
+        """Build a RecoveryScanConfig from an AutoRecoveryPolicy.
+
+        Args:
+            policy: The AutoRecoveryPolicy to convert.
+
+        Returns:
+            RecoveryScanConfig for use with RecoveryScanner.
+        """
+        from agent_app.runtime.recovery_models import RecoveryScanConfig
+
+        include_failed = False
+        include_running = False
+        include_compensating = False
+        include_completed = False
+
+        _STATUS_TO_SCAN_FLAGS: dict[str, tuple[str, ...]] = {
+            "failed": ("include_failed",),
+            "running": ("include_running",),
+            "pending": ("include_running",),
+            "started": ("include_running",),
+            "compensating": ("include_compensating",),
+            "compensation_started": ("include_compensating",),
+            "completed": ("include_completed",),
+        }
+
+        for status in policy.statuses:
+            flags = _STATUS_TO_SCAN_FLAGS.get(status.lower(), ())
+            for flag in flags:
+                if flag == "include_failed":
+                    include_failed = True
+                elif flag == "include_running":
+                    include_running = True
+                elif flag == "include_compensating":
+                    include_compensating = True
+                elif flag == "include_completed":
+                    include_completed = True
+
+        if policy.include_completed:
+            include_completed = True
+
+        return RecoveryScanConfig(
+            stale_after_seconds=int(policy.stale_after_seconds),
+            include_failed=include_failed,
+            include_running=include_running,
+            include_compensating=include_compensating,
+            include_completed=include_completed,
+            limit=policy.max_candidates_per_scan,
+            workflow_name=policy.workflow_name,
+            tenant_id=policy.tenant_id,
+        )
+
+    @staticmethod
+    def _should_skip_candidate(candidate: Any, policy: Any) -> str | None:
+        """Determine if a candidate should be skipped.
+
+        Args:
+            candidate: The RecoveryCandidate to evaluate.
+            policy: The AutoRecoveryPolicy to apply.
+
+        Returns:
+            Skip reason string, or None if the candidate should be selected.
+        """
+        from agent_app.runtime.recovery_models import RecoveryCandidateReason, RecoveryRecommendation
+
+        if candidate.recommendation != RecoveryRecommendation.RESUME:
+            return f"recommendation={candidate.recommendation.value}"
+
+        is_failed = RecoveryCandidateReason.NODE_FAILED in candidate.reasons
+        is_stale_running = (
+            RecoveryCandidateReason.RUN_STALE in candidate.reasons
+            or RecoveryCandidateReason.RUNNING_TOO_LONG in candidate.reasons
+        )
+        is_compensating = (
+            RecoveryCandidateReason.COMPENSATION_INCOMPLETE in candidate.reasons
+        )
+
+        if is_failed and not policy.recover_failed:
+            return "recover_failed disabled"
+        if is_stale_running and not policy.recover_stale_running:
+            return "recover_stale_running disabled"
+        if is_compensating and not policy.recover_compensating:
+            return "recover_compensating disabled"
+
+        if candidate.recommendation == RecoveryRecommendation.WAIT_FOR_ACTIVE_LEASE:
+            return "active lease"
+        if candidate.recommendation == RecoveryRecommendation.DO_NOT_RESUME:
+            return "not resumable"
+
+        if RecoveryCandidateReason.LEASE_MISSING in candidate.reasons:
+            if not (is_failed or is_stale_running or is_compensating):
+                return "lease missing without recoverable condition"
+
+        return None
 
     async def stream(
         self,

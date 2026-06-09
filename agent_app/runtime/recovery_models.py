@@ -160,3 +160,146 @@ class ManualRecoveryResult(BaseModel):
     lease_released: bool = False
     result: Any = None
     error: dict[str, Any] | None = None
+
+
+class RecoveryDaemonTickResult(BaseModel):
+    """Result of a single RecoveryDaemon tick (scan cycle).
+
+    Attributes:
+        scanned_count: Number of runs examined by the scanner.
+        selected_count: Number of candidates selected for recovery.
+        recovered_count: Number of runs successfully recovered.
+        skipped_count: Number of candidates that were skipped.
+        failed_count: Number of recovery attempts that failed.
+        dry_run: Whether this was a dry-run (no actual recovery attempted).
+        selected_run_ids: Run IDs selected for recovery in this tick.
+        recovered_run_ids: Run IDs that were successfully recovered.
+        skipped: List of skip reasons, each with run_id and reason.
+        failures: List of failure details, each with run_id and error.
+    """
+
+    scanned_count: int = 0
+    selected_count: int = 0
+    recovered_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    dry_run: bool = True
+    selected_run_ids: list[str] = Field(default_factory=list)
+    recovered_run_ids: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    failures: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AutoRecoveryPolicy(BaseModel):
+    """Policy for automatic recovery by RecoveryDaemon.
+
+    All defaults are conservative: disabled, dry-run, single-threaded,
+    and no automatic recovery of completed runs.
+
+    Attributes:
+        enabled: Whether automatic recovery is enabled. Defaults to False.
+        interval_seconds: Seconds between daemon scan cycles. Defaults to 30.
+        stale_after_seconds: Seconds before a running run is considered stale.
+        statuses: Run statuses to scan for candidates.
+        workflow_name: Optional filter for a specific workflow name.
+        tenant_id: Optional filter for a specific tenant.
+        include_completed: Whether to include completed runs. Defaults to False.
+        max_candidates_per_scan: Maximum candidates to evaluate per scan.
+        max_recoveries_per_scan: Maximum recoveries per scan cycle.
+        max_concurrent_recoveries: Maximum concurrent recovery operations.
+        dry_run: If True, log what would be recovered but do not act.
+        recover_failed: Auto-recover failed runs that are resumable.
+        recover_stale_running: Auto-recover stale running runs with expired/missing lease.
+        recover_compensating: Auto-recover compensating runs that are resumable.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable automatic recovery daemon",
+    )
+    interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="Seconds between scan cycles",
+    )
+    stale_after_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description="Seconds before a running run is considered stale",
+    )
+    statuses: list[str] = Field(
+        default_factory=lambda: ["running", "failed", "compensating"],
+        description="Run statuses to scan",
+    )
+    workflow_name: str | None = Field(
+        default=None,
+        description="Filter by workflow name",
+    )
+    tenant_id: str | None = Field(
+        default=None,
+        description="Filter by tenant ID",
+    )
+    include_completed: bool = Field(
+        default=False,
+        description="Include completed runs in scan",
+    )
+    max_candidates_per_scan: int = Field(
+        default=50,
+        gt=0,
+        description="Max candidates to evaluate per scan",
+    )
+    max_recoveries_per_scan: int = Field(
+        default=5,
+        gt=0,
+        description="Max recoveries per scan cycle",
+    )
+    max_concurrent_recoveries: int = Field(
+        default=1,
+        gt=0,
+        description="Max concurrent recovery operations",
+    )
+    dry_run: bool = Field(
+        default=True,
+        description="If True, only log what would be recovered",
+    )
+    recover_failed: bool = Field(
+        default=True,
+        description="Auto-recover failed runs",
+    )
+    recover_stale_running: bool = Field(
+        default=True,
+        description="Auto-recover stale running runs with expired/missing lease",
+    )
+    recover_compensating: bool = Field(
+        default=True,
+        description="Auto-recover compensating runs",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 18: Observability models
+# ---------------------------------------------------------------------------
+
+
+class RecoverySystemStatus(BaseModel):
+    """Snapshot of the recovery subsystem's current configuration and health.
+
+    Attributes:
+        enabled: Whether automatic recovery is enabled.
+        dry_run: Whether the daemon is in dry-run mode.
+        daemon_configured: Whether a recovery daemon can be created.
+        scanner_available: Whether the scanner dependencies are available.
+        recovery_service_available: Whether the recovery service deps are available.
+        last_tick_at: When the most recent daemon tick completed.
+        last_tick_result: Result of the most recent daemon tick, if any.
+        policy: The current auto-recovery policy in use.
+    """
+
+    enabled: bool = False
+    dry_run: bool = True
+    daemon_configured: bool = False
+    scanner_available: bool = False
+    recovery_service_available: bool = False
+    last_tick_at: datetime | None = None
+    last_tick_result: RecoveryDaemonTickResult | None = None
+    policy: AutoRecoveryPolicy | None = None

@@ -1030,3 +1030,111 @@
 - Lua scripts use basic ISO timestamp parsing — not full RFC 3339
 - `list_expired_leases` uses SCAN which may miss keys added during iteration (eventual consistency)
 - No Redis cluster / sentinel support — single Redis instance only
+
+## Phase 16.5: Recovery Scanner & Manual Recovery
+
+- [x] `RecoveryScanConfig` model (stale_after_seconds, running_after_seconds, include_* flags, limit, tenant_id, workflow_name)
+- [x] `RecoveryCandidateReason` enum (10 values: RUNNING_TOO_LONG, RUN_STALE, NODE_INTERRUPTED, NODE_FAILED, LEASE_EXPIRED, LEASE_MISSING, COMPENSATION_INCOMPLETE, SNAPSHOT_AVAILABLE, RESUME_PLAN_AVAILABLE, NOT_RESUMABLE)
+- [x] `RecoveryRecommendation` enum (5 values: INSPECT_ONLY, RESUME, WAIT_FOR_ACTIVE_LEASE, MANUAL_REVIEW, DO_NOT_RESUME)
+- [x] `RecoveryCandidate` model (run_id, status, reasons, recommendation, lease info, resumable, plan summaries, error)
+- [x] `RecoveryScanResult` model (scanned_at, total_scanned, candidate_count, candidates, errors)
+- [x] `ManualRecoveryResult` model (run_id, attempted, recovered, status, lease_acquired/released, result, error)
+- [x] `RecoveryScanner` class — `scan()` and `inspect_run()` methods; read-only, never modifies state
+- [x] Scanner candidate eligibility: failed runs (include_failed), stale/long-running runs (include_running), compensating runs (include_compensating), completed runs (include_completed)
+- [x] Scanner lease-aware recommendations: active lease → WAIT_FOR_ACTIVE_LEASE, expired lease → RESUME
+- [x] Scanner resumability: uses `build_recovery_plan()` for failed/interrupted runs; stale running runs with no nodes treated as resumable
+- [x] `RecoveryService` class — `recover_run()` with lease-protected manual recovery flow
+- [x] Recovery flow: inspect → check recommendation → acquire lease → audit.started → resume → audit.completed → release lease
+- [x] Lease release on failure (best-effort, never blocks recovery result)
+- [x] `AgentApp` recovery APIs: `scan_recovery_candidates()`, `inspect_recovery_candidate()`, `recover_workflow_run()`
+- [x] `AgentApp.__init__` extended with `dag_lease_backend` and `audit_logger` parameters
+- [x] `build_app()` creates lease backend from config and passes to AgentApp
+- [x] CLI recovery commands: `agentapp recovery scan`, `agentapp recovery inspect <run_id>`, `agentapp recovery recover <run_id>`
+- [x] CLI scan outputs table (Run ID, Status, Age, Lease, Recommendation) or JSON
+- [x] CLI recover exits 0 on success, non-zero on blocked/not_resumable/error
+- [x] `list_runs()` extended in InMemoryWorkflowStateStore with filter parameters
+- [x] `list_runs()` extended in SQLiteWorkflowStateStore with parameterised SQL + LIMIT
+- [x] `AuditEvent` import fixed (moved from TYPE_CHECKING to runtime import)
+- [x] Recovery config support in `RuntimeConfig` (`recovery_config` dict field)
+- [x] **63 new Phase 16.5 tests** — models (20), scanner (24), service (12), CLI (9), state store list_runs (13)
+- [x] Full test suite: 1409 passed, 0 failed (+63 new Phase 16.5 tests)
+- [x] CHANGELOG.md updated with Phase 16.5 section (Added, Current Limitations)
+- [x] README.md limitations updated with Phase 16.5 notes
+- [x] README.md roadmap updated (Phase 16.5 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 16.5 section added (this file)
+
+### Known Limitations (v0.10.0 + Phase 16.5)
+
+- No automatic recovery daemon or background scheduler
+- No Redis Streams / Celery / Temporal integration
+- No exactly-once guarantee — lease is best-effort only
+- Recovery is operator-triggered only (CLI or API)
+- Active lease blocks recovery — operator must wait or manually release
+- No bulk/batch recovery — one run at a time
+- No UI console for recovery management
+- Lease release failure is logged but does not block recovery result
+
+## Phase 17: Automatic Recovery Daemon
+
+- [x] `AutoRecoveryPolicy` Pydantic model with conservative defaults (enabled=False, dry_run=True, max_concurrent=1)
+- [x] `RecoveryDaemonTickResult` model (scanned/selected/recovered/skipped/failed counts, run IDs, skip/failure details)
+- [x] `RecoveryDaemon` class with `run_once()` and `run_forever()` methods
+- [x] `run_once()` — scan → select → recover (dry-run or live) → return tick result
+- [x] `run_forever()` — cycles at `policy.interval_seconds` with graceful shutdown via `asyncio.Event`
+- [x] `stop()` method signals daemon to stop after current cycle
+- [x] Dry-run mode: collects `recovered_ids` but never calls `recover_run()`
+- [x] No-dry-run mode: calls `RecoveryService.recover_run()` with semaphore-bounded concurrency
+- [x] `_STATUS_TO_SCAN_FLAGS` mapping: statuses → scanner include flags
+- [x] `_build_scan_config()` — maps policy statuses to RecoveryScanConfig
+- [x] `_should_skip()` — selection logic: only RESUME, skips WAIT/DO_NOT_RESUME/active lease, respects policy flags
+- [x] 10+ audit events: daemon_started/stopped/tick_started/completed, candidate_selected/skipped, recovery_started/completed/failed, dry_run_selected
+- [x] `AgentApp.create_recovery_daemon()` — factory method, not auto-started
+- [x] CLI: `agentapp recovery daemon --once --dry-run/--no-dry-run --interval-seconds --max-recoveries-per-scan --max-concurrent-recoveries --workflow-name --tenant-id`
+- [x] CLI graceful shutdown: Ctrl+C handler via `asyncio.Event` + `loop.add_signal_handler`
+- [x] 57 new Phase 17 tests — policy (29), daemon (22), CLI daemon (6)
+- [x] Full test suite: 1468 passed, 12 pre-existing failures (test_cli.py trace/eval, unrelated)
+- [x] CHANGELOG.md updated with Phase 17 section
+- [x] README.md updated with Phase 17 notes
+- [x] `docs/release_checklist_v0.10.md` Phase 17 section added
+
+### Known Limitations (v0.10.0 + Phase 17)
+
+- Daemon is not auto-started; must be explicitly invoked
+- Dry-run is the default — no recovery without --no-dry-run
+- No exactly-once guarantee
+- No distributed coordination
+- No UI console
+
+## Phase 18: Recovery Observability + Admin API
+
+- [x] `RecoverySystemStatus` model — enabled, dry_run, daemon_configured, scanner/recovery_service availability, last_tick, policy
+- [x] `AgentApp.get_recovery_system_status()` — returns RecoverySystemStatus
+- [x] `AgentApp.run_recovery_scan_once()` — single scan cycle (dry-run by default), returns RecoveryDaemonTickResult
+- [x] `AgentApp.recover_run()` — thin wrapper with dry_run=True default; dry-run includes candidate inspection info
+- [x] `AgentApp.get_recovery_history()` — queries audit events for a run from audit logger
+- [x] `_build_scan_config_from_policy()` — static method mapping AutoRecoveryPolicy → RecoveryScanConfig
+- [x] `_should_skip_candidate()` — static method matching RecoveryDaemon skip logic
+- [x] CLI `recovery status` — shows enabled/dry_run/configured/policy (--json)
+- [x] CLI `recovery history <run_id>` — shows audit events (--json, --limit)
+- [x] CLI `recovery scan` enhanced — delegates to `run_recovery_scan_once()` (--dry-run default, --no-dry-run)
+- [x] CLI `recovery recover <run_id>` enhanced — delegates to `recover_run()` (--dry-run default, --no-dry-run, --workflow)
+- [x] Optional FastAPI admin router: `agent_app/adapters/recovery_admin.py` with lazy-import
+  - `GET /admin/recovery/status`
+  - `GET /admin/recovery/runs/{run_id}/inspect`
+  - `GET /admin/recovery/runs/{run_id}/history`
+  - `POST /admin/recovery/scan`
+  - `POST /admin/recovery/runs/{run_id}/recover`
+- [x] 43 new Phase 18 tests — status (4), scan_once (5), recover_run (5), history (4), scan_config (6), skip_candidate (6), CLI (13)
+- [x] Full test suite: 152 recovery tests passing, 199 key tests passing
+- [x] CHANGELOG.md updated with Phase 18 section
+- [x] README.md updated with Phase 18 notes
+- [x] `docs/release_checklist_v0.10.md` Phase 18 section added (this file)
+
+### Known Limitations (v0.10.0 + Phase 18)
+
+- FastAPI admin router is optional (lazy-import); requires `pip install 'agent-app-framework[api]'`
+- Recovery history limited by audit logger capabilities (InMemoryAuditLogger has `list_events()`)
+- No UI console yet (Phase 18 is API surface only)
+- Admin API does not auto-start daemon
+- All mutating operations default to dry-run
+- Recovery is best-effort; lease is not exactly-once guarantee

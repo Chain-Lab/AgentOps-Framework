@@ -955,7 +955,7 @@ curl -X POST http://localhost:8000/runs \
 - **Run state** — framework-level resume returns stubs; native mode (Phase 10) provides real SDK RunState resume
 - **DryRunBackend tool matching** — uses keyword heuristics, not real LLM reasoning
 - **DAG workflows** — fully implemented (Phase 13.1–15); supports sequential/parallel execution, retry policies, conditions, timeouts, function nodes, subworkflow nodes, if/else branching, switch routing, compensation handlers, persisted execution state, explicit DAG resume, and workflow-run lease management
-- **DAG execution state** — explicit resume via `app.resume_workflow_run()`; completed nodes skipped with output reuse; interrupted nodes retried; failed nodes configurable via ResumePolicy; compensation started blocks resume by default; workflow-run lease provides best-effort ownership; idempotency key provides best-effort duplicate prevention; no distributed locking; no automatic resume on app restart
+- **DAG execution state** — explicit resume via `app.resume_workflow_run()`; completed nodes skipped with output reuse; interrupted nodes retried; failed nodes configurable via ResumePolicy; compensation started blocks resume by default; workflow-run lease provides best-effort ownership; idempotency key provides best-effort duplicate prevention; no distributed locking; no automatic resume on app restart; Phase 16.5 adds recovery scanner and manual recovery with lease protection
 - **Compensation** — best-effort rollback only; handler failures are logged but not retried at workflow level; compensation timeout is shared across all handlers
 - **Routing** — keyword/regex/default matching, not semantic LLM routing
 - **Parallel orchestrator** — specialists are called serially, not in parallel
@@ -963,7 +963,7 @@ curl -X POST http://localhost:8000/runs \
 - **SQLite stores** — basic implementation without connection pooling or migration
 - **Observability** — Tier 2 (tool/workflow/approval) events are fire-and-forget; use Tier 1 events (`run.started`, `run.interrupted`) for eval assertions
 - **Benchmark** — `scripts/benchmark_tracing.py` is a rough measurement, not a rigorous performance test
-- **Distributed execution** — Phase 15 provides lease and idempotency foundations; Phase 15.1 adds API-level idempotency enforcement; Phase 15.2 adds background lease renewal heartbeat; Phase 16.0 adds DAG execution snapshots for crash recovery; Phase 16.1 adds compensation state persistence for recovery of interrupted compensation; Phase 16.2 adds pluggable lease backend abstraction for future Redis/etcd integration; Phase 16.3 adds lease backend observability (metrics, health checks, diagnostics); Phase 16.4 adds Redis lease backend for cross-process coordination; no Celery/Temporal backend; no worker pool; no automatic recovery daemon; Redis backend is best-effort only — not exactly-once
+- **Distributed execution** — Phase 15 provides lease and idempotency foundations; Phase 15.1 adds API-level idempotency enforcement; Phase 15.2 adds background lease renewal heartbeat; Phase 16.0 adds DAG execution snapshots for crash recovery; Phase 16.1 adds compensation state persistence for recovery of interrupted compensation; Phase 16.2 adds pluggable lease backend abstraction for future Redis/etcd integration; Phase 16.3 adds lease backend observability (metrics, health checks, diagnostics); Phase 16.4 adds Redis lease backend for cross-process coordination; Phase 16.5 adds recovery scanner and manual recovery with lease protection; Phase 17 adds automatic recovery daemon (conservative, dry-run by default, not auto-started); Phase 18 adds recovery observability and admin API (status, history, scan, recover); no Celery/Temporal backend; no worker pool; Redis backend is best-effort only — not exactly-once
 
 ## Observability
 
@@ -1161,3 +1161,6 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.10 — Pluggable lease backend abstraction for future Redis/etcd integration ✅ (Phase 16.2)
 - v0.10 — Lease backend observability: metrics, health checks, diagnostics for production operations ✅ (Phase 16.3)
 - v0.10 — Redis lease backend for cross-process / cross-worker lease coordination (optional extra) ✅ (Phase 16.4)
+- v0.10 — Recovery scanner and manual recovery with lease protection for DAG workflow runs ✅ (Phase 16.5)
+- v0.10 — Automatic recovery daemon with policy-driven scan/recover cycles (dry-run by default, conservative) ✅ (Phase 17)
+- v0.10 — Recovery observability and admin API: status, inspect, history, scan-once, recover, optional FastAPI router ✅ (Phase 18)

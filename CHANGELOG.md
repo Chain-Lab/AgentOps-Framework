@@ -570,6 +570,88 @@ All notable changes to Agent App Framework are documented here.
 - Redis unavailability causes lease acquire/renew to fail
 - Metrics wrapper requires Phase 16.3 metrics opt-in
 
+## 0.10.0 (Phase 16.5: Recovery Scanner & Manual Recovery)
+
+### Added
+
+- **`RecoveryScanner`** — read-only scanner that inspects persisted DAG workflow runs and identifies recovery candidates (stale, failed, interrupted, lease-expired, compensation-incomplete)
+- **`RecoveryCandidate` model** — run_id, status, reasons, recommendation, lease info, resumability, resume/recovery plan summaries
+- **`RecoveryScanResult`** — scanned_at, total_scanned, candidate_count, candidates list, non-fatal errors
+- **`RecoveryScanConfig`** — stale_after_seconds, running_after_seconds, include_completed/failed/running/compensating, limit, tenant_id, workflow_name filters
+- **`ManualRecoveryResult`** — run_id, attempted, recovered, status, lease_acquired/released, result, error
+- **`RecoveryService`** — lease-protected manual recovery; acquires lease before resume, releases after (success or failure)
+- **Lease-protected recovery flow** — inspect → check recommendation → acquire lease → audit.started → resume → audit.completed → release lease
+- **AgentApp recovery APIs** — `scan_recovery_candidates()`, `inspect_recovery_candidate()`, `recover_workflow_run()`
+- **CLI recovery commands** — `agentapp recovery scan`, `agentapp recovery inspect <run_id>`, `agentapp recovery recover <run_id>`
+- **`list_runs()` extended** — both InMemory and SQLite stores now accept `statuses`, `updated_before`, `workflow_name`, `limit` parameters
+- **`WorkflowStateStore` recovery integration** — scanner uses `list_runs()`, `list_nodes()`, `list_compensations()`, `build_recovery_plan()`, `build_resume_plan()`
+- **Redis lease compatibility** — scanner reads Redis lease via `backend.get_run_lease()`; expired Redis lease treated as recoverable
+- **Recovery audit events** — recovery.scan_started, recovery.scan_completed, recovery.inspect, recovery.started, recovery.completed, recovery.failed, recovery.skipped_active_lease, recovery.skipped_not_resumable
+- **63 new Phase 16.5 tests** — models (20), scanner (24), service (12), CLI (9), state store list_runs (13)
+
+### Current Limitations
+
+- No automatic recovery daemon or background scheduler
+- No Redis Streams / Celery / Temporal integration
+- No exactly-once guarantee — lease is best-effort only
+- Recovery is operator-triggered only (CLI or API)
+- Active lease blocks recovery — operator must wait or manually release
+- No bulk/batch recovery — one run at a time
+- No UI console for recovery management
+- Lease release failure is logged but does not block recovery result
+
+## Phase 17: Automatic Recovery Daemon (0.10.0)
+
+### Added
+
+- **`RecoveryDaemon`** — policy-driven automatic recovery with `run_once()` and `run_forever()` methods
+- **`AutoRecoveryPolicy`** — Pydantic model with conservative defaults: `enabled=False`, `dry_run=True`, `max_concurrent_recoveries=1`
+- **`RecoveryDaemonTickResult`** — structured result model: scanned/selected/recovered/skipped/failed counts + run IDs + skip/failure details
+- **Dry-run by default** — daemon logs would-be-recovered runs but never calls `recover_run()` unless explicitly configured
+- **Candidate selection rules** — only auto-recovers RESUME recommendations; skips WAIT_FOR_ACTIVE_LEASE, DO_NOT_RESUME, completed (unless enabled)
+- **Policy flags** — `recover_failed`, `recover_stale_running`, `recover_compensating` for fine-grained control
+- **Concurrency limiting** — `asyncio.Semaphore` for `max_concurrent_recoveries`
+- **Per-scan limits** — `max_candidates_per_scan`, `max_recoveries_per_scan`
+- **Audit events** — daemon_started/stopped/tick_started/completed, candidate_selected/skipped, recovery_started/completed/failed, dry_run_selected
+- **`AgentApp.create_recovery_daemon()`** — programmatic daemon factory (not auto-started)
+- **CLI** — `agentapp recovery daemon --once --dry-run/--no-dry-run` with graceful Ctrl+C shutdown
+- **`_build_scan_config()`** — maps policy statuses to scanner include flags
+- **`_should_skip()`** — selection logic based on recommendation + policy flags + reason matching
+- **57 new Phase 17 tests** — policy (29), daemon (22), CLI daemon (6)
+- **152 total recovery tests passing**
+
+### Current Limitations
+
+- Daemon is not auto-started; must be explicitly invoked
+- Dry-run is the default — no recovery without `--no-dry-run`
+- No exactly-once guarantee
+- No distributed coordination
+- No UI console
+
+## Phase 18: Recovery Observability + Admin API (0.10.0)
+
+### Added
+
+- **`RecoverySystemStatus`** — snapshot of recovery subsystem health: enabled, dry_run, daemon_configured, scanner/recovery_service availability, last tick, policy
+- **`AgentApp.get_recovery_system_status()`** — returns RecoverySystemStatus for admin dashboards and CLI
+- **`AgentApp.run_recovery_scan_once()`** — executes a single scan cycle (dry-run by default), returns RecoveryDaemonTickResult
+- **`AgentApp.recover_run()`** — thin wrapper around `recover_workflow_run` with `dry_run=True` default; dry-run includes candidate inspection info
+- **`AgentApp.get_recovery_history()`** — queries audit events for a specific run ID from the audit logger
+- **`_build_scan_config_from_policy()`** — maps AutoRecoveryPolicy to RecoveryScanConfig
+- **`_should_skip_candidate()`** — static skip evaluation matching RecoveryDaemon behavior
+- **CLI `recovery status`** — shows recovery system configuration and policy
+- **CLI `recovery history <run_id>`** — shows audit events for a run (--json, --limit)
+- **CLI `recovery scan` enhanced** — now delegates to `run_recovery_scan_once()` (dry-run by default, `--no-dry-run` for live)
+- **CLI `recovery recover` enhanced** — now delegates to `recover_run()` with `--dry-run` (default) / `--no-dry-run` support
+- **Optional FastAPI admin router** — `agent_app/adapters/recovery_admin.py` with lazy-import FastAPI (not a hard dependency)
+  - `GET /admin/recovery/status`
+  - `GET /admin/recovery/runs/{run_id}/inspect`
+  - `GET /admin/recovery/runs/{run_id}/history`
+  - `POST /admin/recovery/scan`
+  - `POST /admin/recovery/runs/{run_id}/recover`
+- **43 new Phase 18 tests** — status (4), scan_once (5), recover_run (5), history (4), scan_config (6), skip_candidate (6), CLI (10)
+- **152 total recovery tests passing**
+
 ## 0.7.0
 
 ### Added
