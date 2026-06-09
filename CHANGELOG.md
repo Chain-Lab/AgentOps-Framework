@@ -652,6 +652,12 @@ All notable changes to Agent App Framework are documented here.
 - **43 new Phase 18 tests** — status (4), scan_once (5), recover_run (5), history (4), scan_config (6), skip_candidate (6), CLI (10)
 - **152 total recovery tests passing**
 
+## Phase 19: Recovery Admin Console (0.10.0)
+
+### Added
+
+- **Recovery Admin Console** — an optional server-rendered FastAPI UI router with secure-by-default admin dependency handling, dry-run candidate scans, run-scoped history views, and a two-step HMAC confirmation flow for live recovery.
+
 ## 0.7.0
 
 ### Added

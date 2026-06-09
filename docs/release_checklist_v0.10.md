@@ -1138,3 +1138,12 @@
 - Admin API does not auto-start daemon
 - All mutating operations default to dry-run
 - Recovery is best-effort; lease is not exactly-once guarantee
+
+## Phase 19: Recovery Admin Console
+
+- [x] Verify `tests/unit/test_recovery_ui.py` passes.
+- [x] Verify importing `agent_app.adapters.recovery_ui` does not require FastAPI until `create_recovery_ui_router()` is called.
+- [x] Verify the Recovery Admin Console denies all routes when `admin_dependency` is omitted.
+- [x] Verify UI scans remain dry-run and reject `dry_run=false` attempts.
+- [x] Verify live recovery requires confirmation token plus `confirm_no_dry_run=true`.
+- [x] Verify `docs/recovery_admin_console.md` documents mounting, safety defaults, best-effort recovery, and current limitations.

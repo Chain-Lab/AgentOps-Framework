@@ -948,6 +948,33 @@ curl -X POST http://localhost:8000/runs \
   works while the current process is alive; renewal failure raises `LeaseLostError`.
 - Scope is fixed to `{tenant_id}:{operation}` — cannot be customized per-request.
 
+## Recovery Admin Console
+
+The optional Recovery Admin Console is a server-rendered FastAPI UI for recovery
+status, dry-run candidate scans, run-scoped history, and explicit two-step live
+recovery confirmation. Install API support before mounting it:
+
+```bash
+pip install 'agent-app-framework[api]'
+```
+
+Mount it explicitly and always provide an admin authorization dependency:
+
+```python
+from agent_app.adapters.recovery_ui import create_recovery_ui_router
+
+api.include_router(
+    create_recovery_ui_router(app, admin_dependency=require_recovery_admin)
+)
+```
+
+If `admin_dependency` is omitted, all UI routes return HTTP 403. The UI does not
+start the recovery daemon, GET routes are read-only, scans remain dry-run, and
+live recovery requires a confirmation token plus `confirm_no_dry_run=true`.
+
+See [`docs/recovery_admin_console.md`](docs/recovery_admin_console.md) for the
+full route list, safety defaults, HMAC token details, and current limitations.
+
 ## Current limitations
 
 - **OpenAI backend multi-agent** — handoff targets and orchestrator agent_calls are traced but not fully extracted from SDK results
