@@ -4,6 +4,7 @@
 .venv
 agent_app_framework.egg-info
 .codegraph
+.claude*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
