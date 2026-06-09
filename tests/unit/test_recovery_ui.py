@@ -175,3 +175,29 @@ def test_router_with_deny_dependency_returns_403():
     response = client.get("/admin/recovery")
 
     assert response.status_code == 403
+
+
+def test_dashboard_renders_status_and_safety_text():
+    """Dashboard renders recovery status and safety statements without side effects."""
+    mock_app = _make_mock_app()
+    mock_app.get_recovery_system_status.return_value = _make_status(
+        enabled=False,
+        dry_run=True,
+        daemon_configured=True,
+        scanner_available=True,
+        recovery_service_available=True,
+    )
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery")
+
+    assert response.status_code == 200
+    assert "Recovery Admin Console" in response.text
+    assert "Daemon" in response.text
+    assert "Disabled" in response.text
+    assert "Dry-run default" in response.text
+    assert "Live recovery requires explicit confirmation" in response.text
+    assert "Recovery is best-effort" in response.text
+    mock_app.get_recovery_system_status.assert_called_once_with()
+    mock_app.run_recovery_scan_once.assert_not_called()
+    mock_app.recover_run.assert_not_called()
