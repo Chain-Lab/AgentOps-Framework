@@ -246,6 +246,47 @@ def _render_candidate(candidate: Any) -> str:
 """
 
 
+def _render_confirm_recovery(candidate: Any, token: str) -> str:
+    """Render live recovery confirmation form."""
+    run_id = _escape(candidate.run_id)
+    return f"""
+<h1>Confirm Live Recovery</h1>
+{_safety_box()}
+<p>You are about to run live recovery for <code>{run_id}</code>.</p>
+<table>
+  <tr><th>Workflow</th><td>{_escape(candidate.workflow_name)}</td></tr>
+  <tr><th>Status</th><td>{_escape(candidate.status)}</td></tr>
+  <tr><th>Recommendation</th><td>{_escape(_enum_value(candidate.recommendation))}</td></tr>
+  <tr><th>Resumable</th><td>{_badge('Yes' if candidate.resumable else 'No', bool(candidate.resumable))}</td></tr>
+</table>
+<form method="post" action="/admin/recovery/candidates/{run_id}/recover">
+  <input type="hidden" name="confirmation_token" value="{_escape(token)}">
+  <label>
+    <input type="checkbox" name="confirm_no_dry_run" value="true">
+    I understand this performs live recovery with dry_run=False.
+  </label>
+  <p><button type="submit">Run live recovery</button></p>
+</form>
+"""
+
+
+def _render_recovery_result(run_id: str, result: Any) -> str:
+    """Render manual recovery result."""
+    error = getattr(result, "error", None)
+    return f"""
+<h1>Recovery Result</h1>
+{_safety_box()}
+<table>
+  <tr><th>Run ID</th><td><code>{_escape(run_id)}</code></td></tr>
+  <tr><th>Attempted</th><td>{_badge('Yes' if result.attempted else 'No', bool(result.attempted))}</td></tr>
+  <tr><th>Recovered</th><td>{_badge('Yes' if result.recovered else 'No', bool(result.recovered))}</td></tr>
+  <tr><th>Status</th><td>{_escape(result.status)}</td></tr>
+  <tr><th>Error</th><td>{_escape(error) if error else 'None'}</td></tr>
+</table>
+<p><a href="/admin/recovery/candidates/{_escape(run_id)}">Back to candidate</a></p>
+"""
+
+
 def _render_history_form() -> str:
     """Render the recovery history lookup form."""
     return """
@@ -344,8 +385,7 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
         tags=["recovery-ui"],
         dependencies=[Depends(auth_dependency)],
     )
-    confirmation_secret = secrets.token_bytes(32)
-    _ = confirmation_secret
+    secret = secrets.token_bytes(32)
 
     @router.get("")
     async def dashboard() -> Any:
@@ -405,13 +445,31 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
             return _server_error()
 
     @router.post("/candidates/{run_id}/confirm")
-    async def confirm_candidate(run_id: str) -> Any:
-        _ = run_id
-        return _not_implemented()
+    async def confirm_recovery(run_id: str) -> Any:
+        try:
+            candidate = await app.inspect_recovery_candidate(run_id)
+            token = _make_confirmation_token(secret, run_id)
+            return _html_page("Confirm Live Recovery", _render_confirm_recovery(candidate, token))
+        except KeyError:
+            return _error_page("Candidate Not Found", f"Recovery candidate '{run_id}' was not found.", 404)
+        except Exception:
+            logger.exception("Recovery UI confirm recovery failed")
+            return _server_error()
 
     @router.post("/candidates/{run_id}/recover")
-    async def recover_candidate(run_id: str) -> Any:
-        _ = run_id
-        return _not_implemented()
+    async def recover(run_id: str, request: Request) -> Any:
+        form = await _form_data(request)
+        token = form.get("confirmation_token", "")
+        confirm_no_dry_run = form.get("confirm_no_dry_run", "").lower() == "true"
+        if not token or not _valid_confirmation_token(secret, run_id, token):
+            return _error_page("Invalid Recovery Confirmation", "A valid confirmation token is required before live recovery.", 400)
+        if not confirm_no_dry_run:
+            return _error_page("Invalid Recovery Confirmation", "Live recovery requires explicit confirmation that dry_run=False will be used.", 400)
+        try:
+            result = await app.recover_run(run_id=run_id, dry_run=False)
+            return _html_page("Recovery Result", _render_recovery_result(run_id, result))
+        except Exception:
+            logger.exception("Recovery UI live recovery failed")
+            return _server_error()
 
     return router

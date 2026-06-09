@@ -373,3 +373,92 @@ def test_post_scan_rejects_dry_run_false_without_multipart_parser(monkeypatch):
     assert "Traceback" not in response.text
     mock_app.run_recovery_scan_once.assert_not_called()
     mock_app.recover_run.assert_not_called()
+
+
+def _extract_confirmation_token(html: str) -> str:
+    marker = 'name="confirmation_token" value="'
+    start = html.index(marker) + len(marker)
+    end = html.index('"', start)
+    return html[start:end]
+
+
+def test_confirm_page_renders_confirmation_token_without_recovery():
+    """Confirm step renders an HMAC token and does not execute recovery."""
+    mock_app = _make_mock_app()
+    mock_app.inspect_recovery_candidate.return_value = _make_candidate("run-confirm")
+    client = _install_ui_app(mock_app)
+
+    response = client.post("/admin/recovery/candidates/run-confirm/confirm")
+
+    assert response.status_code == 200
+    assert "Confirm Live Recovery" in response.text
+    assert "confirmation_token" in response.text
+    assert "confirm_no_dry_run" in response.text
+    assert _extract_confirmation_token(response.text)
+    mock_app.inspect_recovery_candidate.assert_called_once_with("run-confirm")
+    mock_app.recover_run.assert_not_called()
+
+
+def test_recover_without_token_is_rejected():
+    """Recover step rejects missing confirmation tokens."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirm_no_dry_run": "true"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid Recovery Confirmation" in response.text
+    mock_app.recover_run.assert_not_called()
+
+
+def test_recover_with_invalid_token_is_rejected():
+    """Recover step rejects invalid confirmation tokens."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirmation_token": "bad-token", "confirm_no_dry_run": "true"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid Recovery Confirmation" in response.text
+    mock_app.recover_run.assert_not_called()
+
+
+def test_recover_without_explicit_checkbox_is_rejected():
+    """Recover step requires confirm_no_dry_run=true as an explicit live action."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+    confirm_response = client.post("/admin/recovery/candidates/run-1/confirm")
+    token = _extract_confirmation_token(confirm_response.text)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirmation_token": token},
+    )
+
+    assert response.status_code == 400
+    assert "explicit confirmation" in response.text
+    mock_app.recover_run.assert_not_called()
+
+
+def test_confirmed_recovery_calls_recover_run_no_dry_run():
+    """Valid token plus checkbox calls app.recover_run with dry_run=False."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+    confirm_response = client.post("/admin/recovery/candidates/run-1/confirm")
+    token = _extract_confirmation_token(confirm_response.text)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirmation_token": token, "confirm_no_dry_run": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Recovery Result" in response.text
+    assert "run-1" in response.text
+    mock_app.recover_run.assert_called_once_with(run_id="run-1", dry_run=False)
