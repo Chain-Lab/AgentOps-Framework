@@ -658,6 +658,17 @@ All notable changes to Agent App Framework are documented here.
 
 - **Recovery Admin Console** — an optional server-rendered FastAPI UI router with secure-by-default admin dependency handling, dry-run candidate scans, run-scoped history views, and a two-step HMAC confirmation flow for live recovery.
 
+## Phase 18.5: CLI Trace/Eval Test Baseline Cleanup (0.10.0)
+
+### Fixed
+
+- **CLI module entrypoint** — `python -m agent_app.cli` now invokes `main()` and exits via `SystemExit(main())`
+- **Pre-existing CLI trace/eval test failures** — restored subprocess-based CLI tests that expect actual stdout/stderr/exit-code behavior
+- **CLI exit-code behavior** — missing eval/config files and missing traces now return non-zero through the module entrypoint instead of silently exiting 0
+- **CLI output behavior** — `--help`, `trace list`, `trace show`, and trace JSON output now work when invoked as `python -m agent_app.cli`
+- **Recovery admin router security** — optional FastAPI recovery admin router now denies access by default unless an admin authorization dependency is supplied
+- **Recovery admin error handling** — internal exception details are logged server-side and no longer returned in HTTP 500 response bodies
+
 ## 0.7.0
 
 ### Added

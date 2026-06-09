@@ -902,3 +902,7 @@ async def _cmd_recovery_recover_admin(args: argparse.Namespace) -> int:
         err = result.error or {}
         print(f"Recovery failed for run '{result.run_id}': {err}", file=sys.stderr)
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

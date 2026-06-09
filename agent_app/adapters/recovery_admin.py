@@ -10,18 +10,28 @@ Call ``create_recovery_admin_router(app)`` only when FastAPI is installed.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from agent_app.core.app import AgentApp
 
 
-def create_recovery_admin_router(app: Any) -> Any:
+def create_recovery_admin_router(
+    app: Any,
+    admin_dependency: Any | None = None,
+) -> Any:
     """Create an optional FastAPI router for recovery admin endpoints.
 
     Phase 18: Provides read-only and admin endpoints for the recovery
     subsystem.  This function lazy-imports FastAPI, so it only fails
     at call time (not import time) when FastAPI is not installed.
+
+    The router is secure-by-default: if no *admin_dependency* is supplied,
+    all endpoints return HTTP 403.  Applications should pass a FastAPI
+    dependency that authenticates and authorizes recovery administrators.
 
     Endpoints:
         GET  /admin/recovery/status
@@ -32,6 +42,7 @@ def create_recovery_admin_router(app: Any) -> Any:
 
     Args:
         app: A configured :class:`AgentApp` instance.
+        admin_dependency: Optional FastAPI dependency that authorizes access.
 
     Returns:
         A FastAPI ``APIRouter`` with recovery admin endpoints.
@@ -40,14 +51,29 @@ def create_recovery_admin_router(app: Any) -> Any:
         ImportError: If FastAPI is not installed.
     """
     try:
-        from fastapi import APIRouter, HTTPException
+        from fastapi import APIRouter, Depends, HTTPException
     except ImportError as e:
         raise ImportError(
             "FastAPI dependencies are not installed. "
             "Install with: pip install 'agent-app-framework[api]'"
         ) from e
 
-    router = APIRouter(prefix="/admin/recovery", tags=["recovery"])
+    async def _deny_by_default() -> None:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    auth_dependency = admin_dependency or _deny_by_default
+    router = APIRouter(
+        prefix="/admin/recovery",
+        tags=["recovery"],
+        dependencies=[Depends(auth_dependency)],
+    )
+
+    def _raise_admin_error(exc: Exception) -> None:
+        logger.exception("Recovery admin operation failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Recovery admin operation failed",
+        ) from exc
 
     @router.get("/status")
     async def get_status() -> dict:
@@ -64,7 +90,7 @@ def create_recovery_admin_router(app: Any) -> Any:
                 "policy": status.policy.model_dump(mode="json") if status.policy else None,
             }
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
 
     @router.get("/runs/{run_id}/inspect")
     async def inspect_run(run_id: str) -> dict:
@@ -75,9 +101,9 @@ def create_recovery_admin_router(app: Any) -> Any:
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
         except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
 
     @router.get("/runs/{run_id}/history")
     async def get_history(run_id: str, limit: int = 50) -> dict:
@@ -100,7 +126,7 @@ def create_recovery_admin_router(app: Any) -> Any:
                 ],
             }
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
 
     @router.post("/scan")
     async def run_scan(dry_run: bool = True) -> dict:
@@ -123,9 +149,9 @@ def create_recovery_admin_router(app: Any) -> Any:
                 "failures": result.failures,
             }
         except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
 
     @router.post("/runs/{run_id}/recover")
     async def recover_run(run_id: str, dry_run: bool = True) -> dict:
@@ -141,8 +167,8 @@ def create_recovery_admin_router(app: Any) -> Any:
                 "error": result.error,
             }
         except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _raise_admin_error(exc)
 
     return router

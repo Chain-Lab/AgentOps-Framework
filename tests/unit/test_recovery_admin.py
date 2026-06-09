@@ -939,3 +939,81 @@ class TestCLIRecoveryCommandsPhase18:
             dry_run=True,
             recovered_by="admin-cli",
         )
+
+
+# ---------------------------------------------------------------------------
+# Optional FastAPI recovery admin router security tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryAdminFastAPISecurity:
+    """Security behavior for optional FastAPI recovery admin router."""
+
+    def test_router_denies_by_default_without_admin_dependency(self):
+        """Router is secure-by-default when no admin dependency is configured."""
+        fastapi = pytest.importorskip("fastapi")
+        testclient = pytest.importorskip("fastapi.testclient")
+        from agent_app.adapters.recovery_admin import create_recovery_admin_router
+
+        api = fastapi.FastAPI()
+        api.include_router(create_recovery_admin_router(MagicMock()))
+        client = testclient.TestClient(api)
+
+        response = client.get("/admin/recovery/status")
+
+        assert response.status_code == 403
+
+    def test_router_allows_when_admin_dependency_passes(self):
+        """Caller can supply router-level admin authorization dependency."""
+        fastapi = pytest.importorskip("fastapi")
+        testclient = pytest.importorskip("fastapi.testclient")
+        from agent_app.adapters.recovery_admin import create_recovery_admin_router
+
+        async def allow_admin():
+            return {"user": "admin"}
+
+        mock_app = MagicMock()
+        mock_status = MagicMock()
+        mock_status.enabled = False
+        mock_status.dry_run = True
+        mock_status.daemon_configured = True
+        mock_status.scanner_available = True
+        mock_status.recovery_service_available = True
+        mock_status.last_tick_at = None
+        mock_status.policy = None
+        mock_app.get_recovery_system_status = MagicMock(return_value=mock_status)
+
+        api = fastapi.FastAPI()
+        api.include_router(create_recovery_admin_router(mock_app, admin_dependency=allow_admin))
+        client = testclient.TestClient(api)
+
+        response = client.get("/admin/recovery/status")
+
+        assert response.status_code == 200
+        assert response.json()["daemon_configured"] is True
+
+    def test_router_does_not_expose_exception_details(self):
+        """Internal exception details are logged, not returned to clients."""
+        fastapi = pytest.importorskip("fastapi")
+        testclient = pytest.importorskip("fastapi.testclient")
+        from agent_app.adapters.recovery_admin import create_recovery_admin_router
+
+        async def allow_admin():
+            return {"user": "admin"}
+
+        mock_app = MagicMock()
+        mock_app.get_recovery_system_status.side_effect = RuntimeError(
+            "database password=secret-token path=/private/config.yaml"
+        )
+
+        api = fastapi.FastAPI()
+        api.include_router(create_recovery_admin_router(mock_app, admin_dependency=allow_admin))
+        client = testclient.TestClient(api)
+
+        response = client.get("/admin/recovery/status")
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["detail"] == "Recovery admin operation failed"
+        assert "secret-token" not in str(body)
+        assert "/private/config.yaml" not in str(body)

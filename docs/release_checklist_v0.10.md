@@ -1124,7 +1124,9 @@
   - `GET /admin/recovery/runs/{run_id}/history`
   - `POST /admin/recovery/scan`
   - `POST /admin/recovery/runs/{run_id}/recover`
-- [x] 43 new Phase 18 tests — status (4), scan_once (5), recover_run (5), history (4), scan_config (6), skip_candidate (6), CLI (13)
+- [x] FastAPI admin router denies access by default unless an admin authorization dependency is supplied
+- [x] FastAPI admin router logs internal exceptions and returns generic HTTP 500 details
+- [x] 46 new/updated Phase 18 tests — includes 3 FastAPI security regression tests
 - [x] Full test suite: 152 recovery tests passing, 199 key tests passing
 - [x] CHANGELOG.md updated with Phase 18 section
 - [x] README.md updated with Phase 18 notes
@@ -1138,6 +1140,24 @@
 - Admin API does not auto-start daemon
 - All mutating operations default to dry-run
 - Recovery is best-effort; lease is not exactly-once guarantee
+
+## Phase 18.5: CLI Trace/Eval Test Baseline Cleanup
+
+- [x] Reproduced baseline failure with `python -m pytest tests/unit/test_cli.py -q`
+- [x] Classified 12 failures as one root cause: `python -m agent_app.cli` module did not invoke `main()`
+- [x] Confirmed symptom: module invocation returned exit code 0 with empty stdout/stderr for help, eval, trace list, and trace show commands
+- [x] Added CLI module entrypoint guard: `if __name__ == "__main__": raise SystemExit(main())`
+- [x] Verified `python -m agent_app.cli --help` prints help output
+- [x] Verified missing eval file now exits non-zero through subprocess path
+- [x] Verified trace list/show subprocess tests now produce expected stdout/JSON/exit codes
+- [x] `tests/unit/test_cli.py`: 15 passed
+- [x] Recovery regression tests continue to pass
+- [x] CHANGELOG.md updated with Phase 18.5 fixed section
+
+### Known Limitations (v0.10.0 + Phase 18.5)
+
+- No new CLI features were added in Phase 18.5
+- The fix restores module execution behavior only; it does not change trace/eval command semantics
 
 ## Phase 19: Recovery Admin Console
 
