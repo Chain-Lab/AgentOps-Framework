@@ -324,6 +324,7 @@ def _render_confirm_recovery(candidate: Any, token: str) -> str:
 def _render_recovery_result(run_id: str, result: Any) -> str:
     """Render manual recovery result."""
     error = getattr(result, "error", None)
+    error_text = "Recovery failed; check server logs for details." if error else "None"
     return f"""
 <h1>Recovery Result</h1>
 {_safety_box()}
@@ -332,7 +333,7 @@ def _render_recovery_result(run_id: str, result: Any) -> str:
   <tr><th>Attempted</th><td>{_badge('Yes' if result.attempted else 'No', bool(result.attempted))}</td></tr>
   <tr><th>Recovered</th><td>{_badge('Yes' if result.recovered else 'No', bool(result.recovered))}</td></tr>
   <tr><th>Status</th><td>{_escape(result.status)}</td></tr>
-  <tr><th>Error</th><td>{_escape(error) if error else 'None'}</td></tr>
+  <tr><th>Error</th><td>{_escape(error_text)}</td></tr>
 </table>
 <p><a href="/admin/recovery/candidates/{_escape(run_id)}">Back to candidate</a></p>
 """

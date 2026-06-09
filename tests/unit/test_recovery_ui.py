@@ -501,3 +501,32 @@ def test_recovery_failure_returns_generic_500_without_traceback():
     assert "Recovery admin operation failed" in response.text
     assert "secret lease backend token" not in response.text
     assert "Traceback" not in response.text
+
+
+def test_recovery_result_error_is_not_rendered_raw():
+    """Returned live recovery errors render generic text, not raw backend details."""
+    mock_app = _make_mock_app()
+    result = MagicMock()
+    result.run_id = "run-1"
+    result.attempted = True
+    result.recovered = False
+    result.status = "failed"
+    result.error = {
+        "type": "lease_failed",
+        "message": "secret lease backend token",
+    }
+    mock_app.recover_run = AsyncMock(return_value=result)
+    client = _install_ui_app(mock_app)
+    confirm_response = client.post("/admin/recovery/candidates/run-1/confirm")
+    token = _extract_confirmation_token(confirm_response.text)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirmation_token": token, "confirm_no_dry_run": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Recovery Result" in response.text
+    assert "Recovery failed; check server logs for details." in response.text
+    assert "secret lease backend token" not in response.text
+    assert "Traceback" not in response.text
