@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import json
 import logging
 import secrets
 from typing import Any
@@ -142,6 +143,156 @@ def _render_dashboard(status: Any) -> str:
 """
 
 
+def _format_time(value: Any) -> str:
+    """Return an ISO timestamp for datetime-like values."""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value or "")
+
+
+def _json_summary(value: Any) -> str:
+    """Render a compact escaped JSON-like summary."""
+    if not value:
+        return ""
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _dict_rows(items: list[Any], key_name: str, value_name: str) -> str:
+    """Render simple dictionaries as list items."""
+    if not items:
+        return "<p>None</p>"
+    rows = []
+    for item in items:
+        if isinstance(item, dict):
+            key = item.get(key_name, "")
+            value = item.get(value_name, "")
+        else:
+            key = getattr(item, key_name, "")
+            value = getattr(item, value_name, "")
+        rows.append(f"<li><code>{_escape(key)}</code>: {_escape(value)}</li>")
+    return "<ul>" + "".join(rows) + "</ul>"
+
+
+def _render_scan_result(result: Any) -> str:
+    """Render the result of a dry-run recovery candidate scan."""
+    selected_run_ids = list(getattr(result, "selected_run_ids", []) or [])
+    selected_links = (
+        "<ul>"
+        + "".join(
+            f'<li><a href="/admin/recovery/candidates/{_escape(run_id)}">{_escape(run_id)}</a></li>'
+            for run_id in selected_run_ids
+        )
+        + "</ul>"
+        if selected_run_ids
+        else "<p>No candidates selected.</p>"
+    )
+    mode = "Dry-run" if bool(getattr(result, "dry_run", True)) else "Live"
+
+    return f"""
+<h1>Recovery Candidates</h1>
+{_safety_box()}
+<p>{_escape(mode)} scan completed. No recovery is performed by this page.</p>
+<table aria-label="Recovery candidate scan summary">
+  <tr><th>Scanned</th><td>{_escape(getattr(result, "scanned_count", 0))}</td></tr>
+  <tr><th>Selected</th><td>{_escape(getattr(result, "selected_count", len(selected_run_ids)))}</td></tr>
+  <tr><th>Recovered</th><td>{_escape(getattr(result, "recovered_count", 0))}</td></tr>
+  <tr><th>Skipped</th><td>{_escape(getattr(result, "skipped_count", 0))}</td></tr>
+  <tr><th>Failed</th><td>{_escape(getattr(result, "failed_count", 0))}</td></tr>
+</table>
+<h2>Selected candidates</h2>
+{selected_links}
+<h2>Skipped</h2>
+{_dict_rows(list(getattr(result, "skipped", []) or []), "run_id", "reason")}
+<h2>Failures</h2>
+{_dict_rows(list(getattr(result, "failures", []) or []), "run_id", "error")}
+"""
+
+
+def _render_candidate(candidate: Any) -> str:
+    """Render one recovery candidate inspection page."""
+    run_id = getattr(candidate, "run_id", "")
+    reasons = ", ".join(_enum_value(reason) for reason in getattr(candidate, "reasons", []) or [])
+    recommendation = _enum_value(getattr(candidate, "recommendation", ""))
+    resume_plan = getattr(candidate, "resume_plan_summary", None)
+    recovery_plan = getattr(candidate, "recovery_plan_summary", None)
+    plan_summary = resume_plan or recovery_plan or getattr(candidate, "plan_summary", None)
+    error = getattr(candidate, "error", None)
+
+    return f"""
+<h1>Recovery Candidate</h1>
+{_safety_box()}
+<table aria-label="Recovery candidate details">
+  <tr><th>Run ID</th><td><code>{_escape(run_id)}</code></td></tr>
+  <tr><th>Workflow</th><td>{_escape(getattr(candidate, "workflow_name", ""))}</td></tr>
+  <tr><th>Status</th><td>{_escape(getattr(candidate, "status", ""))}</td></tr>
+  <tr><th>Updated at</th><td>{_escape(_format_time(getattr(candidate, "updated_at", None)))}</td></tr>
+  <tr><th>Age seconds</th><td>{_escape(getattr(candidate, "age_seconds", ""))}</td></tr>
+  <tr><th>Reasons</th><td>{_escape(reasons)}</td></tr>
+  <tr><th>Recommendation</th><td>{_escape(recommendation)}</td></tr>
+  <tr><th>Lease present</th><td>{_escape(getattr(candidate, "lease_present", False))}</td></tr>
+  <tr><th>Lease owner</th><td>{_escape(getattr(candidate, "lease_owner", ""))}</td></tr>
+  <tr><th>Lease expires at</th><td>{_escape(_format_time(getattr(candidate, "lease_expires_at", None)))}</td></tr>
+  <tr><th>Lease expired</th><td>{_escape(getattr(candidate, "lease_expired", ""))}</td></tr>
+  <tr><th>Resumable</th><td>{_escape(getattr(candidate, "resumable", ""))}</td></tr>
+  <tr><th>Plan summary</th><td><code>{_escape(_json_summary(plan_summary))}</code></td></tr>
+  <tr><th>Error</th><td><code>{_escape(_json_summary(error))}</code></td></tr>
+</table>
+<form method="post" action="/admin/recovery/candidates/{_escape(run_id)}/confirm">
+  <button type="submit">Review confirmation</button>
+</form>
+<p><a href="/admin/recovery/history?run_id={_escape(run_id)}">View recovery history for this run</a></p>
+"""
+
+
+def _render_history_form() -> str:
+    """Render the recovery history lookup form."""
+    return """
+<h1>Recovery History</h1>
+<p>Enter a run ID to view run-scoped recovery history.</p>
+<form method="get" action="/admin/recovery/history">
+  <label for="run_id">Run ID</label>
+  <input id="run_id" name="run_id" type="text" required>
+  <button type="submit">View history</button>
+</form>
+"""
+
+
+def _render_history(run_id: str, events: list[Any]) -> str:
+    """Render recovery audit history for a run."""
+    rows = []
+    for event in events:
+        rows.append(
+            "<tr>"
+            f"<td>{_escape(_format_time(getattr(event, 'created_at', None)))}</td>"
+            f"<td><code>{_escape(getattr(event, 'event_id', ''))}</code></td>"
+            f"<td>{_escape(getattr(event, 'event_type', ''))}</td>"
+            f"<td>{_escape(getattr(event, 'user_id', ''))}</td>"
+            f"<td>{_escape(getattr(event, 'tenant_id', ''))}</td>"
+            f"<td>{_escape(getattr(event, 'tool_name', ''))}</td>"
+            f"<td><code>{_escape(_json_summary(getattr(event, 'data', {})))}</code></td>"
+            "</tr>"
+        )
+    body = (
+        "".join(rows)
+        if rows
+        else '<tr><td colspan="7">No recovery history events found for this run.</td></tr>'
+    )
+    return f"""
+<h1>Recovery History</h1>
+<p>Showing run-scoped recovery history for <code>{_escape(run_id)}</code>.</p>
+<form method="get" action="/admin/recovery/history">
+  <label for="run_id">Run ID</label>
+  <input id="run_id" name="run_id" type="text" value="{_escape(run_id)}" required>
+  <button type="submit">View history</button>
+</form>
+<table aria-label="Recovery history events">
+  <tr><th>Created at</th><th>Event ID</th><th>Event type</th><th>User</th><th>Tenant</th><th>Tool</th><th>Data</th></tr>
+  {body}
+</table>
+"""
+
+
 def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> Any:
     """Create the optional FastAPI router for the recovery admin UI.
 
@@ -198,16 +349,34 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
 
     @router.get("/candidates")
     async def candidates() -> Any:
-        return _not_implemented()
+        try:
+            result = await app.run_recovery_scan_once()
+            return _html_page("Recovery Candidates", _render_scan_result(result))
+        except Exception:
+            logger.exception("Recovery UI candidate list failed")
+            return _server_error()
 
     @router.get("/candidates/{run_id}")
-    async def candidate_detail(run_id: str) -> Any:
-        _ = run_id
-        return _not_implemented()
+    async def inspect_candidate(run_id: str) -> Any:
+        try:
+            candidate = await app.inspect_recovery_candidate(run_id)
+            return _html_page("Recovery Candidate", _render_candidate(candidate))
+        except KeyError:
+            return _error_page("Candidate Not Found", f"Recovery candidate '{run_id}' was not found.", 404)
+        except Exception:
+            logger.exception("Recovery UI candidate inspect failed")
+            return _server_error()
 
     @router.get("/history")
-    async def history() -> Any:
-        return _not_implemented()
+    async def history(run_id: str | None = None) -> Any:
+        try:
+            if not run_id:
+                return _html_page("Recovery History", _render_history_form())
+            events = await app.get_recovery_history(run_id)
+            return _html_page("Recovery History", _render_history(run_id, events))
+        except Exception:
+            logger.exception("Recovery UI history failed")
+            return _server_error()
 
     @router.post("/scan")
     async def scan() -> Any:

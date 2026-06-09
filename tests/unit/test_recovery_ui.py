@@ -44,7 +44,7 @@ def _make_candidate(run_id: str = "run-1") -> RecoveryCandidate:
         recommendation=RecoveryRecommendation.RESUME,
         lease_present=False,
         resumable=True,
-        plan_summary={"next_action": "resume failed node"},
+        resume_plan_summary={"next_action": "resume failed node"},
     )
 
 
@@ -129,7 +129,7 @@ def test_factory_requires_fastapi_at_call_time(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
-    with pytest.raises(ImportError, match="agent-app-framework\[api\]"):
+    with pytest.raises(ImportError, match=r"agent-app-framework\[api\]"):
         recovery_ui.create_recovery_ui_router(_make_mock_app())
 
 
@@ -201,3 +201,117 @@ def test_dashboard_renders_status_and_safety_text():
     mock_app.get_recovery_system_status.assert_called_once_with()
     mock_app.run_recovery_scan_once.assert_not_called()
     mock_app.recover_run.assert_not_called()
+
+
+def test_candidate_list_runs_dry_run_scan_and_renders_links():
+    """Candidate list runs a dry-run scan and links selected candidates."""
+    mock_app = _make_mock_app()
+    mock_app.run_recovery_scan_once.return_value = RecoveryDaemonTickResult(
+        scanned_count=3,
+        selected_count=1,
+        recovered_count=0,
+        skipped_count=1,
+        failed_count=1,
+        dry_run=True,
+        selected_run_ids=["run-selected"],
+        skipped=[{"run_id": "run-skip", "reason": "lease_active"}],
+        failures=[{"run_id": "run-fail", "error": "boom"}],
+    )
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery/candidates")
+
+    assert response.status_code == 200
+    assert "Recovery Candidates" in response.text
+    assert "Dry-run" in response.text
+    assert "3" in response.text
+    assert "1" in response.text
+    assert "/admin/recovery/candidates/run-selected" in response.text
+    assert "run-selected" in response.text
+    assert "run-skip" in response.text
+    assert "lease_active" in response.text
+    assert "run-fail" in response.text
+    assert "boom" in response.text
+    mock_app.run_recovery_scan_once.assert_called_once_with()
+    mock_app.recover_run.assert_not_called()
+
+
+def test_candidate_inspect_renders_details_and_confirm_form():
+    """Candidate inspect renders details and a future confirmation form."""
+    mock_app = _make_mock_app()
+    mock_app.inspect_recovery_candidate.return_value = _make_candidate("run-inspect")
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery/candidates/run-inspect")
+
+    assert response.status_code == 200
+    assert "Recovery Candidate" in response.text
+    assert "run-inspect" in response.text
+    assert "customer_support" in response.text
+    assert "failed" in response.text
+    assert "node_failed" in response.text
+    assert "resume" in response.text
+    assert "resume failed node" in response.text
+    assert 'action="/admin/recovery/candidates/run-inspect/confirm"' in response.text
+    mock_app.inspect_recovery_candidate.assert_called_once_with("run-inspect")
+    mock_app.recover_run.assert_not_called()
+
+
+def test_candidate_inspect_missing_candidate_returns_clean_404():
+    """Missing candidate inspect returns a clean 404 without leaking internals."""
+    mock_app = _make_mock_app()
+    mock_app.inspect_recovery_candidate.side_effect = KeyError("secret-token-123")
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery/candidates/run-missing")
+
+    assert response.status_code == 404
+    assert "Candidate Not Found" in response.text
+    assert "run-missing" in response.text
+    assert "secret-token-123" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_history_without_run_id_renders_form_and_message():
+    """History page without run_id renders a run-scoped lookup form."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery/history")
+
+    assert response.status_code == 200
+    assert "Recovery History" in response.text
+    assert 'method="get"' in response.text
+    assert 'name="run_id"' in response.text
+    assert "Enter a run ID" in response.text
+    mock_app.get_recovery_history.assert_not_called()
+
+
+def test_history_with_run_id_renders_events():
+    """History page with run_id renders run-scoped audit events."""
+    mock_app = _make_mock_app()
+    event = AuditEvent(
+        event_id="event-1",
+        run_id="run-hist",
+        event_type="recovery.manual",
+        user_id="admin-user",
+        tenant_id="tenant-1",
+        tool_name="recovery",
+        data={"action": "inspect", "status": "ok"},
+        created_at=datetime(2026, 6, 9, 12, 5, tzinfo=timezone.utc),
+    )
+    mock_app.get_recovery_history.return_value = [event]
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery/history?run_id=run-hist")
+
+    assert response.status_code == 200
+    assert "Recovery History" in response.text
+    assert "run-hist" in response.text
+    assert "event-1" in response.text
+    assert "recovery.manual" in response.text
+    assert "admin-user" in response.text
+    assert "tenant-1" in response.text
+    assert "inspect" in response.text
+    assert "ok" in response.text
+    mock_app.get_recovery_history.assert_called_once_with("run-hist")
