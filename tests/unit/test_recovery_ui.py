@@ -394,6 +394,12 @@ def test_confirm_page_renders_confirmation_token_without_recovery():
     assert "Confirm Live Recovery" in response.text
     assert "confirmation_token" in response.text
     assert "confirm_no_dry_run" in response.text
+    assert "node_failed" in response.text
+    assert "resume" in response.text
+    assert "Lease present" in response.text
+    assert "No" in response.text
+    assert "next_action" in response.text
+    assert "resume failed node" in response.text
     assert _extract_confirmation_token(response.text)
     mock_app.inspect_recovery_candidate.assert_called_once_with("run-confirm")
     mock_app.recover_run.assert_not_called()

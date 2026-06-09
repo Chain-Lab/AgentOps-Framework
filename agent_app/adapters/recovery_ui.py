@@ -248,17 +248,68 @@ def _render_candidate(candidate: Any) -> str:
 
 def _render_confirm_recovery(candidate: Any, token: str) -> str:
     """Render live recovery confirmation form."""
-    run_id = _escape(candidate.run_id)
+    run_id = _escape(getattr(candidate, "run_id", ""))
+    reasons = list(getattr(candidate, "reasons", []) or [])
+    reason_list = (
+        "<ul>"
+        + "".join(f"<li>{_escape(_enum_value(reason))}</li>" for reason in reasons)
+        + "</ul>"
+        if reasons
+        else "<p>None</p>"
+    )
+    lease_present = bool(getattr(candidate, "lease_present", False))
+    lease_owner = getattr(candidate, "lease_owner", None)
+    lease_expires_at = getattr(candidate, "lease_expires_at", None)
+    lease_rows = f"""
+  <tr><th>Lease present</th><td>{_badge('Yes' if lease_present else 'No', lease_present)}</td></tr>"""
+    if lease_owner:
+        lease_rows += f"""
+  <tr><th>Lease owner</th><td>{_escape(lease_owner)}</td></tr>"""
+    if lease_expires_at:
+        lease_rows += f"""
+  <tr><th>Lease expires at</th><td>{_escape(_format_time(lease_expires_at))}</td></tr>"""
+
+    def summary_table(title: str, summary: Any) -> str:
+        if not summary:
+            return ""
+        if isinstance(summary, dict):
+            rows = "".join(
+                f"<tr><th>{_escape(key)}</th><td>{_escape(value)}</td></tr>"
+                for key, value in summary.items()
+            )
+        else:
+            rows = f"<tr><th>Summary</th><td>{_escape(summary)}</td></tr>"
+        return f"""
+<h2>{_escape(title)}</h2>
+<table aria-label="{_escape(title)}">
+{rows}
+</table>"""
+
+    plan_sections = "".join(
+        summary_table(title, getattr(candidate, attr, None))
+        for title, attr in (
+            ("Resume plan summary", "resume_plan_summary"),
+            ("Recovery plan summary", "recovery_plan_summary"),
+            ("Plan summary", "plan_summary"),
+        )
+    )
+    error_details = getattr(candidate, "error", None) or getattr(candidate, "error_details", None)
+    error_section = summary_table("Error details", error_details)
+
     return f"""
 <h1>Confirm Live Recovery</h1>
 {_safety_box()}
 <p>You are about to run live recovery for <code>{run_id}</code>.</p>
 <table>
-  <tr><th>Workflow</th><td>{_escape(candidate.workflow_name)}</td></tr>
-  <tr><th>Status</th><td>{_escape(candidate.status)}</td></tr>
-  <tr><th>Recommendation</th><td>{_escape(_enum_value(candidate.recommendation))}</td></tr>
-  <tr><th>Resumable</th><td>{_badge('Yes' if candidate.resumable else 'No', bool(candidate.resumable))}</td></tr>
+  <tr><th>Workflow</th><td>{_escape(getattr(candidate, 'workflow_name', ''))}</td></tr>
+  <tr><th>Status</th><td>{_escape(getattr(candidate, 'status', ''))}</td></tr>
+  <tr><th>Reasons</th><td>{reason_list}</td></tr>
+  <tr><th>Recommendation</th><td>{_escape(_enum_value(getattr(candidate, 'recommendation', '')))}</td></tr>
+{lease_rows}
+  <tr><th>Resumable</th><td>{_badge('Yes' if getattr(candidate, 'resumable', False) else 'No', bool(getattr(candidate, 'resumable', False)))}</td></tr>
 </table>
+{plan_sections}
+{error_section}
 <form method="post" action="/admin/recovery/candidates/{run_id}/recover">
   <input type="hidden" name="confirmation_token" value="{_escape(token)}">
   <label>
