@@ -468,3 +468,36 @@ def test_confirmed_recovery_calls_recover_run_no_dry_run():
     assert "Recovery Result" in response.text
     assert "run-1" in response.text
     mock_app.recover_run.assert_called_once_with(run_id="run-1", dry_run=False)
+
+
+def test_dashboard_failure_returns_generic_500_without_traceback():
+    """Dashboard exceptions are logged server-side and hidden from HTML."""
+    mock_app = _make_mock_app()
+    mock_app.get_recovery_system_status.side_effect = RuntimeError("secret database password")
+    client = _install_ui_app(mock_app)
+
+    response = client.get("/admin/recovery")
+
+    assert response.status_code == 500
+    assert "Recovery admin operation failed" in response.text
+    assert "secret database password" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_recovery_failure_returns_generic_500_without_traceback():
+    """Live recovery exceptions do not leak raw exception strings."""
+    mock_app = _make_mock_app()
+    mock_app.recover_run.side_effect = RuntimeError("secret lease backend token")
+    client = _install_ui_app(mock_app)
+    confirm_response = client.post("/admin/recovery/candidates/run-1/confirm")
+    token = _extract_confirmation_token(confirm_response.text)
+
+    response = client.post(
+        "/admin/recovery/candidates/run-1/recover",
+        data={"confirmation_token": token, "confirm_no_dry_run": "true"},
+    )
+
+    assert response.status_code == 500
+    assert "Recovery admin operation failed" in response.text
+    assert "secret lease backend token" not in response.text
+    assert "Traceback" not in response.text
