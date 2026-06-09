@@ -14,6 +14,7 @@ import json
 import logging
 import secrets
 from typing import Any
+from urllib.parse import parse_qsl
 
 logger = logging.getLogger(__name__)
 
@@ -305,12 +306,13 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
             with ``agent-app-framework[api]``.
     """
     try:
-        from fastapi import APIRouter, Depends, HTTPException
+        from fastapi import APIRouter, Depends, HTTPException, Request
     except ImportError as exc:
         raise ImportError(
             "FastAPI is required for the recovery admin console. "
             "Install optional API dependencies with agent-app-framework[api]."
         ) from exc
+    globals()["Request"] = Request
 
     async def _deny_by_default() -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -322,6 +324,12 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
             "Recovery admin operation failed. Check server logs for details.",
             500,
         )
+
+    async def _form_data(request: Request) -> dict[str, str]:
+        body = (await request.body()).decode("utf-8")
+        if not body:
+            return {}
+        return {str(key): str(value) for key, value in parse_qsl(body, keep_blank_values=True)}
 
     def _not_implemented() -> Any:
         return _error_page(
@@ -379,8 +387,22 @@ def create_recovery_ui_router(app: Any, admin_dependency: Any | None = None) -> 
             return _server_error()
 
     @router.post("/scan")
-    async def scan() -> Any:
-        return _not_implemented()
+    async def scan(request: Request) -> Any:
+        from agent_app.runtime.recovery_models import AutoRecoveryPolicy
+
+        form = await _form_data(request)
+        if form.get("dry_run", "true").lower() in {"0", "false", "no", "off"}:
+            return _error_page(
+                "Invalid Scan Request",
+                "The Recovery Admin Console only supports dry-run scans.",
+                400,
+            )
+        try:
+            result = await app.run_recovery_scan_once(policy=AutoRecoveryPolicy(dry_run=True))
+            return _html_page("Recovery Candidates", _render_scan_result(result))
+        except Exception:
+            logger.exception("Recovery UI dry-run scan failed")
+            return _server_error()
 
     @router.post("/candidates/{run_id}/confirm")
     async def confirm_candidate(run_id: str) -> Any:

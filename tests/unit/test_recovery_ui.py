@@ -315,3 +315,61 @@ def test_history_with_run_id_renders_events():
     assert "inspect" in response.text
     assert "ok" in response.text
     mock_app.get_recovery_history.assert_called_once_with("run-hist")
+
+
+def test_post_scan_always_calls_scan_with_dry_run_policy():
+    """POST scan always triggers a dry-run scan with dry_run=True."""
+    mock_app = _make_mock_app()
+    mock_app.run_recovery_scan_once.return_value = RecoveryDaemonTickResult(
+        scanned_count=2,
+        selected_count=1,
+        dry_run=True,
+        selected_run_ids=["run-1"],
+    )
+    client = _install_ui_app(mock_app)
+
+    response = client.post("/admin/recovery/scan")
+
+    assert response.status_code == 200
+    assert "Recovery Candidates" in response.text
+    policy = mock_app.run_recovery_scan_once.call_args.kwargs["policy"]
+    assert isinstance(policy, AutoRecoveryPolicy)
+    assert policy.dry_run is True
+    mock_app.recover_run.assert_not_called()
+
+
+def test_post_scan_rejects_dry_run_false_attempt():
+    """UI scan rejects attempts to request live scan semantics."""
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+
+    response = client.post("/admin/recovery/scan", data={"dry_run": "false"})
+
+    assert response.status_code == 400
+    assert "Invalid Scan Request" in response.text
+    assert "dry-run" in response.text
+    assert "Traceback" not in response.text
+    mock_app.run_recovery_scan_once.assert_not_called()
+    mock_app.recover_run.assert_not_called()
+
+
+def test_post_scan_rejects_dry_run_false_without_multipart_parser(monkeypatch):
+    """URL-encoded scan forms do not require Starlette's multipart parser."""
+    pytest.importorskip("fastapi")
+    from starlette.requests import Request
+
+    async def fail_if_form_parser_is_used(self):
+        _ = self
+        raise RuntimeError("python-multipart is not installed")
+
+    monkeypatch.setattr(Request, "form", fail_if_form_parser_is_used)
+    mock_app = _make_mock_app()
+    client = _install_ui_app(mock_app)
+
+    response = client.post("/admin/recovery/scan", data={"dry_run": "false"})
+
+    assert response.status_code == 400
+    assert "Invalid Scan Request" in response.text
+    assert "Traceback" not in response.text
+    mock_app.run_recovery_scan_once.assert_not_called()
+    mock_app.recover_run.assert_not_called()
