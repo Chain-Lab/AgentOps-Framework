@@ -43,6 +43,7 @@ class LeaseDiagnostics(BaseModel):
         metrics: Metrics snapshot (if metrics enabled).
         expired_leases_count: Number of expired leases (if available).
         sample_expired_leases: Sample of expired lease details (limited).
+        details: Additional backend-specific diagnostic details (Phase 16.4).
     """
 
     backend_type: str
@@ -50,6 +51,7 @@ class LeaseDiagnostics(BaseModel):
     metrics: dict[str, Any] | None = None
     expired_leases_count: int | None = None
     sample_expired_leases: list[dict[str, Any]] = []
+    details: dict[str, Any] | None = None
 
 
 class LeaseCoordinator:

@@ -47,6 +47,8 @@ class AgentApp:
         dag_snapshot_config: Any = None,
         dag_compensation_config: Any = None,
         dag_lease_config: Any = None,
+        dag_lease_backend: Any = None,
+        audit_logger: Any = None,
     ) -> None:
         from agent_app.registry.agent_registry import AgentRegistry
         from agent_app.registry.tool_registry import ToolRegistry
@@ -76,6 +78,10 @@ class AgentApp:
         self._dag_compensation_config = dag_compensation_config
         # Phase 16.2: DAG lease backend config
         self._dag_lease_config = dag_lease_config
+        # Phase 16.5: DAG lease backend instance for recovery
+        self._dag_lease_backend = dag_lease_backend
+        # Phase 16.5: Audit logger for recovery events
+        self._audit_logger = audit_logger
         self._runner: AppRunner | None = None
         self._native_agents: dict[str, Any] = {}
         self.trace_collector = trace_collector
@@ -253,6 +259,113 @@ class AgentApp:
             resume_policy=resume_policy,
             worker=worker,
             idempotency_key=idempotency_key,
+        )
+
+    # ------------------------------------------------------------------
+    # Recovery scanning & manual recovery (Phase 16.5)
+    # ------------------------------------------------------------------
+
+    async def scan_recovery_candidates(
+        self,
+        config: Any = None,
+    ) -> Any:
+        """Scan persisted workflow runs for recovery candidates.
+
+        Phase 16.5: Read-only scan.  Does not modify state or acquire leases.
+
+        Args:
+            config: Optional RecoveryScanConfig. Uses defaults if not provided.
+
+        Returns:
+            RecoveryScanResult with candidates.
+
+        Raises:
+            RuntimeError: If no dag_state_store is configured.
+        """
+        if self._dag_state_store is None:
+            raise RuntimeError(
+                "Recovery scanning requires a workflow state store. "
+                "Configure workflow_state in your agentapp.yaml."
+            )
+        from agent_app.runtime.recovery_service import RecoveryScanner
+        from agent_app.runtime.recovery_models import RecoveryScanConfig
+
+        cfg = config or RecoveryScanConfig()
+        lease_backend = getattr(self, "_dag_lease_backend", None)
+        scanner = RecoveryScanner(self._dag_state_store, lease_backend)
+        return await scanner.scan(cfg)
+
+    async def inspect_recovery_candidate(self, run_id: str) -> Any:
+        """Inspect a single workflow run as a recovery candidate.
+
+        Args:
+            run_id: The run to inspect.
+
+        Returns:
+            RecoveryCandidate for the run.
+
+        Raises:
+            RuntimeError: If no dag_state_store is configured.
+            KeyError: If the run_id is not found.
+        """
+        if self._dag_state_store is None:
+            raise RuntimeError(
+                "Recovery inspection requires a workflow state store. "
+                "Configure workflow_state in your agentapp.yaml."
+            )
+        from agent_app.runtime.recovery_service import RecoveryScanner
+
+        lease_backend = getattr(self, "_dag_lease_backend", None)
+        scanner = RecoveryScanner(self._dag_state_store, lease_backend)
+        return await scanner.inspect_run(run_id)
+
+    async def recover_workflow_run(
+        self,
+        workflow: str,
+        run_id: str,
+        recovered_by: str,
+        resume_policy: Any = None,
+    ) -> Any:
+        """Manually recover a persisted workflow run.
+
+        Acquires a lease before resuming and releases it afterwards.
+        Recovery is only attempted if the run passes inspection.
+
+        Args:
+            workflow: Name of the workflow to resume.
+            run_id: The run ID to recover.
+            recovered_by: Identity of the operator performing recovery.
+            resume_policy: Optional ResumePolicy controlling retry/skip behavior.
+
+        Returns:
+            ManualRecoveryResult with outcome details.
+
+        Raises:
+            RuntimeError: If no dag_state_store or dag_lease_backend is configured.
+        """
+        if self._dag_state_store is None:
+            raise RuntimeError(
+                "Manual recovery requires a workflow state store. "
+                "Configure workflow_state in your agentapp.yaml."
+            )
+        if getattr(self, "_dag_lease_backend", None) is None:
+            raise RuntimeError(
+                "Manual recovery requires a lease backend. "
+                "Configure dag_lease in your agentapp.yaml."
+            )
+        from agent_app.runtime.recovery_service import RecoveryService
+
+        service = RecoveryService(
+            app=self,
+            state_store=self._dag_state_store,
+            lease_backend=self._dag_lease_backend,
+            audit_logger=getattr(self, "_audit_logger", None),
+        )
+        return await service.recover_run(
+            workflow=workflow,
+            run_id=run_id,
+            recovered_by=recovered_by,
+            resume_policy=resume_policy,
         )
 
     async def stream(

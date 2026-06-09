@@ -907,3 +907,126 @@
 - LeaseMetrics uses `threading.Lock` — not async-safe for cross-thread mutation
 - Health checks are non-destructive but do not test lease acquire/renew operations
 - Does NOT replace lease renewal, snapshot, compensation, or business-level idempotency
+
+## Phase 16.4: Redis Lease Backend
+
+### RedisWorkflowLeaseBackend
+
+- [x] `RedisWorkflowLeaseBackend` implemented in `agent_app/runtime/lease_redis_backend.py`
+- [x] Implements `WorkflowLeaseBackend` protocol (acquire, renew, release, get, list_expired)
+- [x] Uses atomic Lua scripts for acquire/renew/release (EVALSHA with NOSCRIPT fallback)
+- [x] Lease record stored as JSON with timezone-aware UTC ISO timestamps
+- [x] `lease_token` used for holder verification on renew/release
+- [x] TTL managed via Redis key TTL (EX argument)
+- [x] `allow_steal_expired` policy supported in acquire Lua script
+- [x] Same-holder refresh reuses existing token (detected via holder_id match)
+- [x] `get_run_lease()` returns None for released or missing leases
+- [x] `list_expired_leases()` uses SCAN with prefix matching and expiry filtering
+
+### Health Check
+
+- [x] `health_check()` uses Redis PING for connectivity test
+- [x] Returns `LeaseHealthStatus.HEALTHY` when PING succeeds
+- [x] Returns `LeaseHealthStatus.UNHEALTHY` when PING fails or exception occurs
+- [x] `backend_type` is "redis"
+- [x] `checked_at` is timezone-aware UTC
+- [x] Redis URL sanitized (password hidden) in health details
+- [x] Key prefix included in health details
+- [x] Never raises — exceptions captured in result.error
+
+### Diagnostics
+
+- [x] `diagnostics()` returns `LeaseDiagnostics` with `details` field
+- [x] `details` includes: backend_type, key_prefix, ttl_seconds, allow_steal_expired, redis_url_sanitized, total_lease_keys
+- [x] Redis URL sanitized (password hidden with `***`)
+- [x] Health check integrated into diagnostics
+- [x] Graceful failure handling — scan errors do not raise
+- [x] `LeaseDiagnostics` model extended with `details: dict[str, Any] | None` field
+
+### Configuration
+
+- [x] `DagLeaseConfig` extended with `redis_url: str | None` and `key_prefix: str | None`
+- [x] Validator accepts "redis" as a valid backend type
+- [x] `redis_url` defaults to "redis://localhost:6379/0"
+- [x] `key_prefix` defaults to "agent_app:dag_lease" (in backend/factory)
+- [x] Old configs (state_store, memory, sqlite) continue to work without changes
+- [x] `create_lease_backend()` extended with `redis_url`, `key_prefix`, `ttl_seconds` params
+- [x] `WorkflowExecutor._build_lease_backend()` routes "redis" to Redis backend
+- [x] Redis extra is optional — `pip install -e ".[redis]"` installs `redis>=5.0`
+
+### Optional Dependency Boundary
+
+- [x] Default `pip install -e .` does NOT install redis
+- [x] `pip install -e ".[redis]"` installs redis>=5.0
+- [x] `all` extra includes redis
+- [x] Top-level import of `agent_app` does not require redis
+- [x] `agent_app.config.schema` does not import redis
+- [x] `RedisWorkflowLeaseBackend.__init__` raises `RuntimeError` with clear message when redis not installed
+- [x] Error message: "Redis lease backend requires the redis extra. Install with: pip install -e '.[redis]'"
+
+### Metrics Integration
+
+- [x] Redis backend works with `MetricsWorkflowLeaseBackend` wrapper (Phase 16.3)
+- [x] Acquire success/failure/denied recorded correctly
+- [x] No duplicate metrics logic in Redis backend itself
+
+### Key Prefix Isolation
+
+- [x] Configurable `key_prefix` for multi-tenant isolation
+- [x] Different prefixes produce different Redis keys
+- [x] Default prefix: "agent_app:dag_lease"
+
+### Security
+
+- [x] Redis URL sanitized in health check, diagnostics, and repr
+- [x] Password never exposed in logs, errors, or diagnostics output
+- [x] `lease_token` used for holder verification (prevents cross-worker lease theft)
+
+### Tests
+
+- [x] **89 new Phase 16.4 tests** — all passing
+- [x] Optional dependency boundary (4 tests)
+- [x] FakeRedisClient helper (13 tests)
+- [x] Helper functions (8 tests): utcnow, token generation, URL sanitization, JSON roundtrip
+- [x] Acquire (8 tests): create, deny, same-holder refresh, steal expired, cannot steal when disabled, after release, JSON fields, TTL
+- [x] Renew (6 tests): success, wrong holder, missing key, released, expired, TTL extension
+- [x] Release (5 tests): success, wrong token, missing key, other worker isolation, double release
+- [x] Get (3 tests): active lease, missing, released
+- [x] List expired (3 tests): filtering, empty, released exclusion
+- [x] Health (7 tests): healthy, unhealthy, backend_type, timezone-aware, error populated, key_prefix, no password leak
+- [x] Diagnostics (5 tests): backend_type, URL sanitized, total keys, key_prefix, TTL, graceful failure
+- [x] Config (11 tests): redis parse, key_prefix default, old configs valid, invalid backend, metrics, health, redis extra required, URL default
+- [x] Factory (9 tests): create redis, default URL, memory/sqlite/state_store still work, custom prefix, custom TTL, unknown backend
+- [x] Protocol conformance (4 tests): isinstance check, required methods, health_check, diagnostics
+- [x] Metrics integration (2 tests): wrapped with metrics, denied acquire recorded
+- [x] Key prefix isolation (1 test)
+- [x] Repr (2 tests): no password leak, shows prefix
+
+### Regression Tests
+
+- [x] Full test suite: **1344 passed, 0 failed, 2 warnings**
+- [x] All existing Phase 16.0–16.3 tests pass without modification (except 2 test assertions updated to match new "redis" valid backend)
+- [x] No changes to InMemory, SQLite, or StateStore lease backend behavior
+- [x] `WorkflowLeaseBackend` protocol now has `@runtime_checkable` decorator (no behavior change)
+
+### Documentation
+
+- [x] `CHANGELOG.md` updated with Phase 16.4 section (Added, Current Limitations)
+- [x] `README.md` limitations updated with Phase 16.4 notes
+- [x] `README.md` roadmap updated (Phase 16.4 ✅)
+- [x] `docs/release_checklist_v0.10.md` Phase 16.4 section added (this file)
+
+### Known Limitations (v0.10.0 + Phase 16.4)
+
+- Redis is an optional dependency — not installed by default
+- NOT a distributed lock service — best-effort coordination only
+- No exactly-once guarantee — application must remain idempotent
+- No worker daemon, queue, or scheduler — lease coordination only
+- No Redis Streams / PubSub worker distribution
+- No automatic distributed recovery or self-healing
+- Redis TTL is the only expiry mechanism — clock skew between workers may cause brief double-claim windows
+- Redis unavailability causes lease acquire/renew to fail
+- Metrics wrapper requires Phase 16.3 metrics opt-in
+- Lua scripts use basic ISO timestamp parsing — not full RFC 3339
+- `list_expired_leases` uses SCAN which may miss keys added during iteration (eventual consistency)
+- No Redis cluster / sentinel support — single Redis instance only

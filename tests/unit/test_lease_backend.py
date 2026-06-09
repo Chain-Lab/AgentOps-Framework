@@ -553,7 +553,7 @@ class TestCreateLeaseBackend:
 
     def test_invalid_backend_raises(self):
         with pytest.raises(ValueError, match="Unknown lease backend"):
-            create_lease_backend(backend_type="redis")
+            create_lease_backend(backend_type="etcd")
 
     def test_default_is_state_store(self):
         with pytest.raises(ValueError, match="state_store is required"):

@@ -182,6 +182,20 @@ def build_app(
             db_path=runtime_cfg.workflow_state_path,
         )
 
+    # -- DAG lease backend (Phase 15/16) --
+    dag_lease_backend: Any = None
+    if runtime_cfg and getattr(runtime_cfg, "dag_lease_config", None):
+        from agent_app.runtime.lease_backend import create_lease_backend
+        lease_cfg = runtime_cfg.dag_lease_config
+        dag_lease_backend = create_lease_backend(
+            backend_type=lease_cfg.backend,
+            state_store=dag_state_store,
+            db_path=getattr(lease_cfg, "db_path", None),
+            redis_url=getattr(lease_cfg, "redis_url", None),
+            key_prefix=getattr(lease_cfg, "key_prefix", None),
+            ttl_seconds=getattr(lease_cfg, "ttl_seconds", 300),
+        )
+
     # -- Governance: approval store --
     gov = getattr(config, "governance", None)
     approval_cfg = gov.approvals if gov else None
@@ -309,6 +323,8 @@ def build_app(
         dag_snapshot_config=getattr(runtime_cfg, "dag_snapshot_config", None),
         dag_compensation_config=getattr(runtime_cfg, "dag_compensation_config", None),
         dag_lease_config=getattr(runtime_cfg, "dag_lease_config", None),
+        dag_lease_backend=dag_lease_backend,
+        audit_logger=audit_logger,
     )
 
 

@@ -30,7 +30,7 @@ class TestDagLeaseConfig:
 
     def test_invalid_backend_raises(self):
         with pytest.raises(Exception):  # Pydantic ValidationError
-            DagLeaseConfig(backend="redis")
+            DagLeaseConfig(backend="etcd")
 
     def test_ttl_seconds_must_be_positive(self):
         with pytest.raises(Exception):

@@ -37,6 +37,9 @@ otel = [
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
 ]
+redis = [
+    "redis>=5.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -49,6 +52,7 @@ all = [
     "uvicorn[standard]>=0.29",
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
+    "redis>=5.0",
 ]
 
 [tool.pytest.ini_options]
@@ -56,6 +60,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "openai_smoke: tests that require OPENAI_API_KEY and call the real OpenAI API (skipped by default)",
+    "redis: tests that require a running Redis server (skipped by default)",
 ]
 
 [tool.ruff]

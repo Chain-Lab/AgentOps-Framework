@@ -544,6 +544,32 @@ All notable changes to Agent App Framework are documented here.
 - DAG workflows — not yet implemented
 - Parallel orchestrator — specialists called serially
 
+## 0.10.0 (Phase 16.4: Redis Lease Backend)
+
+### Added
+
+- **`RedisWorkflowLeaseBackend`** — Redis-backed `WorkflowLeaseBackend` implementation for cross-process / cross-worker lease coordination; uses atomic Lua scripts for acquire/renew/release
+- **Redis Lua scripts** — `_ACQUIRE_SCRIPT`, `_RENEW_SCRIPT`, `_RELEASE_SCRIPT` for atomic compare-and-set operations; loaded via `SCRIPT LOAD` / `EVALSHA`
+- **`RedisWorkflowLeaseBackend.health_check()`** — lightweight PING-based health check; sanitizes Redis URL; never raises
+- **`RedisWorkflowLeaseBackend.diagnostics()`** — collects backend_type, key_prefix, TTL, allow_steal_expired, sanitized URL, and total lease key count
+- **`DagLeaseConfig` extended** — new optional `redis_url`, `key_prefix` fields; validator accepts "redis" backend
+- **`create_lease_backend()` extended** — supports `backend_type="redis"` with `redis_url` and `key_prefix` parameters
+- **`WorkflowExecutor._build_lease_backend()` extended** — routes "redis" backend to `create_lease_backend(backend_type="redis", ...)`
+- **Optional dependency** — Redis is an optional extra (`pip install -e ".[redis]"`); default install does not require redis-py
+- **89 new Phase 16.4 tests** — RedisWorkflowLeaseBackend acquire (8), renew (6), release (5), get (3), list_expired (3), health (7), diagnostics (5), config (11), factory (9), protocol (4), metrics integration (2), key prefix isolation (1), repr (2), FakeRedisClient (13), helpers (8), optional dependency boundary (4)
+
+### Current Limitations
+
+- Redis is an optional dependency — not installed by default
+- NOT a distributed lock service — best-effort coordination only
+- No exactly-once guarantee — application must remain idempotent
+- No worker daemon, queue, or scheduler — lease coordination only
+- No Redis Streams / PubSub worker distribution
+- No automatic distributed recovery or self-healing
+- Redis TTL is the only expiry mechanism — clock skew between workers may cause brief double-claim windows
+- Redis unavailability causes lease acquire/renew to fail
+- Metrics wrapper requires Phase 16.3 metrics opt-in
+
 ## 0.7.0
 
 ### Added

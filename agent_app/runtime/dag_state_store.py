@@ -135,13 +135,40 @@ class InMemoryWorkflowStateStore:
             raise KeyError(f"Workflow run '{run_id}' not found.")
         return self._runs[run_id]
 
-    async def list_runs(self) -> list[WorkflowRunState]:
-        """List all workflow runs.
+    async def list_runs(
+        self,
+        statuses: list[str] | None = None,
+        updated_before: datetime | None = None,
+        workflow_name: str | None = None,
+        limit: int = 100,
+    ) -> list[WorkflowRunState]:
+        """List workflow runs, optionally filtered.
+
+        Phase 16.5: Added filter parameters for recovery scanning.
+
+        Args:
+            statuses: Only include runs with these status values.
+            updated_before: Only include runs updated before this time.
+            workflow_name: Only include runs for this workflow name.
+            limit: Maximum number of runs to return.
 
         Returns:
-            List of all WorkflowRunState objects.
+            List of matching WorkflowRunState objects.
         """
-        return list(self._runs.values())
+        runs: list[WorkflowRunState] = list(self._runs.values())
+
+        if statuses:
+            runs = [r for r in runs if r.status in statuses]
+        if workflow_name:
+            runs = [r for r in runs if r.workflow_name == workflow_name]
+        if updated_before:
+            runs = [r for r in runs if r.updated_at and r.updated_at < updated_before]
+
+        runs.sort(
+            key=lambda r: r.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return runs[:limit]
 
     # -- Node execution states --
 
@@ -974,9 +1001,46 @@ class SQLiteWorkflowStateStore:
             raise KeyError(f"Workflow run '{run_id}' not found.")
         return _row_to_run(row)
 
-    async def list_runs(self) -> list[WorkflowRunState]:
-        """List all workflow runs."""
-        rows = self._conn.execute("SELECT * FROM workflow_runs").fetchall()
+    async def list_runs(
+        self,
+        statuses: list[str] | None = None,
+        updated_before: datetime | None = None,
+        workflow_name: str | None = None,
+        limit: int = 100,
+    ) -> list[WorkflowRunState]:
+        """List workflow runs, optionally filtered.
+
+        Phase 16.5: Added filter parameters for recovery scanning.
+        Uses parameterised SQL with LIMIT to avoid unbounded scans.
+
+        Args:
+            statuses: Only include runs with these status values.
+            updated_before: Only include runs updated before this time.
+            workflow_name: Only include runs for this workflow name.
+            limit: Maximum number of runs to return.
+
+        Returns:
+            List of matching WorkflowRunState objects.
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if statuses:
+            placeholders = ", ".join("?" * len(statuses))
+            conditions.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+        if workflow_name:
+            conditions.append("workflow_name = ?")
+            params.append(workflow_name)
+        if updated_before:
+            conditions.append("updated_at < ?")
+            params.append(updated_before.isoformat())
+
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM workflow_runs{where} ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = self._conn.execute(sql, params).fetchall()
         return [_row_to_run(row) for row in rows]
 
     # -- Node execution states --

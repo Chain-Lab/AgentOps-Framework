@@ -776,6 +776,7 @@ class WorkflowExecutor:
 
         Phase 16.3: Wraps the backend with MetricsWorkflowLeaseBackend
         if metrics are enabled.
+        Phase 16.4: Supports "redis" backend type.
 
         Returns:
             A WorkflowLeaseBackend instance, or None if not configured.
@@ -796,6 +797,14 @@ class WorkflowExecutor:
                 backend = create_lease_backend(
                     backend_type=backend_type,
                     db_path=db_path,
+                )
+            elif backend_type == "redis":
+                redis_url = getattr(cfg, "redis_url", None) or "redis://localhost:6379/0"
+                key_prefix = getattr(cfg, "key_prefix", None) or "agent_app:dag_lease"
+                backend = create_lease_backend(
+                    backend_type="redis",
+                    redis_url=redis_url,
+                    key_prefix=key_prefix,
                 )
             else:
                 return None

@@ -84,6 +84,10 @@ class RuntimeConfig(BaseModel):
         default=None,
         description="DAG compensation persistence configuration (Phase 16.1)",
     )
+    recovery_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Recovery scanner configuration (Phase 16.5)",
+    )
     openai: dict[str, Any] | None = Field(default=None, description="OpenAI backend options")
 
     @model_validator(mode="before")
@@ -293,29 +297,33 @@ class DagLeaseHealthConfig(BaseModel):
 
 
 class DagLeaseConfig(BaseModel):
-    """Configuration for pluggable DAG lease backend (Phase 16.2).
+    """Configuration for pluggable DAG lease backend (Phase 16.2/16.4).
 
     Lease coordination is best-effort and does NOT provide exactly-once
     execution.  The default backend is ``state_store`` which delegates to
-    the configured workflow state store.  Standalone ``memory`` and
-    ``sqlite`` backends are also available.
+    the configured workflow state store.  Standalone ``memory``, ``sqlite``,
+    and ``redis`` backends are also available.
 
     Attributes:
         backend: Lease backend type — ``"state_store"`` (default),
-            ``"memory"``, or ``"sqlite"``.
+            ``"memory"``, ``"sqlite"``, or ``"redis"``.
         db_path: SQLite database path (required when backend="sqlite").
         ttl_seconds: Lease TTL in seconds.  Defaults to 300.
         allow_steal_expired: Whether to allow stealing expired leases.
             Defaults to True.
         renew_before_seconds: Renew the lease this many seconds before
             expiry.  Defaults to 60.
+        redis_url: Redis connection URL (required when backend="redis").
+            Defaults to "redis://localhost:6379/0".
+        key_prefix: Prefix for Redis lease keys (when backend="redis").
+            Defaults to "agent_app:dag_lease".
         metrics: Metrics configuration (Phase 16.3).
         health: Health check configuration (Phase 16.3).
     """
 
     backend: str = Field(
         default="state_store",
-        description="Lease backend: state_store | memory | sqlite",
+        description="Lease backend: state_store | memory | sqlite | redis",
     )
     db_path: str | None = Field(
         default=None,
@@ -335,6 +343,14 @@ class DagLeaseConfig(BaseModel):
         ge=0,
         description="Renew lease this many seconds before expiry",
     )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis URL (required when backend=redis)",
+    )
+    key_prefix: str | None = Field(
+        default=None,
+        description="Redis key prefix (when backend=redis)",
+    )
     metrics: DagLeaseMetricsConfig | None = Field(
         default=None,
         description="Lease backend metrics configuration (Phase 16.3)",
@@ -347,10 +363,10 @@ class DagLeaseConfig(BaseModel):
     @field_validator("backend")
     @classmethod
     def _validate_backend(cls, v: str) -> str:
-        if v not in ("state_store", "memory", "sqlite"):
+        if v not in ("state_store", "memory", "sqlite", "redis"):
             raise ValueError(
                 f"Invalid lease backend '{v}'. "
-                "Must be 'state_store', 'memory', or 'sqlite'."
+                "Must be 'state_store', 'memory', 'sqlite', or 'redis'."
             )
         return v
 

@@ -18,6 +18,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
+try:
+    from typing import runtime_checkable
+except ImportError:
+    def runtime_checkable(cls):  # type: ignore[misc]
+        return cls
+
 from agent_app.runtime.dag_run_state import (
     LeaseAcquireResult,
     LeasePolicy,
@@ -27,6 +33,7 @@ from agent_app.runtime.dag_run_state import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,6 +55,7 @@ def _timedelta_from_seconds(seconds: int) -> timedelta:
 # ---------------------------------------------------------------------------
 
 
+@runtime_checkable
 class WorkflowLeaseBackend(Protocol):
     """Protocol for pluggable workflow lease coordination.
 
@@ -864,20 +872,27 @@ def create_lease_backend(
     backend_type: str = "state_store",
     state_store: object | None = None,
     db_path: str | None = None,
+    redis_url: str | None = None,
+    key_prefix: str | None = None,
+    ttl_seconds: int = 300,
 ) -> WorkflowLeaseBackend:
     """Create a lease backend.
 
     Args:
         backend_type: Backend type — ``"state_store"``, ``"memory"``,
-            or ``"sqlite"``.
+            ``"sqlite"``, or ``"redis"``.
         state_store: Required when ``backend_type="state_store"``.
         db_path: Required when ``backend_type="sqlite"``.
+        redis_url: Redis URL (required when ``backend_type="redis"``).
+        key_prefix: Redis key prefix (optional when ``backend_type="redis"``).
+        ttl_seconds: Default TTL for the backend (used by redis backend).
 
     Returns:
         A ``WorkflowLeaseBackend`` implementation.
 
     Raises:
         ValueError: If ``backend_type`` is unknown or required args are missing.
+        RuntimeError: If ``backend_type="redis"`` but redis extra is not installed.
     """
     if backend_type == "state_store":
         if state_store is None:
@@ -895,9 +910,16 @@ def create_lease_backend(
                 "Provide a path like '.agent_app/workflow_leases.db'."
             )
         return SQLiteWorkflowLeaseBackend(db_path=db_path)
+    if backend_type == "redis":
+        from agent_app.runtime.lease_redis_backend import RedisWorkflowLeaseBackend
+        return RedisWorkflowLeaseBackend(
+            redis_url=redis_url or "redis://localhost:6379/0",
+            key_prefix=key_prefix or "agent_app:dag_lease",
+            ttl_seconds=ttl_seconds,
+        )
     raise ValueError(
         f"Unknown lease backend type '{backend_type}'. "
-        "Supported: 'state_store', 'memory', 'sqlite'."
+        "Supported: 'state_store', 'memory', 'sqlite', 'redis'."
     )
 
 

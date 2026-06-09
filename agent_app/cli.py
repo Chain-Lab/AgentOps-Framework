@@ -56,6 +56,50 @@ def main() -> int:
     )
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
+    # recovery commands (Phase 16.5)
+    recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
+    recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
+
+    scan_parser = recovery_sub.add_parser("scan", help="Scan for recovery candidates")
+    scan_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    scan_parser.add_argument(
+        "--limit", type=int, default=100, help="Max candidates to scan"
+    )
+    scan_parser.add_argument(
+        "--workflow", default=None, help="Filter by workflow name"
+    )
+    scan_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    inspect_parser = recovery_sub.add_parser(
+        "inspect", help="Inspect a single recovery candidate"
+    )
+    inspect_parser.add_argument("run_id", help="Run ID to inspect")
+    inspect_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    inspect_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    recover_parser = recovery_sub.add_parser(
+        "recover", help="Manually recover a workflow run"
+    )
+    recover_parser.add_argument("run_id", help="Run ID to recover")
+    recover_parser.add_argument(
+        "--workflow", required=True, help="Workflow name"
+    )
+    recover_parser.add_argument(
+        "--recovered-by", required=True, help="Identity of the operator"
+    )
+    recover_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    recover_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
     args = parser.parse_args()
 
     if args.command == "eval" and args.eval_command == "run":
@@ -66,6 +110,15 @@ def main() -> int:
 
     if args.command == "trace" and args.trace_command == "show":
         return asyncio.run(_cmd_trace_show(args))
+
+    if args.command == "recovery" and args.recovery_command == "scan":
+        return asyncio.run(_cmd_recovery_scan(args))
+
+    if args.command == "recovery" and args.recovery_command == "inspect":
+        return asyncio.run(_cmd_recovery_inspect(args))
+
+    if args.command == "recovery" and args.recovery_command == "recover":
+        return asyncio.run(_cmd_recovery_recover(args))
 
     parser.print_help()
     return 0
@@ -250,5 +303,185 @@ def _infer_status(events: list) -> str | None:
     return None
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+# -- Recovery commands (Phase 16.5) --
+
+
+async def _cmd_recovery_scan(args: argparse.Namespace) -> int:
+    """Scan for recovery candidates."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.recovery_models import RecoveryScanConfig
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    config = RecoveryScanConfig(limit=args.limit, workflow_name=args.workflow)
+    try:
+        result = await app.scan_recovery_candidates(config)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        _print_recovery_scan_json(result)
+    else:
+        _print_recovery_scan_table(result)
+    return 0
+
+
+async def _cmd_recovery_inspect(args: argparse.Namespace) -> int:
+    """Inspect a single recovery candidate."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        candidate = await app.inspect_recovery_candidate(args.run_id)
+    except KeyError:
+        print(f"Run '{args.run_id}' not found.", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(candidate.model_dump(mode="json"), indent=2, default=str))
+    else:
+        _print_candidate_detail(candidate)
+    return 0
+
+
+async def _cmd_recovery_recover(args: argparse.Namespace) -> int:
+    """Manually recover a workflow run."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        result = await app.recover_workflow_run(
+            workflow=args.workflow,
+            run_id=args.run_id,
+            recovered_by=args.recovered_by,
+        )
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(
+            {
+                "run_id": result.run_id,
+                "attempted": result.attempted,
+                "recovered": result.recovered,
+                "status": result.status,
+                "lease_acquired": result.lease_acquired,
+                "lease_released": result.lease_released,
+                "error": result.error,
+            },
+            indent=2,
+            default=str,
+        ))
+
+    if not result.attempted:
+        print(f"Recovery not attempted: {result.error}", file=sys.stderr)
+        return 1
+
+    if result.recovered:
+        print(f"Recovery succeeded for run '{result.run_id}'. Status: {result.status}")
+        return 0
+    else:
+        print(f"Recovery failed for run '{result.run_id}': {result.error}", file=sys.stderr)
+        return 1
+
+
+def _print_recovery_scan_table(result: Any) -> None:
+    """Print scan results as a table."""
+    if not result.candidates:
+        print(f"Scanned {result.total_scanned} runs. No recovery candidates found.")
+        return
+
+    print(f"Scanned {result.total_scanned} runs. {result.candidate_count} candidates:")
+    print()
+    header = f"{'Run ID':<20} {'Status':<12} {'Age(s)':>8} {'Lease':<12} {'Recommendation'}"
+    print(header)
+    print("-" * len(header))
+    for c in result.candidates:
+        lease_str = "expired" if c.lease_expired else (
+            c.lease_owner or "none"
+        )
+        age = f"{c.age_seconds:.0f}" if c.age_seconds is not None else "?"
+        print(
+            f"{c.run_id:<20} {c.status:<12} {age:>8} {lease_str:<12} "
+            f"{c.recommendation.value}"
+        )
+    if result.errors:
+        print(f"\n{len(result.errors)} non-fatal errors during scan.")
+
+
+def _print_recovery_scan_json(result: Any) -> None:
+    """Print scan results as JSON."""
+    data = {
+        "scanned_at": result.scanned_at.isoformat(),
+        "total_scanned": result.total_scanned,
+        "candidate_count": result.candidate_count,
+        "candidates": [
+            {
+                "run_id": c.run_id,
+                "status": c.status,
+                "age_seconds": c.age_seconds,
+                "reasons": [r.value for r in c.reasons],
+                "recommendation": c.recommendation.value,
+                "lease_present": c.lease_present,
+                "lease_owner": c.lease_owner,
+                "lease_expired": c.lease_expired,
+                "resumable": c.resumable,
+            }
+            for c in result.candidates
+        ],
+        "errors": result.errors,
+    }
+    print(json.dumps(data, indent=2, default=str))
+
+
+def _print_candidate_detail(candidate: Any) -> None:
+    """Print detailed candidate information."""
+    print(f"Run ID:       {candidate.run_id}")
+    print(f"Workflow:     {candidate.workflow_name or 'unknown'}")
+    print(f"Status:       {candidate.status}")
+    print(f"Updated At:   {candidate.updated_at.isoformat() if candidate.updated_at else 'unknown'}")
+    print(f"Age:          {f'{candidate.age_seconds:.0f}s' if candidate.age_seconds is not None else 'unknown'}")
+    print(f"Resumable:    {candidate.resumable}")
+    print()
+    print(f"Reasons:")
+    for r in candidate.reasons:
+        print(f"  - {r.value}")
+    print()
+    print(f"Recommendation: {candidate.recommendation.value}")
+    print()
+    print(f"Lease present:   {candidate.lease_present}")
+    print(f"Lease owner:     {candidate.lease_owner or 'none'}")
+    print(f"Lease expired:   {candidate.lease_expired}")
+    print(f"Lease expires:   {candidate.lease_expires_at.isoformat() if candidate.lease_expires_at else 'n/a'}")
+    if candidate.resume_plan_summary:
+        print()
+        print("Resume plan:")
+        for k, v in candidate.resume_plan_summary.items():
+            print(f"  {k}: {v}")
+    if candidate.recovery_plan_summary:
+        print()
+        print("Recovery plan:")
+        for k, v in candidate.recovery_plan_summary.items():
+            print(f"  {k}: {v}")
+    if candidate.error:
+        print()
+        print(f"Error: {candidate.error}")
