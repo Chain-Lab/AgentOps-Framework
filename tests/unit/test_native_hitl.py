@@ -60,6 +60,16 @@ class FakeRunState:
             "$schemaVersion": "1.10",
             "current_agent": {"name": "test_agent"},
             "original_input": self._original_input,
+            "interruptions": [
+                {
+                    "call_id": item.call_id,
+                    "tool_name": item.tool_name,
+                    "name": item.name,
+                    "arguments": item.arguments,
+                    "tool_lookup_key": item.tool_lookup_key,
+                }
+                for item in self._interruptions
+            ],
             "interruptions_count": len(self._interruptions),
         }
 
@@ -71,6 +81,11 @@ class FakeRunState:
         """Synchronous from_json for testing."""
         return FakeRunState(
             original_input=state_json.get("original_input", ""),
+            interruptions=[
+                FakeToolApprovalItem(**item)
+                for item in state_json.get("interruptions", [])
+                if isinstance(item, dict)
+            ],
         )
 
 
@@ -157,6 +172,35 @@ class FakeRunnerNative:
         self.streamed_calls: list[dict] = []
         self.streamed_calls.append(kwargs)
         return self
+
+
+class FakeRunnerResumesToolCall:
+    """Fake Runner that invokes an approved tool after RunState resume."""
+
+    def __init__(self, interruptions: list[Any] | None = None) -> None:
+        self.run_calls: list[dict] = []
+        self._interruptions = interruptions or [FakeToolApprovalItem(
+            call_id="call_1",
+            tool_name="delete_file",
+            arguments={"path": "/tmp/test"},
+        )]
+
+    async def run(self, native_agent: Any, input: Any = "", **kwargs: Any) -> Any:
+        call_info = dict(kwargs)
+        call_info["input"] = input
+        call_info["native_agent"] = native_agent
+        self.run_calls.append(call_info)
+        if hasattr(input, "get_interruptions"):
+            tool_result = await native_agent.tools[0](path="/tmp/test")
+            return FakeRunResultResumed(
+                final_output=tool_result,
+                tool_calls=[{"name": "delete_file", "result": tool_result}],
+            )
+        return FakeRunResultWithInterruptions(
+            final_output="I'll delete that file for you.",
+            interruptions=list(self._interruptions),
+            input=input if isinstance(input, str) else "",
+        )
 
 
 class FakeRunnerNoInterruptions:
@@ -274,6 +318,136 @@ class TestNativeHITLCompileTool:
         entry = tool_registry.get_entry("query")
         compiled = backend.compile_tool(entry)
         assert getattr(compiled, "_needs_approval", False) is False
+
+    @pytest.mark.asyncio
+    async def test_native_mode_high_risk_sets_needs_approval_without_explicit_flag(
+        self, monkeypatch: Any, tool_registry: ToolRegistry,
+    ) -> None:
+        """In native mode, high-risk tools get needs_approval by policy."""
+        _install_fake_native_sdk(monkeypatch)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        spec = ToolSpec(name="refund.issue", description="Issue refund", risk_level="high")
+
+        async def refund_issue(**kwargs: Any) -> dict:
+            return {"refunded": True}
+
+        tool_registry.register("refund.issue", spec, fn=refund_issue)
+        backend = OpenAIAgentsBackend(
+            tool_registry=tool_registry,
+            hitl_mode="native",
+        )
+        entry = tool_registry.get_entry("refund.issue")
+
+        compiled = backend.compile_tool(entry)
+
+        assert getattr(compiled, "_needs_approval", False) is True
+
+    @pytest.mark.asyncio
+    async def test_native_mode_approved_context_does_not_re_gate_high_risk_tool(
+        self, monkeypatch: Any, tool_registry: ToolRegistry,
+    ) -> None:
+        """After native SDK approval, framework wrapper executes instead of re-approving."""
+        _install_fake_native_sdk(monkeypatch)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.governance.permission import DefaultPermissionChecker
+        from agent_app.runtime.tool_executor import ToolExecutor, _make_native_hitl_approval_marker
+
+        calls: list[dict[str, Any]] = []
+        spec = ToolSpec(name="refund.issue", description="Issue refund", risk_level="high")
+
+        async def refund_issue(**kwargs: Any) -> dict:
+            calls.append(kwargs)
+            return {"refunded": True, **kwargs}
+
+        tool_registry.register("refund.issue", spec, fn=refund_issue)
+        approval_store = InMemoryApprovalStore()
+        executor = ToolExecutor(
+            tool_registry=tool_registry,
+            approval_store=approval_store,
+            permission_checker=DefaultPermissionChecker(),
+            audit_logger=InMemoryAuditLogger(),
+        )
+        context = RunContext(
+            run_id="native-approved-run",
+            user_id="u1",
+            tenant_id="t1",
+            metadata={
+                "_trusted_approved_tool_calls": [
+                    _make_native_hitl_approval_marker(
+                        tool_name="refund.issue",
+                        arguments={"order_id": "ord-1"},
+                        call_id="call_1",
+                    )
+                ]
+            },
+        )
+        backend = OpenAIAgentsBackend(
+            tool_registry=tool_registry,
+            tool_executor=executor,
+            hitl_mode="native",
+        )
+        entry = tool_registry.get_entry("refund.issue")
+        compiled = backend.compile_tool(entry, context=context)
+
+        result = await compiled(order_id="ord-1")
+
+        assert result == {"refunded": True, "order_id": "ord-1"}
+        assert calls == [{"order_id": "ord-1"}]
+        assert await approval_store.list_pending(tenant_id="t1") == []
+
+    @pytest.mark.asyncio
+    async def test_native_mode_approved_context_still_enforces_permissions(
+        self, monkeypatch: Any, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native approval bypasses only approval, not permission checks."""
+        _install_fake_native_sdk(monkeypatch)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.governance.permission import DefaultPermissionChecker
+        from agent_app.runtime.tool_executor import ToolExecutor
+
+        calls: list[dict[str, Any]] = []
+        spec = ToolSpec(
+            name="refund.issue",
+            description="Issue refund",
+            risk_level="high",
+            permissions=["refund:create"],
+        )
+
+        async def refund_issue(**kwargs: Any) -> dict:
+            calls.append(kwargs)
+            return {"refunded": True, **kwargs}
+
+        tool_registry.register("refund.issue", spec, fn=refund_issue)
+        executor = ToolExecutor(
+            tool_registry=tool_registry,
+            approval_store=InMemoryApprovalStore(),
+            permission_checker=DefaultPermissionChecker(),
+            audit_logger=InMemoryAuditLogger(),
+        )
+        context = RunContext(
+            run_id="native-approved-permission-run",
+            user_id="u1",
+            tenant_id="t1",
+            metadata={"approved_tool_calls": ["refund.issue"]},
+        )
+        backend = OpenAIAgentsBackend(
+            tool_registry=tool_registry,
+            tool_executor=executor,
+            hitl_mode="native",
+        )
+        entry = tool_registry.get_entry("refund.issue")
+        compiled = backend.compile_tool(entry, context=context)
+
+        result = await compiled(order_id="ord-1")
+
+        assert result["status"] == "error"
+        assert result["error"]["type"] == "permission_denied"
+        assert calls == []
 
     @pytest.mark.asyncio
     async def test_wrapper_mode_unchanged(
@@ -490,6 +664,51 @@ class TestRunStateSerialization:
 
 class TestNativeResume:
     """Test OpenAIAgentsBackend.resume() for native HITL."""
+
+    @pytest.mark.asyncio
+    async def test_resume_approved_high_risk_tool_executes_without_framework_regate(
+        self, monkeypatch: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native resume marks approved SDK calls so ToolExecutor skips only approval."""
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.governance.permission import DefaultPermissionChecker
+        from agent_app.runtime.tool_executor import ToolExecutor
+
+        runner = FakeRunnerResumesToolCall()
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        approval_store = InMemoryApprovalStore()
+        backend = OpenAIAgentsBackend(
+            tool_registry=tool_registry,
+            tool_executor=ToolExecutor(
+                tool_registry=tool_registry,
+                approval_store=approval_store,
+                permission_checker=DefaultPermissionChecker(),
+                audit_logger=InMemoryAuditLogger(),
+            ),
+            hitl_mode="native",
+        )
+        permitted_context = run_context.model_copy(
+            update={"permissions": ["file:delete"]}
+        )
+
+        first = await backend.run(agent_spec, "delete file", permitted_context)
+        resume_result = await backend.resume(
+            agent_spec=agent_spec,
+            context=permitted_context,
+            backend_state=first.backend_state,
+            approvals=[
+                {"approval_id": first.interruptions[0]["approval_id"], "status": "approved"}
+            ],
+        )
+
+        assert resume_result.status == "completed"
+        assert "'deleted': True" in resume_result.final_output
+        assert "/tmp/test" in resume_result.final_output
+        assert await approval_store.list_pending(tenant_id="t1") == []
 
     @pytest.mark.asyncio
     async def test_resume_success(

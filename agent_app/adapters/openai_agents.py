@@ -23,11 +23,17 @@ from agent_app.core.context import RunContext
 from agent_app.core.result import AppRunResult, WorkflowStep, WorkflowTrace
 from agent_app.core.tool_spec import ToolSpec
 from agent_app.core.workflow import Workflow, WorkflowType
+from agent_app.governance.risk import requires_tool_approval
 from agent_app.observability.collector import NoOpTraceCollector, TraceCollector
 from agent_app.observability.events import RunEventType
 from agent_app.runtime.backends import AgentBackend
 from agent_app.runtime.streaming import StreamEvent, StreamEventType
-from agent_app.runtime.tool_executor import ToolExecutor, ToolExecutionResult, ToolExecutionStatus
+from agent_app.runtime.tool_executor import (
+    ToolExecutor,
+    ToolExecutionResult,
+    ToolExecutionStatus,
+    _make_native_hitl_approval_marker,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +291,7 @@ class OpenAIAgentsBackend:
         agent_spec: AgentSpec,
         context: RunContext | None = None,
         handoffs: list[Any] | None = None,
+        approval_markers: dict[str, list[dict[str, Any]]] | None = None,
     ) -> Any:
         """Convert an :class:`AgentSpec` into an ``agents.Agent`` instance.
 
@@ -303,7 +310,11 @@ class OpenAIAgentsBackend:
             for tool_name in agent_spec.tools:
                 try:
                     entry = self._tool_registry.get_entry(tool_name)
-                    sdk_tools.append(self.compile_tool(entry, context=context))
+                    sdk_tools.append(self.compile_tool(
+                        entry,
+                        context=context,
+                        approval_markers=approval_markers,
+                    ))
                 except KeyError:
                     raise KeyError(
                         f"Tool '{tool_name}' not found in tool registry. "
@@ -345,7 +356,10 @@ class OpenAIAgentsBackend:
         return Agent(**kwargs)
 
     def compile_tool(
-        self, tool_def: Any, context: RunContext | None = None
+        self,
+        tool_def: Any,
+        context: RunContext | None = None,
+        approval_markers: dict[str, list[dict[str, Any]]] | None = None,
     ) -> Any:
         """Wrap a framework tool (ToolSpec entry or callable) as an SDK function_tool.
 
@@ -379,7 +393,7 @@ class OpenAIAgentsBackend:
         needs_approval = False
         if self._hitl_mode == "native":
             spec = self._get_tool_spec(tool_def)
-            if spec and getattr(spec, "requires_approval", False):
+            if spec and requires_tool_approval(spec.risk_level, spec.requires_approval):
                 needs_approval = True
 
         # Phase 8: Governance-aware wrapping (wrapper mode always wraps)
@@ -388,10 +402,20 @@ class OpenAIAgentsBackend:
                 # Native mode: SDK handles approval, but framework still
                 # does permission checking via governance wrapper.
                 # The wrapper intercepts BEFORE the SDK sees the call.
-                fn = self._create_governed_tool_wrapper(tool_def, fn, context)
+                fn = self._create_governed_tool_wrapper(
+                    tool_def,
+                    fn,
+                    context,
+                    approval_markers=approval_markers,
+                )
             else:
                 # Wrapper mode: full governance via wrapper
-                fn = self._create_governed_tool_wrapper(tool_def, fn, context)
+                fn = self._create_governed_tool_wrapper(
+                    tool_def,
+                    fn,
+                    context,
+                    approval_markers=approval_markers,
+                )
 
         return function_tool(fn, needs_approval=needs_approval)
 
@@ -412,6 +436,7 @@ class OpenAIAgentsBackend:
         tool_def: Any,
         original_fn: Callable[..., Any],
         context: RunContext,
+        approval_markers: dict[str, list[dict[str, Any]]] | None = None,
     ) -> Callable[..., Any]:
         """Create a governance-aware wrapper around a tool callable.
 
@@ -434,6 +459,9 @@ class OpenAIAgentsBackend:
         # Resolve the tool name and spec
         tool_name = self._resolve_tool_name(tool_def)
 
+        if approval_markers is None:
+            approval_markers = _approval_markers_from_context(context)
+
         if asyncio.iscoroutinefunction(original_fn):
             # Async tool — return async wrapper
             async def governed_async_tool(**kwargs: Any) -> Any:
@@ -443,6 +471,7 @@ class OpenAIAgentsBackend:
                     arguments=kwargs,
                     context=context,
                     is_async=True,
+                    approval_markers=approval_markers,
                 )
             return governed_async_tool
         else:
@@ -461,6 +490,7 @@ class OpenAIAgentsBackend:
                                 arguments=kwargs,
                                 context=context,
                                 is_async=False,
+                                approval_markers=approval_markers,
                             ),
                         )
                         return future.result(timeout=30)
@@ -473,6 +503,7 @@ class OpenAIAgentsBackend:
                             arguments=kwargs,
                             context=context,
                             is_async=False,
+                            approval_markers=approval_markers,
                         )
                     )
             return governed_sync_tool
@@ -484,6 +515,7 @@ class OpenAIAgentsBackend:
         arguments: dict[str, Any],
         context: RunContext,
         is_async: bool,
+        approval_markers: dict[str, list[dict[str, Any]]],
     ) -> Any:
         """Execute a tool through the governance pipeline.
 
@@ -510,6 +542,11 @@ class OpenAIAgentsBackend:
             tool_name=tool_name,
             arguments=arguments,
             context=context,
+            approved_tool_call=_pop_approval_marker(
+                approval_markers,
+                tool_name,
+                arguments,
+            ),
         )
 
         if result.status == "completed":
@@ -632,25 +669,40 @@ class OpenAIAgentsBackend:
         if self._hitl_mode == "native":
             sdk_interruptions = getattr(result, "interruptions", None) or []
             if sdk_interruptions:
-                interruptions = [
-                    {
-                        "type": "approval_required",
-                        "approval_id": str(uuid.uuid4()),
-                        "tool_name": getattr(item, "tool_name", getattr(item, "name", "unknown")),
-                        "arguments": getattr(item, "arguments", {}),
-                        "risk_level": "high",
-                        "_sdk_interruption": True,
-                    }
-                    for item in sdk_interruptions
-                ]
+                interruptions = []
+                approval_id_map: dict[str, str] = {}
+                for item in sdk_interruptions:
+                    approval_id = str(uuid.uuid4())
+                    sdk_call_id = str(
+                        getattr(item, "call_id", None)
+                        or getattr(item, "tool_lookup_key", "")
+                    )
+                    if sdk_call_id:
+                        approval_id_map[approval_id] = sdk_call_id
+                    interruptions.append(
+                        {
+                            "type": "approval_required",
+                            "approval_id": approval_id,
+                            "tool_name": getattr(item, "tool_name", getattr(item, "name", "unknown")),
+                            "arguments": getattr(item, "arguments", {}),
+                            "risk_level": "high",
+                            "sdk_call_id": sdk_call_id or None,
+                            "_sdk_interruption": True,
+                        }
+                    )
                 # Serialize RunState
                 try:
                     run_state = result.to_state()
                     backend_state = _serialize_run_state(run_state)
                     backend_state["hitl_mode"] = "native"
                     backend_state["backend"] = "openai"
+                    backend_state["approval_id_map"] = approval_id_map
                 except Exception:
-                    backend_state = {"hitl_mode": "native", "backend": "openai"}
+                    backend_state = {
+                        "hitl_mode": "native",
+                        "backend": "openai",
+                        "approval_id_map": approval_id_map,
+                    }
 
         # -- Determine status --
         status = "completed"
@@ -714,8 +766,12 @@ class OpenAIAgentsBackend:
         backend_state: dict[str, Any] = kwargs.get("backend_state", {})
         approvals: list[dict[str, Any]] = kwargs.get("approvals", [])
 
-        # -- Recompile agent --
-        agent = self.compile_agent(agent_spec, context=context)
+        approval_markers: dict[str, list[dict[str, Any]]] = {}
+        agent = self.compile_agent(
+            agent_spec,
+            context=context,
+            approval_markers=approval_markers,
+        )
 
         # -- Deserialize RunState --
         # backend_state format: {"serialization": "...", "value": {...}, "hitl_mode": "...", "backend": "..."}
@@ -755,18 +811,35 @@ class OpenAIAgentsBackend:
         approved_items: list[Any] = []
         rejected_items: list[Any] = []
 
-        # Build a map: approval_id → decision
+        approval_id_map = backend_state.get("approval_id_map", {})
+        if not isinstance(approval_id_map, dict):
+            approval_id_map = {}
+
+        # Build a map: sdk_call_id → decision
         decision_map: dict[str, str] = {}
         for apv in approvals:
-            apv_id = apv.get("approval_id", "")
+            apv_id = str(apv.get("approval_id", ""))
+            sdk_call_id = str(approval_id_map.get(apv_id, apv_id))
             apv_status = apv.get("status", "pending")
-            decision_map[apv_id] = apv_status
+            decision_map[sdk_call_id] = apv_status
 
         for item in sdk_interruptions:
             call_id = getattr(item, "call_id", None) or getattr(item, "tool_lookup_key", "")
             decision = decision_map.get(str(call_id), "pending")
             if decision == "approved":
                 approved_items.append(item)
+                tool_name = getattr(
+                    item,
+                    "tool_name",
+                    getattr(item, "name", "unknown"),
+                )
+                approval_markers.setdefault(tool_name, []).append(
+                    _make_native_hitl_approval_marker(
+                        tool_name=tool_name,
+                        arguments=getattr(item, "arguments", {}) or {},
+                        call_id=str(call_id) if call_id else None,
+                    )
+                )
             elif decision == "rejected":
                 rejected_items.append(item)
 
@@ -1394,6 +1467,37 @@ class OpenAIAgentsBackend:
 def _uid() -> str:
     """Generate a short unique ID for trace steps."""
     return uuid.uuid4().hex[:12]
+
+
+def _approval_markers_from_context(
+    context: RunContext,
+) -> dict[str, list[dict[str, Any]]]:
+    """Extract internal trusted approval markers from context metadata."""
+    markers: dict[str, list[dict[str, Any]]] = {}
+    raw_markers = context.metadata.get("_trusted_approved_tool_calls", [])
+    if not isinstance(raw_markers, list):
+        return markers
+    for raw_marker in raw_markers:
+        if not isinstance(raw_marker, dict):
+            continue
+        tool_name = raw_marker.get("tool_name")
+        if not isinstance(tool_name, str):
+            continue
+        markers.setdefault(tool_name, []).append(raw_marker)
+    return markers
+
+
+def _pop_approval_marker(
+    approval_markers: dict[str, list[dict[str, Any]]],
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Consume the first trusted approval marker matching a tool call."""
+    markers = approval_markers.get(tool_name, [])
+    for index, marker in enumerate(markers):
+        if marker.get("arguments") == arguments:
+            return markers.pop(index)
+    return None
 
 
 def _extract_output(result: Any) -> str:

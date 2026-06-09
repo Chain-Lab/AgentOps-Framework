@@ -22,10 +22,31 @@ from agent_app.core.context import RunContext
 from agent_app.core.tool_spec import ToolSpec
 from agent_app.governance.audit import AuditEvent, AuditLogger
 from agent_app.governance.permission import PermissionChecker
-from agent_app.governance.risk import RiskLevel
+from agent_app.governance.risk import RiskLevel, requires_tool_approval
 from agent_app.observability.collector import NoOpTraceCollector, TraceCollector
 from agent_app.observability.events import RunEventType
 from agent_app.registry.tool_registry import ToolRegistry
+
+
+_NATIVE_HITL_APPROVAL_TOKEN = object()
+
+
+def _make_native_hitl_approval_marker(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    call_id: str | None = None,
+) -> dict[str, Any]:
+    """Create an internal marker for an SDK-approved native HITL tool call."""
+    marker: dict[str, Any] = {
+        "tool_name": tool_name,
+        "arguments": dict(arguments),
+        "source": "openai_native_hitl",
+        "token": _NATIVE_HITL_APPROVAL_TOKEN,
+    }
+    if call_id is not None:
+        marker["call_id"] = call_id
+    return marker
 
 
 class ToolExecutionStatus(Enum):
@@ -84,6 +105,8 @@ class ToolExecutor:
         tool_name: str,
         arguments: dict[str, Any],
         context: RunContext,
+        *,
+        approved_tool_call: dict[str, Any] | None = None,
     ) -> ToolExecutionResult:
         """Execute a tool with full governance pipeline.
 
@@ -165,7 +188,13 @@ class ToolExecutor:
             )
 
         # -- 3. Approval gate --
-        if spec.requires_approval:
+        if requires_tool_approval(
+            spec.risk_level, spec.requires_approval
+        ) and not _is_tool_call_approval_marker_valid(
+            approved_tool_call,
+            tool_name,
+            arguments,
+        ):
             from agent_app.governance.approval import ApprovalRequest
             approval = ApprovalRequest(
                 approval_id=f"apv_{uuid.uuid4().hex[:12]}",
@@ -292,6 +321,21 @@ class ToolExecutor:
             data=data or {},
         )
         await self.trace_collector.record(event)
+
+
+def _is_tool_call_approval_marker_valid(
+    marker: dict[str, Any] | None,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> bool:
+    """Return True when an internal marker approves this exact tool call."""
+    return (
+        isinstance(marker, dict)
+        and marker.get("tool_name") == tool_name
+        and marker.get("arguments") == arguments
+        and marker.get("source") == "openai_native_hitl"
+        and marker.get("token") is _NATIVE_HITL_APPROVAL_TOKEN
+    )
 
 
 def _safe_serialize(value: Any, max_len: int = 500) -> Any:

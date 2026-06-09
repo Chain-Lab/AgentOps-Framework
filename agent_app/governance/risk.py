@@ -21,3 +21,14 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     EXPIRED = "expired"
+
+
+def requires_tool_approval(
+    risk_level: str | RiskLevel,
+    requires_approval: bool = False,
+) -> bool:
+    """Return True when a tool call must pause for human approval."""
+    if requires_approval:
+        return True
+    normalized = str(risk_level).lower()
+    return normalized in {RiskLevel.HIGH.value, RiskLevel.CRITICAL.value}

@@ -55,6 +55,76 @@ class TestToolExecutor:
         assert result.output == {"result": "ok"}
 
     @pytest.mark.asyncio
+    async def test_high_risk_requires_approval_even_without_explicit_flag(self) -> None:
+        executor, registry, store, _ = _make_executor()
+        _register(registry, "refund.issue", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(run_id="r-high", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute("refund.issue", {"order_id": "123"}, ctx)
+
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result.approval_request is not None
+        assert result.approval_request.status == ApprovalStatus.PENDING
+        assert result.approval_request.risk_level == "high"
+        pending = await store.list_pending(tenant_id="t1")
+        assert [request.tool_name for request in pending] == ["refund.issue"]
+
+    @pytest.mark.asyncio
+    async def test_context_metadata_cannot_bypass_high_risk_approval(self) -> None:
+        executor, registry, _, _ = _make_executor()
+        _register(registry, "refund.issue", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(
+            run_id="r-spoofed",
+            user_id="u1",
+            tenant_id="t1",
+            metadata={"approved_tool_calls": ["refund.issue"]},
+        )
+
+        result = await executor.execute("refund.issue", {"order_id": "123"}, ctx)
+
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result.approval_request is not None
+
+    @pytest.mark.asyncio
+    async def test_critical_risk_requires_approval_even_without_explicit_flag(self) -> None:
+        executor, registry, _, _ = _make_executor()
+        _register(registry, "system.delete", spec_kwargs={"risk_level": "critical"})
+        ctx = RunContext(run_id="r-critical", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute("system.delete", {"path": "/tmp/x"}, ctx)
+
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result.approval_request is not None
+        assert result.approval_request.risk_level == "critical"
+
+    @pytest.mark.asyncio
+    async def test_medium_risk_does_not_require_approval_by_default(self) -> None:
+        executor, registry, store, _ = _make_executor()
+        _register(registry, "order.update_note", spec_kwargs={"risk_level": "medium"})
+        ctx = RunContext(run_id="r-medium", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute("order.update_note", {"note": "safe"}, ctx)
+
+        assert result.status == ToolExecutionStatus.COMPLETED.value
+        assert await store.list_pending(tenant_id="t1") == []
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_overrides_low_risk(self) -> None:
+        executor, registry, _, _ = _make_executor()
+        _register(
+            registry,
+            "account.lookup_sensitive",
+            spec_kwargs={"risk_level": "low", "requires_approval": True},
+        )
+        ctx = RunContext(run_id="r-explicit", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute("account.lookup_sensitive", {"account_id": "a1"}, ctx)
+
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result.approval_request is not None
+        assert result.approval_request.risk_level == "low"
+
+    @pytest.mark.asyncio
     async def test_high_risk_creates_approval(self) -> None:
         executor, registry, store, _ = _make_executor()
         _register(registry, "refund.request", spec_kwargs={
