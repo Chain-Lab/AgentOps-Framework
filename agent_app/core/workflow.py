@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent_app.core.agent_spec import AgentSpec
 
@@ -54,6 +54,14 @@ class Workflow(BaseModel):
     max_agent_calls: int = Field(
         default=5, description="Max specialist agent calls (orchestrator workflows)"
     )
+
+    @field_validator("max_handoffs", "max_agent_calls", mode="before")
+    @classmethod
+    def _non_negative(cls, v: object) -> int:
+        v_int = int(v)
+        if v_int < 0:
+            raise ValueError(f"must be >= 0, got {v_int}")
+        return v_int
 
     @classmethod
     def single(cls, agent: str, name: str = "default") -> Workflow:

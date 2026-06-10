@@ -270,14 +270,14 @@ def build_app(
                 entry=wf_body["entry"],
                 agents=wf_body.get("agents", []),
                 name=wf_name,
-                max_handoffs=wf_body.get("max_handoffs", 3),
+                max_handoffs=max(0, int(wf_body.get("max_handoffs", 3))),
             )
         elif wf_type == "orchestrator":
             wf = Workflow.orchestrator(
                 manager=wf_body.get("entry", wf_name),
                 agents_as_tools=wf_body.get("agents_as_tools", []),
                 name=wf_name,
-                max_agent_calls=wf_body.get("max_agent_calls", 5),
+                max_agent_calls=max(0, int(wf_body.get("max_agent_calls", 5))),
             )
         elif wf_type == "dag":
             wf_retry_cfg = wf_body.get("retry")
