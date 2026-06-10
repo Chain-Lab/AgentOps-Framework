@@ -483,6 +483,91 @@ class TestNativeHITLRun:
     """Test run() with native SDK interruptions."""
 
     @pytest.mark.asyncio
+    async def test_native_interruption_preserves_sdk_call_id(
+        self, monkeypatch: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native interruptions expose SDK call IDs and sanitized arguments."""
+        interruption = FakeToolApprovalItem(
+            call_id="call-delete-1",
+            tool_name="delete_file",
+            arguments={"path": "/tmp/test", "api_token": "secret-token"},
+        )
+        runner = FakeRunnerNative(interruptions=[interruption])
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        backend = OpenAIAgentsBackend(tool_registry=tool_registry, hitl_mode="native")
+        result = await backend.run(agent_spec, "delete file", run_context)
+
+        assert result.status == "interrupted"
+        assert result.interruptions[0]["sdk_call_id"] == "call-delete-1"
+        assert result.interruptions[0]["tool_name"] == "delete_file"
+        assert result.interruptions[0]["arguments"]["api_token"] == "[redacted]"
+        assert result.backend_state["metadata"]["sdk_interruptions"][0]["sdk_call_id"] == "call-delete-1"
+
+    @pytest.mark.asyncio
+    async def test_native_resume_uses_sdk_call_id_mapping(
+        self, monkeypatch: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native resume maps framework approval IDs back to SDK call IDs."""
+        interruption = FakeToolApprovalItem(
+            call_id="call-delete-1",
+            tool_name="delete_file",
+            arguments={"path": "/tmp/test"},
+        )
+        runner = FakeRunnerNative(interruptions=[interruption])
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        backend = OpenAIAgentsBackend(tool_registry=tool_registry, hitl_mode="native")
+        first = await backend.run(agent_spec, "delete file", run_context)
+        resumed = await backend.resume(
+            agent_spec=agent_spec,
+            context=run_context,
+            backend_state=first.backend_state,
+            approvals=[{"approval_id": first.interruptions[0]["approval_id"], "status": "approved"}],
+            interruptions=first.interruptions,
+        )
+
+        assert resumed.status == "completed"
+        assert resumed.final_output == "resumed: file deleted"
+        resume_input = runner.run_calls[-1]["input"]
+        assert hasattr(resume_input, "get_interruptions")
+        assert resume_input.get_interruptions() == []
+
+    @pytest.mark.asyncio
+    async def test_native_resume_rejection_does_not_leave_pending_interruption(
+        self, monkeypatch: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native resume applies rejection decisions using SDK call IDs."""
+        interruption = FakeToolApprovalItem(
+            call_id="call-delete-1",
+            tool_name="delete_file",
+            arguments={"path": "/tmp/test"},
+        )
+        runner = FakeRunnerNative(interruptions=[interruption])
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        backend = OpenAIAgentsBackend(tool_registry=tool_registry, hitl_mode="native")
+        first = await backend.run(agent_spec, "delete file", run_context)
+        resumed = await backend.resume(
+            agent_spec=agent_spec,
+            context=run_context,
+            backend_state=first.backend_state,
+            approvals=[{"approval_id": first.interruptions[0]["approval_id"], "status": "rejected"}],
+            interruptions=first.interruptions,
+            rejection_message="not allowed",
+        )
+
+        assert resumed.status == "completed"
+        resume_input = runner.run_calls[-1]["input"]
+        assert resume_input.get_interruptions() == []
+
+    @pytest.mark.asyncio
     async def test_native_run_detects_interruptions(
         self, monkeypatch: Any, agent_spec: AgentSpec,
         run_context: RunContext, tool_registry: ToolRegistry,

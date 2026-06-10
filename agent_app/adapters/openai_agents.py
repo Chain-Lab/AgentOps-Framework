@@ -26,6 +26,7 @@ from agent_app.core.tool_spec import ToolSpec
 from agent_app.core.workflow import Workflow, WorkflowType
 from agent_app.governance.approval import ApprovalRequest
 from agent_app.governance.risk import requires_tool_approval
+from agent_app.governance.sanitization import sanitize_payload
 from agent_app.observability.collector import NoOpTraceCollector, TraceCollector
 from agent_app.observability.events import RunEventType
 from agent_app.runtime.backends import AgentBackend
@@ -663,19 +664,18 @@ class OpenAIAgentsBackend:
             if sdk_interruptions:
                 interruptions = []
                 approval_id_map: dict[str, str] = {}
+                framework_interruptions: list[dict[str, Any]] = []
+                sdk_metadata: list[dict[str, Any]] = []
                 for item in sdk_interruptions:
-                    approval_id = str(uuid.uuid4())
-                    sdk_call_id = str(
-                        getattr(item, "call_id", None)
-                        or getattr(item, "tool_lookup_key", "")
-                    )
+                    approval_id = f"apv_{uuid.uuid4().hex[:12]}"
+                    sdk_call_id = _sdk_interruption_call_id(item)
                     tool_name = getattr(
                         item,
                         "tool_name",
                         getattr(item, "name", "unknown"),
                     )
-                    arguments = _normalize_tool_arguments(
-                        getattr(item, "arguments", {})
+                    arguments = sanitize_payload(
+                        _normalize_tool_arguments(getattr(item, "arguments", {}))
                     )
                     if self._approval_store is not None:
                         await self._approval_store.create(ApprovalRequest(
@@ -687,10 +687,19 @@ class OpenAIAgentsBackend:
                             risk_level="high",
                             requested_by=context.user_id,
                             tenant_id=context.tenant_id,
+                            metadata={
+                                "sdk_call_id": sdk_call_id,
+                                "argument_keys": sorted(arguments.keys()),
+                            },
                         ))
                     if sdk_call_id:
                         approval_id_map[approval_id] = sdk_call_id
-                    interruptions.append(
+                    sdk_metadata.append({
+                        "approval_id": approval_id,
+                        "sdk_call_id": sdk_call_id,
+                        "tool_name": tool_name,
+                    })
+                    framework_interruptions.append(
                         {
                             "type": "approval_required",
                             "approval_id": approval_id,
@@ -701,6 +710,7 @@ class OpenAIAgentsBackend:
                             "_sdk_interruption": True,
                         }
                     )
+                interruptions = framework_interruptions
                 # Serialize RunState
                 try:
                     run_state = result.to_state()
@@ -708,11 +718,17 @@ class OpenAIAgentsBackend:
                     backend_state["hitl_mode"] = "native"
                     backend_state["backend"] = "openai"
                     backend_state["approval_id_map"] = approval_id_map
+                    backend_state.setdefault("metadata", {})
+                    backend_state["metadata"]["sdk_interruptions"] = sdk_metadata
                 except Exception:
                     backend_state = {
                         "hitl_mode": "native",
                         "backend": "openai",
                         "approval_id_map": approval_id_map,
+                        "metadata": {
+                            "sdk_interruptions": sdk_metadata,
+                            "resumable": False,
+                        },
                     }
 
         # -- Determine status --
@@ -776,6 +792,12 @@ class OpenAIAgentsBackend:
 
         backend_state: dict[str, Any] = kwargs.get("backend_state", {})
         approvals: list[dict[str, Any]] = kwargs.get("approvals", [])
+        framework_interruptions: list[dict[str, Any]] = kwargs.get("interruptions", [])
+        if not framework_interruptions:
+            framework_interruptions = backend_state.get("metadata", {}).get(
+                "sdk_interruptions",
+                [],
+            )
 
         approval_markers: dict[str, list[dict[str, Any]]] = {}
         agent = self.compile_agent(
@@ -826,17 +848,15 @@ class OpenAIAgentsBackend:
         if not isinstance(approval_id_map, dict):
             approval_id_map = {}
 
-        # Build a map: sdk_call_id → decision
-        decision_map: dict[str, str] = {}
-        for apv in approvals:
-            apv_id = str(apv.get("approval_id", ""))
-            sdk_call_id = str(approval_id_map.get(apv_id, apv_id))
-            apv_status = apv.get("status", "pending")
-            decision_map[sdk_call_id] = apv_status
+        decision_map = _build_sdk_decision_map(
+            approvals,
+            framework_interruptions,
+            approval_id_map,
+        )
 
         for item in sdk_interruptions:
-            call_id = getattr(item, "call_id", None) or getattr(item, "tool_lookup_key", "")
-            decision = decision_map.get(str(call_id), "pending")
+            call_id = _sdk_interruption_call_id(item)
+            decision = decision_map.get(call_id, "pending")
             if decision == "approved":
                 approved_items.append(item)
                 tool_name = getattr(
@@ -1498,6 +1518,39 @@ def _approval_markers_from_context(
             continue
         markers.setdefault(tool_name, []).append(raw_marker)
     return markers
+
+
+def _sdk_interruption_call_id(item: Any) -> str:
+    """Return a stable SDK interruption identifier."""
+    value = getattr(item, "call_id", None) or getattr(item, "tool_lookup_key", None)
+    return str(value or "")
+
+
+def _build_sdk_decision_map(
+    approvals: list[dict[str, Any]],
+    interruptions: list[dict[str, Any]],
+    approval_id_map: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Map SDK call IDs to approval decisions."""
+    framework_to_status = {
+        str(item.get("approval_id", "")): str(item.get("status", "pending"))
+        for item in approvals
+    }
+    decision_map: dict[str, str] = {}
+    for interruption in interruptions:
+        approval_id = str(interruption.get("approval_id", ""))
+        sdk_call_id = str(interruption.get("sdk_call_id", ""))
+        if sdk_call_id and approval_id in framework_to_status:
+            decision_map[sdk_call_id] = framework_to_status[approval_id]
+    if approval_id_map:
+        for approval_id, sdk_call_id in approval_id_map.items():
+            if approval_id in framework_to_status:
+                decision_map[str(sdk_call_id)] = framework_to_status[approval_id]
+    for item in approvals:
+        approval_id = str(item.get("approval_id", ""))
+        if approval_id and approval_id not in decision_map:
+            decision_map.setdefault(approval_id, str(item.get("status", "pending")))
+    return decision_map
 
 
 def _normalize_tool_arguments(value: Any) -> dict[str, Any]:
