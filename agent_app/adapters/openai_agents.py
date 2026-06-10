@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import time
 import uuid
 from typing import Any, AsyncGenerator, Callable
@@ -23,6 +24,7 @@ from agent_app.core.context import RunContext
 from agent_app.core.result import AppRunResult, WorkflowStep, WorkflowTrace
 from agent_app.core.tool_spec import ToolSpec
 from agent_app.core.workflow import Workflow, WorkflowType
+from agent_app.governance.approval import ApprovalRequest
 from agent_app.governance.risk import requires_tool_approval
 from agent_app.observability.collector import NoOpTraceCollector, TraceCollector
 from agent_app.observability.events import RunEventType
@@ -189,17 +191,7 @@ def _interruption_to_approval_request(
     tool_name = getattr(interruption, "tool_name", None) or getattr(
         interruption, "name", "unknown"
     )
-    arguments: dict[str, Any] = {}
-    if hasattr(interruption, "arguments"):
-        raw_args = interruption.arguments
-        if isinstance(raw_args, dict):
-            arguments = raw_args
-        elif isinstance(raw_args, str):
-            import json
-            try:
-                arguments = json.loads(raw_args)
-            except (json.JSONDecodeError, TypeError):
-                arguments = {"_raw": raw_args}
+    arguments = _normalize_tool_arguments(getattr(interruption, "arguments", {}))
 
     return {
         "approval_id": str(uuid.uuid4()),
@@ -677,14 +669,33 @@ class OpenAIAgentsBackend:
                         getattr(item, "call_id", None)
                         or getattr(item, "tool_lookup_key", "")
                     )
+                    tool_name = getattr(
+                        item,
+                        "tool_name",
+                        getattr(item, "name", "unknown"),
+                    )
+                    arguments = _normalize_tool_arguments(
+                        getattr(item, "arguments", {})
+                    )
+                    if self._approval_store is not None:
+                        await self._approval_store.create(ApprovalRequest(
+                            approval_id=approval_id,
+                            run_id=context.run_id,
+                            agent_name=agent_spec.name,
+                            tool_name=tool_name,
+                            arguments=arguments,
+                            risk_level="high",
+                            requested_by=context.user_id,
+                            tenant_id=context.tenant_id,
+                        ))
                     if sdk_call_id:
                         approval_id_map[approval_id] = sdk_call_id
                     interruptions.append(
                         {
                             "type": "approval_required",
                             "approval_id": approval_id,
-                            "tool_name": getattr(item, "tool_name", getattr(item, "name", "unknown")),
-                            "arguments": getattr(item, "arguments", {}),
+                            "tool_name": tool_name,
+                            "arguments": arguments,
                             "risk_level": "high",
                             "sdk_call_id": sdk_call_id or None,
                             "_sdk_interruption": True,
@@ -836,7 +847,9 @@ class OpenAIAgentsBackend:
                 approval_markers.setdefault(tool_name, []).append(
                     _make_native_hitl_approval_marker(
                         tool_name=tool_name,
-                        arguments=getattr(item, "arguments", {}) or {},
+                        arguments=_normalize_tool_arguments(
+                            getattr(item, "arguments", {})
+                        ),
                         call_id=str(call_id) if call_id else None,
                     )
                 )
@@ -1487,15 +1500,33 @@ def _approval_markers_from_context(
     return markers
 
 
+def _normalize_tool_arguments(value: Any) -> dict[str, Any]:
+    """Normalize SDK tool-call arguments to a dict for storage and matching."""
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {"_raw": value}
+        if isinstance(decoded, dict):
+            return dict(decoded)
+        return {"_raw": decoded}
+    if value is None:
+        return {}
+    return {"_raw": value}
+
+
 def _pop_approval_marker(
     approval_markers: dict[str, list[dict[str, Any]]],
     tool_name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Consume the first trusted approval marker matching a tool call."""
+    normalized_arguments = _normalize_tool_arguments(arguments)
     markers = approval_markers.get(tool_name, [])
     for index, marker in enumerate(markers):
-        if marker.get("arguments") == arguments:
+        if _normalize_tool_arguments(marker.get("arguments")) == normalized_arguments:
             return markers.pop(index)
     return None
 

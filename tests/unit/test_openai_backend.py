@@ -812,12 +812,18 @@ class FakeToolExecutor:
         self.execute_calls: list[dict] = []
 
     async def execute(
-        self, tool_name: str, arguments: dict[str, Any], context: Any
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: Any,
+        *,
+        approved_tool_call: dict[str, Any] | None = None,
     ) -> FakeToolExecutionResult:
         self.execute_calls.append({
             "tool_name": tool_name,
             "arguments": arguments,
             "context": context,
+            "approved_tool_call": approved_tool_call,
         })
         if self.force_status == "interrupted":
             approval = self.force_approval or FakeApprovalRequest(

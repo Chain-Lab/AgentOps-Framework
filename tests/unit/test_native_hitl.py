@@ -711,6 +711,57 @@ class TestNativeResume:
         assert await approval_store.list_pending(tenant_id="t1") == []
 
     @pytest.mark.asyncio
+    async def test_resume_matches_sdk_json_string_arguments(
+        self, monkeypatch: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """Native resume accepts SDK approval items whose arguments are JSON strings."""
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.governance.permission import DefaultPermissionChecker
+        from agent_app.runtime.tool_executor import ToolExecutor
+
+        runner = FakeRunnerResumesToolCall(interruptions=[
+            FakeToolApprovalItem(
+                call_id="call_1",
+                tool_name="delete_file",
+                arguments='{"path": "/tmp/test"}',
+            )
+        ])
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+        approval_store = InMemoryApprovalStore()
+        backend = OpenAIAgentsBackend(
+            tool_registry=tool_registry,
+            tool_executor=ToolExecutor(
+                tool_registry=tool_registry,
+                approval_store=approval_store,
+                permission_checker=DefaultPermissionChecker(),
+                audit_logger=InMemoryAuditLogger(),
+            ),
+            hitl_mode="native",
+        )
+        permitted_context = run_context.model_copy(
+            update={"permissions": ["file:delete"]}
+        )
+
+        first = await backend.run(agent_spec, "delete file", permitted_context)
+        resume_result = await backend.resume(
+            agent_spec=agent_spec,
+            context=permitted_context,
+            backend_state=first.backend_state,
+            approvals=[
+                {"approval_id": first.interruptions[0]["approval_id"], "status": "approved"}
+            ],
+        )
+
+        assert resume_result.status == "completed"
+        assert "'deleted': True" in resume_result.final_output
+        assert "/tmp/test" in resume_result.final_output
+        assert await approval_store.list_pending(tenant_id="t1") == []
+
+    @pytest.mark.asyncio
     async def test_resume_success(
         self, monkeypatch: Any, agent_spec: AgentSpec,
         run_context: RunContext, tool_registry: ToolRegistry,
@@ -917,8 +968,58 @@ class TestAppIntegrationNativeHITL:
         from agent_app.adapters.openai_agents import OpenAIAgentsBackend
         from agent_app.core.app import AgentApp
         from agent_app.runtime.run_state_store import InMemoryRunStateStore
-        from agent_app.runtime.run_state import RunStateStatus
+        from agent_app.governance.approval import InMemoryApprovalStore
 
+        run_state_store = InMemoryRunStateStore()
+        approval_store = InMemoryApprovalStore()
+        backend = OpenAIAgentsBackend(
+            agent_registry=_make_agent_registry(agent_spec),
+            tool_registry=tool_registry,
+            hitl_mode="native",
+        )
+        app = AgentApp(
+            registry=_bundle(
+                _make_agent_registry(agent_spec),
+                tool_registry,
+                _make_workflow_registry(),
+            ),
+            backend=backend,
+            run_state_store=run_state_store,
+            approval_store=approval_store,
+        )
+
+        # First run — interrupted
+        first = await app.run(agent=agent_spec.name, input="delete file")
+        assert first.status == "interrupted"
+        run_id = first.run_id
+
+        pending = await approval_store.list_pending(tenant_id="default")
+        assert [request.approval_id for request in pending] == [
+            first.interruptions[0]["approval_id"]
+        ]
+        assert pending[0].tool_name == "delete_file"
+        assert pending[0].arguments == {"path": "/tmp/test"}
+
+        # Approve and resume
+        await app.approve(first.interruptions[0]["approval_id"], "manager")
+        resumed = await app.resume(run_id)
+
+        assert resumed.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_agentapp_resume_dispatches_to_backend_with_sqlite_approval_store(
+        self, monkeypatch: Any, tmp_path: Any, agent_spec: AgentSpec,
+        run_context: RunContext, tool_registry: ToolRegistry,
+    ) -> None:
+        """AgentApp.resume() handles approval status strings from SQLiteApprovalStore."""
+        runner = FakeRunnerNative()
+        _install_fake_native_sdk(monkeypatch, runner=runner)
+        from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+        from agent_app.core.app import AgentApp
+        from agent_app.runtime.approval_store import SQLiteApprovalStore
+        from agent_app.runtime.run_state_store import InMemoryRunStateStore
+
+        approval_store = SQLiteApprovalStore(str(tmp_path / "approvals.db"))
         run_state_store = InMemoryRunStateStore()
         backend = OpenAIAgentsBackend(
             agent_registry=_make_agent_registry(agent_spec),
@@ -933,17 +1034,12 @@ class TestAppIntegrationNativeHITL:
             ),
             backend=backend,
             run_state_store=run_state_store,
-            approval_store=_make_approval_store(),
+            approval_store=approval_store,
         )
 
-        # First run — interrupted
         first = await app.run(agent=agent_spec.name, input="delete file")
-        assert first.status == "interrupted"
-        run_id = first.run_id
-
-        # Approve and resume
         await app.approve(first.interruptions[0]["approval_id"], "manager")
-        resumed = await app.resume(run_id)
+        resumed = await app.resume(first.run_id)
 
         assert resumed.status == "completed"
 

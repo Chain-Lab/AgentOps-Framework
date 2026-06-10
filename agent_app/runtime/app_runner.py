@@ -110,6 +110,9 @@ class AppRunner:
             dag_lease_config=dag_lease_config,
         )
 
+        if approval_store is not None and hasattr(self.backend, "_approval_store"):
+            self.backend._approval_store = approval_store
+
     def _record_event(
         self,
         event_type: str,

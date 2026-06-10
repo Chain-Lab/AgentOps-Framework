@@ -21,6 +21,14 @@ if TYPE_CHECKING:
     from agent_app.runtime.streaming import StreamEvent
 
 
+def _approval_status_value(status: Any, default: str = "") -> str:
+    """Return an approval status as a plain string across store implementations."""
+    value = getattr(status, "value", status)
+    if value is None:
+        return default
+    return str(value)
+
+
 class AgentApp:
     """Top-level application object that composes registries, config, and runner.
 
@@ -799,7 +807,7 @@ class AgentApp:
             data={
                 "approval_id": approval_id,
                 "tool_name": getattr(req, "tool_name", None),
-                "status": req.status.value if hasattr(req, "status") else "approved",
+                "status": _approval_status_value(req.status, "approved"),
             },
         )
         return req
@@ -833,7 +841,7 @@ class AgentApp:
             data={
                 "approval_id": approval_id,
                 "tool_name": getattr(req, "tool_name", None),
-                "status": req.status.value if hasattr(req, "status") else "rejected",
+                "status": _approval_status_value(req.status, "rejected"),
             },
         )
         return req
@@ -975,7 +983,7 @@ class AgentApp:
                                 req = await self.approval_store.get(apv_id)
                                 approvals.append({
                                     "approval_id": apv_id,
-                                    "status": req.status.value,
+                                    "status": _approval_status_value(req.status),
                                 })
                             except KeyError:
                                 pass
@@ -1033,7 +1041,7 @@ class AgentApp:
                 },
             )
 
-        if req.status.value == "approved":
+        if _approval_status_value(req.status) == "approved":
             return AppRunResult(
                 run_id=run_id,
                 status="completed",
@@ -1042,7 +1050,7 @@ class AgentApp:
                     f"{req.resolved_by}. Execution simulated (Phase 3 stub)."
                 ),
             )
-        if req.status.value == "rejected":
+        if _approval_status_value(req.status) == "rejected":
             return AppRunResult(
                 run_id=run_id,
                 status="completed",
@@ -1073,7 +1081,7 @@ class AgentApp:
             try:
                 req = await self.approval_store.get(apv_id)
                 from agent_app.governance.approval import ApprovalStatus
-                if req.status == ApprovalStatus.PENDING:
+                if _approval_status_value(req.status) == "pending":
                     return True
             except KeyError:
                 continue
@@ -1089,7 +1097,7 @@ class AgentApp:
         for apv_id in approval_ids:
             try:
                 req = await self.approval_store.get(apv_id)
-                if req.status == ApprovalStatus.REJECTED:
+                if _approval_status_value(req.status) == "rejected":
                     return True
             except KeyError:
                 continue
@@ -1103,7 +1111,7 @@ class AgentApp:
         for apv_id in approval_ids:
             try:
                 req = await self.approval_store.get(apv_id)
-                if req.status == ApprovalStatus.REJECTED:
+                if _approval_status_value(req.status) == "rejected":
                     return {"reason": req.reason or "No reason provided."}
             except KeyError:
                 continue
