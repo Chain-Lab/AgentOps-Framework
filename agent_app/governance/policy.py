@@ -211,6 +211,12 @@ _SUPPORTED_THEN_KEYS = frozenset({
 })
 
 _VALID_ACTIONS = {a.value for a in PolicyAction}
+_VALID_DEFAULT_ACTIONS = {"allow", "deny", "require_approval", "audit_only"}
+
+
+class PolicyRuleValidationError(ValueError):
+    """Raised when a policy rule fails validation."""
+    pass
 
 
 class _RuleValidationError(ValueError):
