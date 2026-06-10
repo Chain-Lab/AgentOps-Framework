@@ -645,6 +645,24 @@ All notable changes to Agent App Framework are documented here.
 - Core modules do not import the OpenAI Agents SDK.
 - Dry-run defaults and recovery daemon default-off behavior are unchanged.
 
+## Phase 21: Production-grade Approval Governance Enhancement (0.10.0)
+
+### Added
+
+- **Approval TTL/expiration** — `default_ttl_seconds` config field; `InMemoryApprovalStore` and `SQLiteApprovalStore` check expiry before approve/reject, auto-transition expired approvals to EXPIRED status, and filter expired from `list_pending()`.
+- **Approval rate limiting** — `InMemoryApprovalRateLimiter` with sliding-window per (tenant, user, tool) key; `ToolExecutor` blocks rate-limited approvals with `approval_rate_limited` error and emits `approval.rate_limited` audit event.
+- **Enhanced audit trail** — `approval.expired`, `approval.rate_limited`, and `run.resume_blocked` (with reason) audit events; full context (user_id, tenant_id, tool_name, risk_level).
+- **Real SDK integration test** — marker-gated test (`RUN_OPENAI_AGENTS_INTEGRATION=1`) verifying SDK module loads, backend compiles without API key, and HITL flow with fake SDK injection.
+- **Multi-agent metadata round-trip** — tests verifying approval metadata (argument_keys, requester_context) survives ToolExecutor→store→get→approve cycle; SQLite persistence round-trip; per-agent metadata isolation.
+- **Security: metadata bypass prevention** — `RunContext.metadata` cannot bypass high/critical risk approval gates; only internal `_NATIVE_HITL_APPROVAL_TOKEN` markers are accepted.
+
+### Changed
+
+- `ToolExecutor` accepts `rate_limiter` and `default_ttl_seconds` parameters.
+- `ApprovalConfig` gains `default_ttl_seconds` field.
+- `GovernanceConfig` gains `rate_limit` (max_requests, window_seconds) field.
+- `ApprovalResumeService.approve_and_resume()` checks TTL expiry before resuming.
+
 ## Phase 18: Recovery Observability + Admin API (0.10.0)
 
 ### Added

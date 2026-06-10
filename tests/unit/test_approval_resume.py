@@ -15,6 +15,7 @@ from agent_app.governance.audit import InMemoryAuditLogger
 from agent_app.governance.risk import ApprovalStatus
 from agent_app.runtime.run_state import InterruptedRun
 from agent_app.runtime.run_state_store import InMemoryRunStateStore
+from agent_app.runtime.tool_executor import ToolExecutionStatus
 
 
 class FakeResumeBackend:
@@ -348,3 +349,179 @@ async def test_approve_and_resume_keeps_existing_resume_method_available() -> No
 
     assert resumed.status == "completed"
     assert legacy.status in {"completed", "failed", "interrupted"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 21: Multi-agent metadata round-trip tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_metadata_roundtrip_through_tool_executor_to_store() -> None:
+    """Approval metadata from ToolExecutor survives store persistence and retrieval."""
+    from agent_app.governance.approval import InMemoryApprovalStore
+    from agent_app.governance.audit import InMemoryAuditLogger
+    from agent_app.governance.permission import DefaultPermissionChecker
+    from agent_app.governance.risk import RiskLevel
+    from agent_app.registry.tool_registry import ToolRegistry
+    from agent_app.runtime.tool_executor import ToolExecutor
+    from agent_app.core.tool_spec import ToolSpec
+    from agent_app.core.context import RunContext
+
+    approvals = InMemoryApprovalStore()
+    audit = InMemoryAuditLogger()
+    registry = ToolRegistry()
+    executor = ToolExecutor(
+        tool_registry=registry,
+        approval_store=approvals,
+        permission_checker=DefaultPermissionChecker(),
+        audit_logger=audit,
+    )
+    spec = ToolSpec(
+        name="payment.process",
+        description="Process payment",
+        risk_level=RiskLevel.HIGH,
+        requires_approval=True,
+    )
+    registry.register("payment.process", spec)
+    ctx = RunContext(run_id="run-meta-1", user_id="u1", tenant_id="t1", trace_id="trace-1")
+    result = await executor.execute(
+        "payment.process",
+        {"order_id": "ord-1", "amount": 99.99},
+        ctx,
+    )
+    assert result.status == ToolExecutionStatus.INTERRUPTED.value
+    approval = result.approval_request
+    assert approval is not None
+    assert approval.metadata["argument_keys"] == ["amount", "order_id"]
+    assert approval.metadata["requester_context"]["user_id"] == "u1"
+    assert approval.metadata["requester_context"]["tenant_id"] == "t1"
+    assert approval.metadata["requester_context"]["trace_id"] == "trace-1"
+    # Retrieve from store and verify metadata intact
+    stored = await approvals.get(approval.approval_id)
+    assert stored.metadata == approval.metadata
+    assert stored.metadata["argument_keys"] == ["amount", "order_id"]
+    assert "secret-token" not in str(stored.metadata)
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_metadata_isolation() -> None:
+    """Two agents in the same run have independent approval metadata."""
+    from agent_app.governance.approval import InMemoryApprovalStore
+    from agent_app.governance.permission import DefaultPermissionChecker
+    from agent_app.governance.risk import RiskLevel
+    from agent_app.registry.tool_registry import ToolRegistry
+    from agent_app.runtime.tool_executor import ToolExecutor
+    from agent_app.core.tool_spec import ToolSpec
+    from agent_app.core.context import RunContext
+
+    approvals = InMemoryApprovalStore()
+    registry = ToolRegistry()
+    executor = ToolExecutor(
+        tool_registry=registry,
+        approval_store=approvals,
+        permission_checker=DefaultPermissionChecker(),
+        audit_logger=InMemoryAuditLogger(),
+    )
+    # Agent A tools
+    registry.register("billing.charge", ToolSpec(
+        name="billing.charge", description="Charge",
+        risk_level=RiskLevel.CRITICAL, requires_approval=True,
+    ))
+    # Agent B tools
+    registry.register("shipping.dispatch", ToolSpec(
+        name="shipping.dispatch", description="Dispatch",
+        risk_level=RiskLevel.HIGH, requires_approval=True,
+    ))
+    ctx_a = RunContext(run_id="run-multi", user_id="u1", tenant_id="t1", trace_id="t-a")
+    ctx_b = RunContext(run_id="run-multi", user_id="u2", tenant_id="t2", trace_id="t-b")
+    result_a = await executor.execute("billing.charge", {"amount": 100}, ctx_a)
+    result_b = await executor.execute("shipping.dispatch", {"order_id": "ord-1"}, ctx_b)
+    assert result_a.status == ToolExecutionStatus.INTERRUPTED.value
+    assert result_b.status == ToolExecutionStatus.INTERRUPTED.value
+    apv_a = result_a.approval_request
+    apv_b = result_b.approval_request
+    assert apv_a is not None and apv_b is not None
+    # Metadata isolation by context
+    assert apv_a.metadata["requester_context"]["tenant_id"] == "t1"
+    assert apv_b.metadata["requester_context"]["tenant_id"] == "t2"
+    assert apv_a.metadata["requester_context"]["trace_id"] == "t-a"
+    assert apv_b.metadata["requester_context"]["trace_id"] == "t-b"
+    # Stored approvals are independent
+    stored_a = await approvals.get(apv_a.approval_id)
+    stored_b = await approvals.get(apv_b.approval_id)
+    assert stored_a.tool_name == "billing.charge"
+    assert stored_b.tool_name == "shipping.dispatch"
+    assert stored_a.approval_id != stored_b.approval_id
+
+
+@pytest.mark.asyncio
+async def test_metadata_roundtrip_sqlite_persistence() -> None:
+    """Approval metadata survives SQLite save/load round-trip."""
+    import tempfile
+    from pathlib import Path
+    from agent_app.governance.approval import ApprovalRequest
+    from agent_app.runtime.approval_store import SQLiteApprovalStore
+    from agent_app.governance.risk import RiskLevel, ApprovalStatus
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Path(tmpdir) / "meta_test.db"
+        store = SQLiteApprovalStore(db_path=str(db))
+        original_meta = {
+            "argument_keys": ["order_id", "amount", "nested", "secret"],
+            "requester_context": {"user_id": "u1", "tenant_id": "t1", "trace_id": "trace-99"},
+            "sdk_call_id": "call-abc-123",
+        }
+        req = ApprovalRequest(
+            approval_id="apv_meta_rt",
+            run_id="run-rt",
+            tool_name="payment.charge",
+            arguments={"order_id": "ord-1", "amount": 50.0},
+            risk_level=RiskLevel.CRITICAL,
+            tenant_id="t1",
+            metadata=original_meta,
+        )
+        await store.create(req)
+        # Load in a new store instance (fresh connection)
+        store2 = SQLiteApprovalStore(db_path=str(db))
+        loaded = await store2.get("apv_meta_rt")
+        assert loaded.metadata == original_meta
+        assert loaded.metadata["argument_keys"] == ["order_id", "amount", "nested", "secret"]
+        assert loaded.metadata["requester_context"]["user_id"] == "u1"
+        assert loaded.metadata["sdk_call_id"] == "call-abc-123"
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_approval_metadata_through_store() -> None:
+    """Approval metadata survives create→get→approve→get cycle in store."""
+    from agent_app.governance.approval import InMemoryApprovalStore
+    from agent_app.governance.audit import InMemoryAuditLogger
+    from agent_app.runtime.run_state_store import InMemoryRunStateStore
+    from agent_app.runtime.approval_resume import ApprovalResumeService
+    from agent_app.core.app import AgentApp
+    from agent_app.core.agent_spec import AgentSpec
+
+    approvals = InMemoryApprovalStore()
+    run_states = InMemoryRunStateStore()
+    audit = InMemoryAuditLogger()
+    run_id = "run-meta-audit"
+    meta = {"sdk_call_id": "call-sdk-1", "argument_keys": ["table"]}
+    created = await approvals.create(ApprovalRequest(
+        approval_id="apv_audit",
+        run_id=run_id,
+        tool_name="db.drop",
+        risk_level="critical",
+        tenant_id="t1",
+        metadata=meta,
+    ))
+    # Metadata preserved after creation
+    assert created.metadata == meta
+    # Metadata preserved after retrieval
+    fetched = await approvals.get("apv_audit")
+    assert fetched.metadata == meta
+    assert fetched.metadata["sdk_call_id"] == "call-sdk-1"
+    # Metadata preserved after approval
+    await approvals.approve("apv_audit", approved_by="admin")
+    approved = await approvals.get("apv_audit")
+    assert approved.status == ApprovalStatus.APPROVED
+    assert approved.metadata == meta
+    assert approved.resolved_by == "admin"

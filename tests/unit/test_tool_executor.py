@@ -12,7 +12,7 @@ from agent_app.runtime.approval_store import InMemoryApprovalStore
 from agent_app.runtime.tool_executor import ToolExecutor, ToolExecutionStatus
 
 
-def _make_executor(allow_perms=True, approval_store=None, audit_logger=None):
+def _make_executor(allow_perms=True, approval_store=None, audit_logger=None, rate_limiter=None):
     registry = ToolRegistry()
     store = approval_store or InMemoryApprovalStore()
     checker = DefaultPermissionChecker()
@@ -24,6 +24,7 @@ def _make_executor(allow_perms=True, approval_store=None, audit_logger=None):
         approval_store=store,
         permission_checker=checker,
         audit_logger=logger,
+        rate_limiter=rate_limiter,
     ), registry, store, logger
 
 
@@ -247,3 +248,54 @@ class TestToolExecutor:
         result = await executor.execute("sync.tool", {"x": "hello"}, ctx)
         assert result.status == ToolExecutionStatus.COMPLETED.value
         assert counter[0] == 1
+
+
+class TestRateLimiterIntegration:
+    @pytest.mark.asyncio
+    async def test_rate_limiter_blocks_approval_creation(self) -> None:
+        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        limiter = InMemoryApprovalRateLimiter(max_requests=1, window_seconds=60)
+        executor, registry, store, _ = _make_executor(rate_limiter=limiter)
+        _register(registry, "refund.request", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(run_id="r-rl", user_id="u1", tenant_id="t1")
+
+        # First call: allowed, creates approval
+        result1 = await executor.execute("refund.request", {"order_id": "123"}, ctx)
+        assert result1.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result1.approval_request is not None
+
+        # Second call: rate limited
+        result2 = await executor.execute("refund.request", {"order_id": "456"}, ctx)
+        assert result2.status == ToolExecutionStatus.FAILED.value
+        assert result2.error["type"] == "approval_rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_rate_limiter_audit_event_on_block(self) -> None:
+        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        logger = InMemoryAuditLogger()
+        limiter = InMemoryApprovalRateLimiter(
+            max_requests=1, window_seconds=60, audit_logger=logger
+        )
+        executor, registry, _, _ = _make_executor(rate_limiter=limiter)
+        _register(registry, "refund.request", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(run_id="r-rl-audit", user_id="u1", tenant_id="t1")
+
+        # Exhaust limit
+        await executor.execute("refund.request", {"order_id": "123"}, ctx)
+        await executor.execute("refund.request", {"order_id": "456"}, ctx)
+
+        events = logger.list_events(event_type="approval.rate_limited")
+        assert len(events) == 1
+        assert events[0].tool_name == "refund.request"
+        assert events[0].tenant_id == "t1"
+
+    @pytest.mark.asyncio
+    async def test_no_rate_limiter_creates_approval_normally(self) -> None:
+        """Without rate limiter, high-risk tools still create approval."""
+        executor, registry, store, _ = _make_executor()
+        _register(registry, "refund.request", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(run_id="r-nrl", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute("refund.request", {"order_id": "123"}, ctx)
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        assert result.approval_request is not None

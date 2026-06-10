@@ -95,8 +95,14 @@ class InMemoryApprovalStore:
     when the process exits.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, audit_logger: Any = None) -> None:
         self._store: dict[str, ApprovalRequest] = {}
+        self._audit_logger = audit_logger
+
+    def _is_expired(self, req: ApprovalRequest) -> bool:
+        if req.expires_at is None:
+            return False
+        return datetime.now(timezone.utc) >= req.expires_at
 
     async def create(self, request: ApprovalRequest) -> ApprovalRequest:
         if request.approval_id in self._store:
@@ -121,6 +127,15 @@ class InMemoryApprovalStore:
                 f"Cannot approve: approval '{approval_id}' is already "
                 f"{req.status.value}."
             )
+        if self._is_expired(req):
+            req.status = ApprovalStatus.EXPIRED
+            req.resolved_at = datetime.now(timezone.utc)
+            req.decision_note = reason or "expired"
+            self._store[approval_id] = req
+            await self._log_expired_audit(req)
+            raise ValueError(
+                f"Cannot approve: approval '{approval_id}' has expired."
+            )
         req.status = ApprovalStatus.APPROVED
         req.resolved_at = datetime.now(timezone.utc)
         req.resolved_by = approved_by
@@ -141,6 +156,15 @@ class InMemoryApprovalStore:
                 f"Cannot reject: approval '{approval_id}' is already "
                 f"{req.status.value}."
             )
+        if self._is_expired(req):
+            req.status = ApprovalStatus.EXPIRED
+            req.resolved_at = datetime.now(timezone.utc)
+            req.decision_note = reason or "expired"
+            self._store[approval_id] = req
+            await self._log_expired_audit(req)
+            raise ValueError(
+                f"Cannot reject: approval '{approval_id}' has expired."
+            )
         req.status = ApprovalStatus.REJECTED
         req.resolved_at = datetime.now(timezone.utc)
         req.resolved_by = rejected_by
@@ -152,8 +176,27 @@ class InMemoryApprovalStore:
     async def list_pending(self, tenant_id: str | None = None) -> list[ApprovalRequest]:
         pending = [
             req for req in self._store.values()
-            if req.status == ApprovalStatus.PENDING
+            if req.status == ApprovalStatus.PENDING and not self._is_expired(req)
         ]
         if tenant_id is not None:
             pending = [req for req in pending if req.tenant_id == tenant_id]
         return sorted(pending, key=lambda r: r.created_at)
+
+    async def _log_expired_audit(self, req: ApprovalRequest) -> None:
+        if self._audit_logger is None:
+            return
+        try:
+            from agent_app.governance.audit import AuditEvent
+            event = AuditEvent(
+                event_id=str(uuid.uuid4()),
+                run_id=req.run_id,
+                event_type="approval.expired",
+                user_id=getattr(req, "requested_by", None),
+                tenant_id=req.tenant_id,
+                tool_name=req.tool_name,
+                approval_id=req.approval_id,
+                data={"risk_level": req.risk_level},
+            )
+            await self._audit_logger.log(event)
+        except Exception:
+            pass

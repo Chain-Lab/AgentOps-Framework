@@ -6,6 +6,8 @@ import logging
 import uuid
 from typing import Any
 
+from datetime import datetime, timezone
+
 from agent_app.core.result import AppRunResult
 from agent_app.governance.audit import AuditEvent, AuditLogger
 from agent_app.governance.risk import ApprovalStatus
@@ -64,6 +66,26 @@ class ApprovalResumeService:
                 error={
                     "type": "approval_forbidden",
                     "message": "Approval is not available for this tenant.",
+                },
+            )
+
+        # Phase 21: TTL check — expired approval cannot be resumed
+        if approval.expires_at is not None and datetime.now(timezone.utc) >= approval.expires_at:
+            await self._audit(
+                event_type="run.resume_blocked",
+                run_id=approval.run_id,
+                approval_id=approval.approval_id,
+                tool_name=approval.tool_name,
+                user_id=decided_by,
+                tenant_id=approval.tenant_id,
+                data={"reason": "approval_expired"},
+            )
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "approval_expired",
+                    "message": "This approval has expired. Please request a new approval.",
                 },
             )
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -122,7 +123,17 @@ class SQLiteApprovalStore:
             raise ValueError(
                 f"Cannot approve: approval '{approval_id}' is already {req.status}."
             )
-        from datetime import datetime, timezone
+        if req.expires_at is not None and datetime.now(timezone.utc) >= req.expires_at:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE approvals SET status = ?, resolved_at = ?, decision_note = ? "
+                "WHERE approval_id = ?",
+                (ApprovalStatus.EXPIRED, now, reason or "expired", approval_id),
+            )
+            self._conn.commit()
+            raise ValueError(
+                f"Cannot approve: approval '{approval_id}' has expired."
+            )
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
@@ -146,7 +157,17 @@ class SQLiteApprovalStore:
             raise ValueError(
                 f"Cannot reject: approval '{approval_id}' is already {req.status}."
             )
-        from datetime import datetime, timezone
+        if req.expires_at is not None and datetime.now(timezone.utc) >= req.expires_at:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE approvals SET status = ?, resolved_at = ?, decision_note = ? "
+                "WHERE approval_id = ?",
+                (ApprovalStatus.EXPIRED, now, reason or "expired", approval_id),
+            )
+            self._conn.commit()
+            raise ValueError(
+                f"Cannot reject: approval '{approval_id}' has expired."
+            )
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
@@ -160,8 +181,9 @@ class SQLiteApprovalStore:
         return await self.get(approval_id)
 
     async def list_pending(self, tenant_id: str | None = None) -> list[ApprovalRequest]:
-        query = "SELECT * FROM approvals WHERE status = ?"
-        params: list = [ApprovalStatus.PENDING]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        query = "SELECT * FROM approvals WHERE status = ? AND (expires_at IS NULL OR expires_at >= ?)"
+        params: list = [ApprovalStatus.PENDING, now_iso]
         if tenant_id is not None:
             query += " AND tenant_id = ?"
             params.append(tenant_id)

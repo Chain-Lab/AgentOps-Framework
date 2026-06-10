@@ -196,6 +196,18 @@ class ApprovalConfig(BaseModel):
 
     type: str = Field(default="memory", description="Store type: memory | sqlite")
     path: str | None = Field(default=None, description="SQLite db path")
+    default_ttl_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        description="Default TTL for new approvals in seconds (None = no expiry)",
+    )
+
+
+class RateLimitConfig(BaseModel):
+    """Approval rate limiting configuration (Phase 21)."""
+
+    max_requests: int = Field(default=10, ge=1, description="Max approval requests per window")
+    window_seconds: int = Field(default=60, ge=1, description="Rate limit window in seconds")
 
 
 class AuditConfig(BaseModel):
@@ -492,6 +504,7 @@ class GovernanceConfig(BaseModel):
     approvals: ApprovalConfig = Field(default_factory=ApprovalConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
+    rate_limit: RateLimitConfig | None = Field(default=None, description="Rate limiting config")
 
 
 class AppConfig(BaseModel):

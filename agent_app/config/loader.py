@@ -211,6 +211,17 @@ def build_app(
     else:
         audit_logger = InMemoryAuditLogger()
 
+    # -- Governance: rate limiter (Phase 21) --
+    rate_limiter: Any = None
+    if gov and getattr(gov, "rate_limit", None):
+        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        rl_cfg = gov.rate_limit
+        rate_limiter = InMemoryApprovalRateLimiter(
+            max_requests=getattr(rl_cfg, "max_requests", 10),
+            window_seconds=getattr(rl_cfg, "window_seconds", 60),
+            audit_logger=audit_logger,
+        )
+
     # -- Merge tools from global default registry (registered via @tool) --
     default_tr = get_default_registry()
     for name in default_tr.list():
@@ -293,6 +304,7 @@ def build_app(
         permission_checker=(
             DefaultPermissionChecker() if gov else None
         ),
+        rate_limiter=rate_limiter,
     )
 
     # -- Observability: trace collector (Phase 12) --
@@ -338,6 +350,7 @@ def _create_backend(
     approval_store: Any = None,
     audit_logger: Any = None,
     permission_checker: Any = None,
+    rate_limiter: Any = None,
 ) -> Any:
     """Create the execution backend based on runtime config.
 
@@ -348,6 +361,7 @@ def _create_backend(
         approval_store: Approval store for governance (Phase 8).
         audit_logger: Audit logger for governance (Phase 8).
         permission_checker: Permission checker for governance (Phase 8).
+        rate_limiter: Approval rate limiter (Phase 21).
 
     Returns:
         A backend instance implementing AgentBackend.
@@ -377,6 +391,7 @@ def _create_backend(
                 approval_store=approval_store,
                 permission_checker=permission_checker or DefaultPermissionChecker(),
                 audit_logger=audit_logger,
+                rate_limiter=rate_limiter,
             )
 
         # Phase 10: Extract hitl_mode from openai config

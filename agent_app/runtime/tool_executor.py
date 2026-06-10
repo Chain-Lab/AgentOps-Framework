@@ -95,12 +95,16 @@ class ToolExecutor:
         permission_checker: PermissionChecker,
         audit_logger: AuditLogger,
         trace_collector: TraceCollector | None = None,
+        rate_limiter: Any = None,
+        default_ttl_seconds: int | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.approval_store = approval_store
         self.permission_checker = permission_checker
         self.audit_logger = audit_logger
         self.trace_collector = trace_collector or NoOpTraceCollector()
+        self.rate_limiter = rate_limiter
+        self.default_ttl_seconds = default_ttl_seconds
 
     async def execute(
         self,
@@ -197,7 +201,34 @@ class ToolExecutor:
             tool_name,
             arguments,
         ):
+            # -- Phase 21: rate limit check --
+            if self.rate_limiter is not None:
+                allowed = await self.rate_limiter.check_allowed(
+                    tenant_id=context.tenant_id,
+                    user_id=context.user_id,
+                    tool_name=tool_name,
+                )
+                if not allowed:
+                    await self.audit_logger.log(AuditEvent(
+                        event_id=str(uuid.uuid4()),
+                        run_id=context.run_id,
+                        event_type="approval.rate_limited",
+                        user_id=context.user_id,
+                        tenant_id=context.tenant_id,
+                        tool_name=tool_name,
+                        data={"risk_level": spec.risk_level},
+                    ))
+                    return ToolExecutionResult(
+                        status=ToolExecutionStatus.FAILED.value,
+                        tool_name=tool_name,
+                        error={
+                            "type": "approval_rate_limited",
+                            "message": "Approval request rate limit exceeded. Please try again later.",
+                        },
+                    )
+
             from agent_app.governance.approval import ApprovalRequest
+            from datetime import datetime, timedelta, timezone
             sanitized_arguments = sanitize_payload(arguments)
             metadata = {
                 "argument_keys": sorted(arguments.keys()),
@@ -207,6 +238,9 @@ class ToolExecutor:
                     "trace_id": context.trace_id,
                 },
             }
+            expires_at = None
+            if self.default_ttl_seconds is not None and self.default_ttl_seconds > 0:
+                expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.default_ttl_seconds)
             approval = ApprovalRequest(
                 approval_id=f"apv_{secrets.token_hex(16)}",
                 run_id=context.run_id,
@@ -216,6 +250,7 @@ class ToolExecutor:
                 risk_level=spec.risk_level,
                 tenant_id=context.tenant_id,
                 metadata=metadata,
+                expires_at=expires_at,
             )
             await self.approval_store.create(approval)
             risk_level = str(spec.risk_level).lower()
