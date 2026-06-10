@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -43,6 +43,9 @@ class ApprovalRequest(BaseModel):
     tenant_id: str | None = Field(default=None, description="Tenant ID")
     status: str = Field(default=ApprovalStatus.PENDING, description="Approval status")
     reason: str | None = Field(default=None, description="Rejection reason")
+    decision_note: str | None = Field(default=None, description="Approval decision note")
+    expires_at: datetime | None = Field(default=None, description="Approval expiry time")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Extra metadata")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
@@ -122,6 +125,7 @@ class InMemoryApprovalStore:
         req.resolved_at = datetime.now(timezone.utc)
         req.resolved_by = approved_by
         req.reason = reason
+        req.decision_note = reason
         self._store[approval_id] = req
         return req
 
@@ -141,6 +145,7 @@ class InMemoryApprovalStore:
         req.resolved_at = datetime.now(timezone.utc)
         req.resolved_by = rejected_by
         req.reason = reason
+        req.decision_note = reason
         self._store[approval_id] = req
         return req
 

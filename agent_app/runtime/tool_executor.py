@@ -23,6 +23,7 @@ from agent_app.core.tool_spec import ToolSpec
 from agent_app.governance.audit import AuditEvent, AuditLogger
 from agent_app.governance.permission import PermissionChecker
 from agent_app.governance.risk import RiskLevel, requires_tool_approval
+from agent_app.governance.sanitization import sanitize_payload
 from agent_app.observability.collector import NoOpTraceCollector, TraceCollector
 from agent_app.observability.events import RunEventType
 from agent_app.registry.tool_registry import ToolRegistry
@@ -196,16 +197,41 @@ class ToolExecutor:
             arguments,
         ):
             from agent_app.governance.approval import ApprovalRequest
+            sanitized_arguments = sanitize_payload(arguments)
+            metadata = {
+                "argument_keys": sorted(arguments.keys()),
+                "requester_context": {
+                    "user_id": context.user_id,
+                    "tenant_id": context.tenant_id,
+                    "trace_id": context.trace_id,
+                },
+            }
             approval = ApprovalRequest(
                 approval_id=f"apv_{uuid.uuid4().hex[:12]}",
                 run_id=context.run_id,
                 agent_name=None,
                 tool_name=tool_name,
-                arguments=arguments,
+                arguments=sanitized_arguments,
                 risk_level=spec.risk_level,
                 tenant_id=context.tenant_id,
+                metadata=metadata,
             )
             await self.approval_store.create(approval)
+            risk_level = str(spec.risk_level).lower()
+            if risk_level in {"high", "critical"}:
+                await self.audit_logger.log(AuditEvent(
+                    event_id=str(uuid.uuid4()),
+                    run_id=context.run_id,
+                    event_type="tool.high_risk_intercepted",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    tool_name=tool_name,
+                    approval_id=approval.approval_id,
+                    data={
+                        "risk_level": spec.risk_level,
+                        "argument_keys": sorted(arguments.keys()),
+                    },
+                ))
             await self.audit_logger.log(AuditEvent(
                 event_id=str(uuid.uuid4()),
                 run_id=context.run_id,
@@ -214,7 +240,7 @@ class ToolExecutor:
                 tenant_id=context.tenant_id,
                 tool_name=tool_name,
                 approval_id=approval.approval_id,
-                data={"arguments": arguments, "risk_level": spec.risk_level},
+                data={"arguments": sanitized_arguments, "risk_level": spec.risk_level},
             ))
             # -- Phase 12: tool.approval_required + approval.created --
             await self._record_event(
@@ -262,9 +288,9 @@ class ToolExecutor:
             tenant_id=context.tenant_id,
             tool_name=tool_name,
             data={
-                "arguments": _safe_serialize(arguments),
-                "output": _safe_serialize(output),
-                "error": _safe_serialize(error),
+                "arguments": _safe_serialize(sanitize_payload(arguments)),
+                "output": _safe_serialize(sanitize_payload(output)),
+                "error": _safe_serialize(sanitize_payload(error)),
                 "status": (
                     ToolExecutionStatus.FAILED.value
                     if error

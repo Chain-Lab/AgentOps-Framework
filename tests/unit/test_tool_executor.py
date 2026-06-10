@@ -125,6 +125,52 @@ class TestToolExecutor:
         assert result.approval_request.risk_level == "low"
 
     @pytest.mark.asyncio
+    async def test_approval_request_sanitizes_sensitive_arguments(self) -> None:
+        executor, registry, _, logger = _make_executor()
+        _register(registry, "billing.charge", spec_kwargs={"risk_level": "high"})
+        ctx = RunContext(run_id="r-sensitive", user_id="u1", tenant_id="t1")
+
+        result = await executor.execute(
+            "billing.charge",
+            {
+                "amount": 100,
+                "api_token": "secret-token-123",
+                "nested": {"password": "pw-123"},
+            },
+            ctx,
+        )
+
+        assert result.status == ToolExecutionStatus.INTERRUPTED.value
+        approval = result.approval_request
+        assert approval is not None
+        assert approval.arguments["amount"] == 100
+        assert approval.arguments["api_token"] == "[redacted]"
+        assert approval.arguments["nested"]["password"] == "[redacted]"
+        assert approval.metadata["argument_keys"] == ["amount", "api_token", "nested"]
+        assert approval.metadata["requester_context"] == {
+            "user_id": "u1",
+            "tenant_id": "t1",
+            "trace_id": None,
+        }
+        approval_events = logger.list_events(event_type="tool.approval_required")
+        assert len(approval_events) == 1
+        assert "secret-token-123" not in str(approval_events[0].data)
+        assert "pw-123" not in str(approval_events[0].data)
+
+    @pytest.mark.asyncio
+    async def test_high_risk_interception_audit_event_is_emitted(self) -> None:
+        executor, registry, _, logger = _make_executor()
+        _register(registry, "system.restart", spec_kwargs={"risk_level": "critical"})
+        ctx = RunContext(run_id="r-audit", user_id="u1", tenant_id="t1")
+
+        await executor.execute("system.restart", {"host": "app-1"}, ctx)
+
+        events = logger.list_events(run_id="r-audit", event_type="tool.high_risk_intercepted")
+        assert len(events) == 1
+        assert events[0].tool_name == "system.restart"
+        assert events[0].data["risk_level"] == "critical"
+
+    @pytest.mark.asyncio
     async def test_high_risk_creates_approval(self) -> None:
         executor, registry, store, _ = _make_executor()
         _register(registry, "refund.request", spec_kwargs={

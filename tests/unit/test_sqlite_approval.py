@@ -110,3 +110,29 @@ class TestSQLiteApprovalStore:
         fetched = await store2.get("apv_1")
         assert fetched.tool_name == "refund.request"
         store2.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_approval_store_persists_metadata_decision_note_and_expiry(tmp_path) -> None:
+    from datetime import datetime, timezone
+
+    db_path = tmp_path / "approvals.db"
+    store = SQLiteApprovalStore(str(db_path))
+    expires_at = datetime(2026, 6, 9, 12, 30, tzinfo=timezone.utc)
+    request = ApprovalRequest(
+        approval_id="apv_sql_meta",
+        run_id="run-1",
+        tool_name="billing.charge",
+        arguments={"api_token": "[redacted]"},
+        metadata={"sdk_call_id": "call-1", "argument_keys": ["api_token"]},
+        decision_note="reviewed",
+        expires_at=expires_at,
+    )
+
+    await store.create(request)
+    loaded = await store.get("apv_sql_meta")
+
+    assert loaded.metadata == {"sdk_call_id": "call-1", "argument_keys": ["api_token"]}
+    assert loaded.decision_note == "reviewed"
+    assert loaded.expires_at == expires_at
+    store.close()

@@ -139,3 +139,21 @@ class TestInMemoryApprovalStore:
         pending = await store.list_pending()
         assert pending[0].approval_id == "apv_1"
         assert pending[1].approval_id == "apv_2"
+
+
+def test_approval_request_accepts_metadata_decision_note_and_expiry() -> None:
+    from datetime import datetime, timezone
+
+    expires_at = datetime(2026, 6, 9, 12, 30, tzinfo=timezone.utc)
+    request = ApprovalRequest(
+        approval_id="apv_meta",
+        run_id="run-1",
+        tool_name="billing.charge",
+        metadata={"sdk_call_id": "call-1"},
+        decision_note="checked in admin console",
+        expires_at=expires_at,
+    )
+
+    assert request.metadata == {"sdk_call_id": "call-1"}
+    assert request.decision_note == "checked in admin console"
+    assert request.expires_at == expires_at

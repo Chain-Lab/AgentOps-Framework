@@ -56,6 +56,16 @@ class SQLiteApprovalStore:
             )
             """
         )
+        columns = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(approvals)").fetchall()
+        }
+        if "decision_note" not in columns:
+            self._conn.execute("ALTER TABLE approvals ADD COLUMN decision_note TEXT")
+        if "expires_at" not in columns:
+            self._conn.execute("ALTER TABLE approvals ADD COLUMN expires_at TEXT")
+        if "metadata_json" not in columns:
+            self._conn.execute("ALTER TABLE approvals ADD COLUMN metadata_json TEXT DEFAULT '{}'")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)"
         )
@@ -69,8 +79,9 @@ class SQLiteApprovalStore:
             """
             INSERT INTO approvals
                 (approval_id, run_id, agent_name, tool_name, arguments_json,
-                 risk_level, requested_by, tenant_id, status, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 risk_level, requested_by, tenant_id, status, reason, created_at,
+                 decision_note, expires_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request.approval_id,
@@ -84,6 +95,9 @@ class SQLiteApprovalStore:
                 request.status,
                 request.reason,
                 request.created_at.isoformat(),
+                request.decision_note,
+                request.expires_at.isoformat() if request.expires_at else None,
+                json.dumps(request.metadata),
             ),
         )
         self._conn.commit()
@@ -113,10 +127,10 @@ class SQLiteApprovalStore:
         self._conn.execute(
             """
             UPDATE approvals
-            SET status = ?, resolved_at = ?, resolved_by = ?, reason = ?
+            SET status = ?, resolved_at = ?, resolved_by = ?, reason = ?, decision_note = ?
             WHERE approval_id = ?
             """,
-            (ApprovalStatus.APPROVED, now, approved_by, reason, approval_id),
+            (ApprovalStatus.APPROVED, now, approved_by, reason, reason, approval_id),
         )
         self._conn.commit()
         return await self.get(approval_id)
@@ -137,10 +151,10 @@ class SQLiteApprovalStore:
         self._conn.execute(
             """
             UPDATE approvals
-            SET status = ?, resolved_at = ?, resolved_by = ?, reason = ?
+            SET status = ?, resolved_at = ?, resolved_by = ?, reason = ?, decision_note = ?
             WHERE approval_id = ?
             """,
-            (ApprovalStatus.REJECTED, now, rejected_by, reason, approval_id),
+            (ApprovalStatus.REJECTED, now, rejected_by, reason, reason, approval_id),
         )
         self._conn.commit()
         return await self.get(approval_id)
@@ -164,6 +178,16 @@ class SQLiteApprovalStore:
         created_at = datetime.fromisoformat(row["created_at"])
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
+        resolved_at = datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None
+        if resolved_at is not None and resolved_at.tzinfo is None:
+            resolved_at = resolved_at.replace(tzinfo=timezone.utc)
+        expires_at = (
+            datetime.fromisoformat(row["expires_at"])
+            if "expires_at" in row.keys() and row["expires_at"]
+            else None
+        )
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         return ApprovalRequest(
             approval_id=row["approval_id"],
             run_id=row["run_id"],
@@ -175,7 +199,16 @@ class SQLiteApprovalStore:
             tenant_id=row["tenant_id"],
             status=row["status"],
             reason=row["reason"],
+            decision_note=(
+                row["decision_note"] if "decision_note" in row.keys() else row["reason"]
+            ),
+            expires_at=expires_at,
+            metadata=(
+                json.loads(row["metadata_json"])
+                if "metadata_json" in row.keys() and row["metadata_json"]
+                else {}
+            ),
             created_at=created_at,
-            resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
+            resolved_at=resolved_at,
             resolved_by=row["resolved_by"],
         )
