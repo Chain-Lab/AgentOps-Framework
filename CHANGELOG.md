@@ -645,6 +645,20 @@ All notable changes to Agent App Framework are documented here.
 - Core modules do not import the OpenAI Agents SDK.
 - Dry-run defaults and recovery daemon default-off behavior are unchanged.
 
+## Phase 22: Multi-agent Workflow Runtime v1 (0.10.0)
+
+### Added
+
+- **`max_handoffs` on handoff workflows** — `Workflow.handoff()` accepts `max_handoffs` (default 3); `_run_handoff()` enforces the limit and returns `MaxHandoffsExceeded` error when exceeded.
+- **`max_agent_calls` on orchestrator workflows** — `Workflow.orchestrator()` accepts `max_agent_calls` (default 5); `_run_orchestrator()` caps specialist dispatch and returns `MaxAgentCallsExceeded` error when exceeded.
+- **Orchestrator interruption propagation** — specialist interruptions (approval gates, rate limits) are collected and propagated to the workflow-level `AppRunResult.interruptions`; orchestrator status set to `interrupted` when specialists are interrupted.
+- **22 multi-agent governance propagation tests** — approval, permission, rate-limit, TTL, config loader, and metadata propagation tests verified through handoff and orchestrator workflows.
+
+### Changed
+
+- `_run_orchestrator()` collects `sub_result.interruptions` from each specialist call and sets `all_interruptions` on the workflow result.
+- `AppRunResult` carries `interruptions` list from specialist runs through orchestrator dispatch.
+
 ## Phase 21: Production-grade Approval Governance Enhancement (0.10.0)
 
 ### Added
