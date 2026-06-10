@@ -861,6 +861,84 @@ class AgentApp:
             return []
         return await self.approval_store.list_pending(tenant_id=tenant_id)
 
+    async def approve_and_resume(
+        self,
+        approval_id: str,
+        decided_by: str,
+        decision_note: str | None = None,
+    ) -> Any:
+        """Approve a pending approval and resume its interrupted run."""
+        if self.approval_store is None:
+            raise RuntimeError(
+                "No approval_store configured on this AgentApp. "
+                "Pass approval_store=... when creating the app."
+            )
+        if self._run_state_store is None:
+            from agent_app.core.result import AppRunResult
+            return AppRunResult(
+                run_id="",
+                status="failed",
+                error={
+                    "type": "no_run_state_store",
+                    "message": "Run state is missing or no longer resumable.",
+                },
+            )
+        self._ensure_runner()
+        from agent_app.runtime.approval_resume import ApprovalResumeService
+
+        service = ApprovalResumeService(
+            app=self,
+            approval_store=self.approval_store,
+            run_state_store=self._run_state_store,
+            backend=self._runner.backend,
+            agent_registry=self.agent_registry,
+            audit_logger=getattr(self, "_audit_logger", None),
+        )
+        return await service.approve_and_resume(
+            approval_id=approval_id,
+            decided_by=decided_by,
+            decision_note=decision_note,
+        )
+
+    async def reject_approval(
+        self,
+        approval_id: str,
+        decided_by: str,
+        reason: str | None = None,
+    ) -> Any:
+        """Reject a pending approval without resuming backend execution."""
+        if self.approval_store is None:
+            raise RuntimeError(
+                "No approval_store configured on this AgentApp. "
+                "Pass approval_store=... when creating the app."
+            )
+        if self._run_state_store is None:
+            from agent_app.core.result import AppRunResult
+            return AppRunResult(
+                run_id="",
+                status="failed",
+                error={
+                    "type": "no_run_state_store",
+                    "message": "Run state is missing or no longer resumable.",
+                },
+            )
+        self._ensure_runner()
+        from agent_app.runtime.approval_resume import ApprovalResumeService
+
+        service = ApprovalResumeService(
+            app=self,
+            approval_store=self.approval_store,
+            run_state_store=self._run_state_store,
+            backend=self._runner.backend,
+            agent_registry=self.agent_registry,
+            audit_logger=getattr(self, "_audit_logger", None),
+        )
+        return await service.reject(
+            approval_id=approval_id,
+            decided_by=decided_by,
+            reason=reason,
+        )
+
     async def resume(
         self,
         run_id: str,
