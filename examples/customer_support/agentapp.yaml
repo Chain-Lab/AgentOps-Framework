@@ -15,6 +15,32 @@ governance:
     type: memory
   audit:
     type: memory
+  policies:
+    enabled: true
+    default_action: allow
+    rules:
+      # High-risk refund tools require approval with 30-minute TTL
+      - name: refund_requires_approval
+        when:
+          tool_name: refund.request
+        then:
+          action: require_approval
+          reason: Refund requests require human approval
+          ttl_seconds: 1800
+      # Audit billing queries for compliance
+      - name: billing_audit_only
+        when:
+          tool_name: billing.query
+        then:
+          action: audit_only
+          reason: Billing queries are audit-only per compliance policy
+      # Deny dangerous tools by name prefix
+      - name: deny_dangerous_tools
+        when:
+          tool_name_prefix: dangerous.
+        then:
+          action: deny
+          reason: Dangerous tools are blocked by policy
 
 agents:
   triage:

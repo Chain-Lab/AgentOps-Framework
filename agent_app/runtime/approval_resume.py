@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from agent_app.core.result import AppRunResult
 from agent_app.governance.audit import AuditEvent, AuditLogger
+from agent_app.governance.policy import PolicyEngine, PolicyEvaluationContext
 from agent_app.governance.risk import ApprovalStatus
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class ApprovalResumeService:
         backend: Any,
         agent_registry: Any,
         audit_logger: AuditLogger | None = None,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self.app = app
         self.approval_store = approval_store
@@ -39,6 +41,7 @@ class ApprovalResumeService:
         self.backend = backend
         self.agent_registry = agent_registry
         self.audit_logger = audit_logger
+        self.policy_engine = policy_engine
 
     async def approve_and_resume(
         self,
@@ -118,6 +121,77 @@ class ApprovalResumeService:
                     "message": "Approval is not associated with this interrupted run.",
                 },
             )
+
+        # Phase 23: policy evaluation on resume (after existing safety checks)
+        if self.policy_engine is not None:
+            from agent_app.governance.policy import PolicyAction
+            resume_ctx = PolicyEvaluationContext(
+                run_id=approval.run_id,
+                agent_name=getattr(interrupted, "agent_name", None),
+                tool_name=approval.tool_name,
+                risk_level=str(approval.risk_level),
+                user_id=decided_by,
+                tenant_id=approval.tenant_id,
+            )
+            resume_decision = await self.policy_engine.evaluate_approval_resume(resume_ctx)
+
+            await self._audit(
+                event_type="policy.evaluated",
+                run_id=approval.run_id,
+                approval_id=approval.approval_id,
+                tool_name=approval.tool_name,
+                user_id=decided_by,
+                tenant_id=approval.tenant_id,
+                data={
+                    "action": resume_decision.action.value,
+                    "rule_name": resume_decision.metadata.get("rule_name"),
+                    "reason": resume_decision.reason,
+                },
+            )
+
+            if resume_decision.action == PolicyAction.DENY:
+                await self._audit(
+                    event_type="policy.denied",
+                    run_id=approval.run_id,
+                    approval_id=approval.approval_id,
+                    tool_name=approval.tool_name,
+                    user_id=decided_by,
+                    tenant_id=approval.tenant_id,
+                    data={
+                        "reason": resume_decision.reason,
+                        "rule_name": resume_decision.metadata.get("rule_name"),
+                    },
+                )
+                return AppRunResult(
+                    run_id=approval.run_id,
+                    status="failed",
+                    error={
+                        "type": "policy_denied",
+                        "message": resume_decision.reason or "Resume denied by policy",
+                    },
+                )
+
+            if resume_decision.action == PolicyAction.REQUIRE_APPROVAL:
+                await self._audit(
+                    event_type="policy.approval_required",
+                    run_id=approval.run_id,
+                    approval_id=approval.approval_id,
+                    tool_name=approval.tool_name,
+                    user_id=decided_by,
+                    tenant_id=approval.tenant_id,
+                    data={
+                        "reason": resume_decision.reason,
+                        "rule_name": resume_decision.metadata.get("rule_name"),
+                    },
+                )
+                return AppRunResult(
+                    run_id=approval.run_id,
+                    status="interrupted",
+                    interruptions=interrupted.interruptions,
+                    latency_ms=0,
+                )
+
+            # ALLOW / AUDIT_ONLY → continue to existing approval flow
 
         approval = await self.approval_store.approve(
             approval_id,

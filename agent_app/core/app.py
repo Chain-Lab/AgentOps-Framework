@@ -57,6 +57,7 @@ class AgentApp:
         dag_lease_config: Any = None,
         dag_lease_backend: Any = None,
         audit_logger: Any = None,
+        policy_engine: Any = None,
     ) -> None:
         from agent_app.registry.agent_registry import AgentRegistry
         from agent_app.registry.tool_registry import ToolRegistry
