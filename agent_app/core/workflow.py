@@ -48,6 +48,12 @@ class Workflow(BaseModel):
         default=None,
         description="Optional RoutingPolicy for configurable routing",
     )
+    max_handoffs: int = Field(
+        default=3, description="Max handoff hops allowed (handoff workflows)"
+    )
+    max_agent_calls: int = Field(
+        default=5, description="Max specialist agent calls (orchestrator workflows)"
+    )
 
     @classmethod
     def single(cls, agent: str, name: str = "default") -> Workflow:
@@ -65,6 +71,7 @@ class Workflow(BaseModel):
         entry: str,
         agents: list[str],
         name: str = "handoff",
+        max_handoffs: int = 3,
     ) -> Workflow:
         """Create a handoff (triage) workflow.
 
@@ -72,12 +79,14 @@ class Workflow(BaseModel):
             entry: Triage agent name.
             agents: Candidate handoff target agent names.
             name: Workflow identifier.
+            max_handoffs: Maximum handoff hops allowed (default 3).
         """
         return cls(
             name=name,
             type=WorkflowType.HANDOFF,
             entry=entry,
             agents=agents,
+            max_handoffs=max_handoffs,
         )
 
     @classmethod
@@ -86,6 +95,7 @@ class Workflow(BaseModel):
         manager: str,
         agents_as_tools: list[str],
         name: str = "orchestrator",
+        max_agent_calls: int = 5,
     ) -> Workflow:
         """Create an orchestrator (agents-as-tools) workflow.
 
@@ -93,6 +103,7 @@ class Workflow(BaseModel):
             manager: Manager agent name.
             agents_as_tools: Specialist agent names exposed as tools.
             name: Workflow identifier.
+            max_agent_calls: Maximum specialist agent calls allowed (default 5).
         """
         return cls(
             name=name,
@@ -100,6 +111,7 @@ class Workflow(BaseModel):
             entry=manager,
             agents=[manager, *agents_as_tools],
             config={"agents_as_tools": agents_as_tools},
+            max_agent_calls=max_agent_calls,
         )
 
     @classmethod

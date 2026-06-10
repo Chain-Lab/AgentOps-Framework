@@ -127,6 +127,7 @@ class AgentApp:
         permissions: list[str] | None = None,
         worker: Any = None,
         idempotency_key: str | None = None,
+        metadata: dict[str, object] | None = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a run against the given workflow or agent.
@@ -141,6 +142,7 @@ class AgentApp:
             permissions: Granted permissions.
             worker: Optional worker identity for lease management (Phase 15).
             idempotency_key: Optional idempotency key for duplicate prevention (Phase 15.1).
+            metadata: Optional metadata dict propagated through multi-agent runs (Phase 22).
             **kwargs: Extra forwarded to the backend.
         """
         self._ensure_runner()
@@ -158,7 +160,7 @@ class AgentApp:
                 )
             if wf.type != WorkflowType.SINGLE:
                 return await self._run_workflow(
-                    wf, input, user_id, tenant_id, session_id, permissions, worker, idempotency_key
+                    wf, input, user_id, tenant_id, session_id, permissions, worker, idempotency_key, metadata
                 )
 
         return await self._runner.run(
@@ -172,6 +174,7 @@ class AgentApp:
             permissions=permissions,
             worker=worker,
             idempotency_key=idempotency_key,
+            metadata=metadata,
             **kwargs,
         )
 
@@ -185,6 +188,7 @@ class AgentApp:
         permissions: list[str] | None,
         worker: Any = None,
         idempotency_key: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> Any:
         """Dispatch non-SINGLE workflows.
 
@@ -195,15 +199,19 @@ class AgentApp:
         Phase 15: Accepts optional worker identity for lease management.
 
         Phase 15.1: Accepts optional idempotency_key for duplicate prevention.
+
+        Phase 22: Accepts optional metadata dict for multi-agent propagation.
         """
         from agent_app.core.context import RunContext
 
+        merged_meta = dict(metadata) if metadata else {}
         context = RunContext(
             run_id=str(uuid.uuid4()),
             user_id=user_id,
             tenant_id=tenant_id,
             session_id=session_id,
             permissions=permissions or [],
+            metadata=merged_meta,
         )
 
         # Phase 11: delegate to backend if it supports multi-agent workflows

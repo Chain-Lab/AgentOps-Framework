@@ -160,6 +160,7 @@ class WorkflowExecutor:
             tenant_id=context.tenant_id,
             session_id=context.session_id,
             permissions=permissions or context.permissions,
+            metadata=dict(context.metadata),
         )
         result.latency_ms = int((time.perf_counter() - t0) * 1000)
         return result
@@ -173,7 +174,11 @@ class WorkflowExecutor:
         permissions: list[str] | None,
         t0: float,
     ) -> AppRunResult:
-        """Handoff (triage) workflow — route input to specialist agent."""
+        """Handoff (triage) workflow — route input to specialist agent.
+
+        Supports multi-hop handoff up to ``workflow.max_handoffs``.
+        The handoff depth is tracked in ``context.metadata["_handoff_depth"]``.
+        """
         handoffs: list[dict[str, Any]] = []
         trace = WorkflowTrace(
             workflow_name=workflow.name,
@@ -189,6 +194,10 @@ class WorkflowExecutor:
             workflow_name=workflow.name,
             workflow_type=workflow.type.value,
         )
+
+        # -- Read / initialise handoff depth counter --
+        depth = int(context.metadata.get("_handoff_depth", 0))
+        max_hf = getattr(workflow, "max_handoffs", 3)
 
         # -- Resolve entry agent --
         entry_name = workflow.entry or ""
@@ -233,6 +242,38 @@ class WorkflowExecutor:
         target_name, reason, rule_name = _resolve_handoff_target(
             workflow, input, allowed_targets, self._routing_executor
         )
+
+        # -- Phase 22: max_handoffs enforcement --
+        if target_name != entry_name and depth >= max_hf:
+            await _wf_record_event(
+                self.trace_collector,
+                RunEventType.WORKFLOW_FAILED,
+                context=context,
+                workflow_name=workflow.name,
+                workflow_type=workflow.type.value,
+                status="failed",
+                error={
+                    "type": "MaxHandoffsExceeded",
+                    "message": (
+                        f"Maximum handoff depth ({max_hf}) reached. "
+                        f"Cannot hand off from '{entry_name}' to '{target_name}'."
+                    ),
+                },
+            )
+            return AppRunResult(
+                run_id=context.run_id,
+                status="failed",
+                error={
+                    "type": "MaxHandoffsExceeded",
+                    "message": (
+                        f"Maximum handoff depth ({max_hf}) reached. "
+                        f"Cannot hand off from '{entry_name}' to '{target_name}'."
+                    ),
+                },
+                handoffs=handoffs,
+                workflow_trace=trace,
+                latency_ms=int((time.perf_counter() - t0) * 1000),
+            )
 
         # -- Phase 12: routing.decision --
         await _wf_record_event(
@@ -302,6 +343,7 @@ class WorkflowExecutor:
                     "from_agent": entry_name,
                     "to_agent": target_name,
                     "reason": reason,
+                    "handoff_depth": depth + 1,
                 },
             )
 
@@ -331,6 +373,20 @@ class WorkflowExecutor:
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
 
+        # -- Phase 22: Propagate incremented handoff depth to target --
+        child_meta = dict(context.metadata)
+        child_meta["_handoff_depth"] = depth + (1 if target_name != entry_name else 0)
+        child_context = RunContext(
+            run_id=context.run_id,
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            roles=list(context.roles),
+            permissions=list(permissions or context.permissions),
+            session_id=context.session_id,
+            metadata=child_meta,
+            trace_id=context.trace_id,
+        )
+
         result = await app_runner.run(
             agent=target_name,
             workflow=None,
@@ -339,6 +395,7 @@ class WorkflowExecutor:
             tenant_id=context.tenant_id,
             session_id=context.session_id,
             permissions=permissions or context.permissions,
+            metadata=dict(child_meta),
         )
         result.handoffs = handoffs
         trace.steps.append(WorkflowStep(
@@ -373,7 +430,11 @@ class WorkflowExecutor:
         permissions: list[str] | None,
         t0: float,
     ) -> AppRunResult:
-        """Orchestrator workflow — manager delegates to specialists."""
+        """Orchestrator workflow — manager delegates to specialists.
+
+        Supports ``max_agent_calls`` limit (default 5) to prevent runaway
+        specialist dispatch loops.
+        """
         agent_calls: list[dict[str, Any]] = []
         trace = WorkflowTrace(
             workflow_name=workflow.name,
@@ -381,6 +442,7 @@ class WorkflowExecutor:
             entry_agent=workflow.entry,
         )
         agents_as_tools = workflow.config.get("agents_as_tools", workflow.agents)
+        max_calls = getattr(workflow, "max_agent_calls", 5)
 
         # -- Phase 12: workflow.started --
         await _wf_record_event(
@@ -405,7 +467,39 @@ class WorkflowExecutor:
         matched_decisions = _resolve_orchestrator_targets(
             workflow, input, allowed_targets, self._routing_executor
         )
+        # Phase 22: cap at max_agent_calls
+        matched_decisions = matched_decisions[:max_calls]
         matched_agents = [d.target for d in matched_decisions]
+
+        if len(matched_agents) > max_calls:
+            await _wf_record_event(
+                self.trace_collector,
+                RunEventType.WORKFLOW_FAILED,
+                context=context,
+                workflow_name=workflow.name,
+                workflow_type=workflow.type.value,
+                status="failed",
+                error={
+                    "type": "MaxAgentCallsExceeded",
+                    "message": (
+                        f"Matched {len(matched_agents)} specialists but "
+                        f"max_agent_calls is {max_calls}."
+                    ),
+                },
+            )
+            return AppRunResult(
+                run_id=context.run_id,
+                status="failed",
+                error={
+                    "type": "MaxAgentCallsExceeded",
+                    "message": (
+                        f"Matched {len(matched_agents)} specialists but "
+                        f"max_agent_calls is {max_calls}."
+                    ),
+                },
+                workflow_trace=trace,
+                latency_ms=int((time.perf_counter() - t0) * 1000),
+            )
 
         # -- Record routing decisions --
         for decision in matched_decisions:
@@ -419,6 +513,7 @@ class WorkflowExecutor:
             ))
 
         # -- Call each specialist --
+        all_interruptions: list[dict] = []
         for specialist_name in matched_agents:
             if app_runner is None:
                 break
@@ -441,6 +536,10 @@ class WorkflowExecutor:
                 session_id=context.session_id,
                 permissions=permissions or context.permissions,
             )
+            # Phase 22: Propagate specialist interruptions (e.g. approval gates)
+            if sub_result.interruptions:
+                all_interruptions.extend(sub_result.interruptions)
+
             agent_calls.append({
                 "agent_name": specialist_name,
                 "input": input,
@@ -468,8 +567,12 @@ class WorkflowExecutor:
         # -- Build output --
         if agent_calls:
             names = ", ".join(c["agent_name"] for c in agent_calls)
-            final_output = f"Manager completed task using: {names}"
-            status = "completed"
+            if all_interruptions:
+                final_output = f"Manager delegated to: {names} (interrupted — approval required)"
+                status = "interrupted"
+            else:
+                final_output = f"Manager completed task using: {names}"
+                status = "completed"
         else:
             # No specialist matched — run the manager itself
             if app_runner is not None:
@@ -500,6 +603,7 @@ class WorkflowExecutor:
             run_id=context.run_id,
             status=status if app_runner else "failed",
             final_output=final_output,
+            interruptions=all_interruptions,
             agent_calls=agent_calls,
             workflow_trace=trace,
             latency_ms=int((time.perf_counter() - t0) * 1000),

@@ -154,6 +154,7 @@ class AppRunner:
         app: Any = None,
         permissions: list[str] | None = None,
         idempotency_key: str | None = None,
+        metadata: dict[str, object] | None = None,
         **kwargs: Any,
     ) -> AppRunResult:
         """Run a workflow or single agent.
@@ -168,6 +169,7 @@ class AppRunner:
             app: The parent AgentApp.
             permissions: Granted permissions for this run.
             idempotency_key: Optional idempotency key for duplicate prevention (Phase 15.1).
+            metadata: Optional metadata dict propagated into RunContext (Phase 22).
             **kwargs: Extra forwarded to the backend.
 
         Returns:
@@ -192,7 +194,8 @@ class AppRunner:
         entry_agent_name = self._resolve_entry(workflow=workflow, agent=agent)
         agent_spec = self.agent_registry.get(entry_agent_name)
 
-        # -- Build context --
+        # -- Phase 22: Build context with merged metadata --
+        merged_meta = dict(metadata) if metadata else {}
         context = RunContext(
             run_id=run_id,
             user_id=user_id,
@@ -200,6 +203,7 @@ class AppRunner:
             session_id=session_id,
             permissions=permissions or [],
             trace_id=trace_id,
+            metadata=merged_meta,
         )
 
         # -- Simulate tool call (governance pipeline) --

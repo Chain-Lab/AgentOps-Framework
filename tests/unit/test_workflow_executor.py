@@ -254,3 +254,132 @@ class TestWorkflowExecutorOrchestrator:
         )
         assert result.status == "completed"
         assert len(result.agent_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# max_handoffs enforcement (Phase 22)
+# ---------------------------------------------------------------------------
+
+class TestMaxHandoffs:
+    @pytest.fixture
+    def app(self):
+        from agent_app import AgentApp, AgentSpec, Workflow
+        from agent_app.registry.agent_registry import AgentRegistry
+        from agent_app.registry.tool_registry import ToolRegistry
+        from agent_app.registry.workflow_registry import WorkflowRegistry
+        from agent_app.runtime.session import InMemorySessionStore
+        from agent_app.runtime.approval_store import InMemoryApprovalStore
+
+        bundle = type("B", (), {})()
+        bundle.agent_registry = AgentRegistry()
+        bundle.tool_registry = ToolRegistry()
+        bundle.workflow_registry = WorkflowRegistry()
+        app = AgentApp(
+            registry=bundle,
+            session_store=InMemorySessionStore(),
+            approval_store=InMemoryApprovalStore(),
+        )
+        app.register_agent(AgentSpec(name="triage", instructions="Triage", tools=[]))
+        app.register_agent(AgentSpec(name="escalation", instructions="Escalation", tools=[]))
+        # Workflow with max_handoffs=0 — immediate failure when handoff would occur
+        wf = Workflow.handoff(
+            entry="triage",
+            agents=["escalation"],
+            name="test",
+            max_handoffs=0,
+        )
+        app.register_workflow(wf)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_max_handoffs_zero_blocks_handoff(self, app):
+        """max_handoffs=0 means any handoff attempt is blocked."""
+        result = await app.run(
+            workflow="test",
+            input="escalation issue",
+        )
+        assert result.status == "failed"
+        assert result.error is not None
+        assert "handoff" in result.error["type"].lower()
+        assert "exceeded" in result.error["type"].lower()
+
+    @pytest.mark.asyncio
+    async def test_max_handoffs_one_allows_single_handoff(self, app):
+        """max_handoffs=1 allows exactly one handoff."""
+        wf = Workflow.handoff(
+            entry="triage",
+            agents=["escalation"],
+            name="test1",
+            max_handoffs=1,
+        )
+        app.register_workflow(wf)
+        result = await app.run(
+            workflow="test1",
+            input="escalation issue",
+        )
+        assert result.status == "completed"
+        assert len(result.handoffs) == 1
+
+    @pytest.mark.asyncio
+    async def test_default_max_handoffs_is_three(self):
+        """Default max_handoffs should be 3."""
+        wf = Workflow.handoff(
+            entry="triage",
+            agents=["escalation"],
+            name="default",
+        )
+        assert wf.max_handoffs == 3
+
+
+# ---------------------------------------------------------------------------
+# max_agent_calls enforcement (Phase 22)
+# ---------------------------------------------------------------------------
+
+class TestMaxAgentCalls:
+    @pytest.fixture
+    def app(self):
+        from agent_app import AgentApp, AgentSpec, Workflow
+        from agent_app.registry.agent_registry import AgentRegistry
+        from agent_app.registry.tool_registry import ToolRegistry
+        from agent_app.registry.workflow_registry import WorkflowRegistry
+        from agent_app.runtime.session import InMemorySessionStore
+
+        bundle = type("B", (), {})()
+        bundle.agent_registry = AgentRegistry()
+        bundle.tool_registry = ToolRegistry()
+        bundle.workflow_registry = WorkflowRegistry()
+        app = AgentApp(
+            registry=bundle,
+            session_store=InMemorySessionStore(),
+        )
+        for name in ["manager", "researcher", "analyst", "writer"]:
+            app.register_agent(AgentSpec(name=name, instructions=f"{name}", tools=[]))
+        # max_agent_calls=0 — no specialist calls allowed
+        wf = Workflow.orchestrator(
+            manager="manager",
+            agents_as_tools=["researcher", "analyst", "writer"],
+            name="test",
+            max_agent_calls=0,
+        )
+        app.register_workflow(wf)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_max_agent_calls_zero_blocks_specialists(self, app):
+        """max_agent_calls=0 means no specialist calls."""
+        result = await app.run(
+            workflow="test",
+            input="research and write",
+        )
+        assert result.status == "completed"
+        assert len(result.agent_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_default_max_agent_calls_is_five(self):
+        """Default max_agent_calls should be 5."""
+        wf = Workflow.orchestrator(
+            manager="manager",
+            agents_as_tools=["researcher"],
+            name="default",
+        )
+        assert wf.max_agent_calls == 5
