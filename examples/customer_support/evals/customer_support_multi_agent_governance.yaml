@@ -1,0 +1,121 @@
+name: customer_support_multi_agent_governance
+description: |
+  Phase 22 multi-agent governance propagation tests for customer_support example.
+  Verifies that approval, permission, rate-limit, TTL, and metadata properties
+  hold when execution flows through handoff or orchestrator workflows.
+  No real OpenAI API key required — uses DryRunBackend.
+
+defaults:
+  user_id: eval_user
+  tenant_id: eval_tenant
+  permissions:
+    - order:read
+    - refund:create
+
+cases:
+  # -- Handoff: approval propagation --
+  - id: handoff_refund_requires_approval
+    input: "I want a refund for order 123"
+    workflow: customer_support
+    expect:
+      status: interrupted
+      handoffs:
+        - from_agent: triage
+          to_agent: refund
+      approvals_required:
+        - refund.request
+
+  - id: handoff_billing_completes_without_approval
+    input: "I need my invoice"
+    workflow: customer_support
+    expect:
+      status: completed
+      handoffs:
+        - from_agent: triage
+          to_agent: billing
+
+  - id: handoff_tech_support_routed
+    input: "system error bug"
+    workflow: customer_support
+    expect:
+      status: completed
+      handoffs:
+        - from_agent: triage
+          to_agent: technical_support
+
+  - id: handoff_no_match_stays_triage
+    input: "hello there"
+    workflow: customer_support
+    expect:
+      status: completed
+      # No handoff when input doesn't match any candidate
+
+  # -- Handoff: max_handoffs enforcement --
+  - id: handoff_max_handoffs_zero_blocks
+    input: "refund order 123"
+    workflow: customer_support_max_hf_0
+    expect:
+      status: failed
+      error_type: MaxHandoffsExceeded
+
+  - id: handoff_max_handoffs_one_allows
+    input: "refund order 123"
+    workflow: customer_support_max_hf_1
+    expect:
+      status: interrupted
+      handoffs:
+        - from_agent: triage
+          to_agent: refund
+
+  # -- Handoff: permission propagation --
+  - id: handoff_permission_denied_in_target
+    input: "refund order 123"
+    workflow: customer_support
+    permissions:
+      - order:read
+    expect:
+      status: completed
+      # Permission denied at target agent (refund:create not granted)
+
+  # -- Handoff: metadata propagation --
+  - id: handoff_propagates_user_metadata
+    input: "check order 123"
+    workflow: customer_support
+    expect:
+      status: completed
+
+  # -- Orchestrator: approval propagation --
+  - id: orchestrator_specialist_requires_approval
+    input: "process a refund for order 123"
+    workflow: research_assistant
+    expect:
+      status: interrupted
+      agent_calls:
+        - researcher
+      approvals_required:
+        - refund.request
+
+  - id: orchestrator_no_match_no_calls
+    input: "hello"
+    workflow: research_assistant
+    expect:
+      status: completed
+      agent_calls: []
+
+  # -- Orchestrator: max_agent_calls enforcement --
+  - id: orchestrator_max_calls_enforced
+    input: "research and write"
+    workflow: research_assistant_max_calls_1
+    expect:
+      status: completed
+      # Only 1 specialist call allowed (max_agent_calls=1)
+
+  # -- Orchestrator: permission propagation --
+  - id: orchestrator_permission_denied
+    input: "refund order 123"
+    workflow: research_assistant
+    permissions:
+      - order:read
+    expect:
+      status: completed
+      # Specialist call fails due to missing refund:create permission
