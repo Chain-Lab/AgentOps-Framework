@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from agent_app.core.context import RunContext
 from agent_app.core.tool_spec import ToolSpec
 from agent_app.governance.audit import AuditEvent, AuditLogger
+from agent_app.governance.policy import PolicyAction, PolicyEngine, PolicyEvaluationContext
 from agent_app.governance.permission import PermissionChecker
 from agent_app.governance.risk import RiskLevel, requires_tool_approval
 from agent_app.governance.sanitization import sanitize_payload
@@ -86,6 +87,7 @@ class ToolExecutor:
         permission_checker: Authorization checker.
         audit_logger: Audit event recorder.
         trace_collector: Optional observability trace collector.
+        policy_engine: Optional policy engine for governance decisions.
     """
 
     def __init__(
@@ -97,6 +99,7 @@ class ToolExecutor:
         trace_collector: TraceCollector | None = None,
         rate_limiter: Any = None,
         default_ttl_seconds: int | None = None,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.approval_store = approval_store
@@ -105,6 +108,7 @@ class ToolExecutor:
         self.trace_collector = trace_collector or NoOpTraceCollector()
         self.rate_limiter = rate_limiter
         self.default_ttl_seconds = default_ttl_seconds
+        self.policy_engine = policy_engine
 
     async def execute(
         self,
@@ -148,6 +152,158 @@ class ToolExecutor:
 
         spec = entry.spec
         fn = entry.fn
+
+        # -- Phase 23: policy evaluation (before existing governance checks) --
+        if self.policy_engine is not None:
+            policy_ctx = PolicyEvaluationContext(
+                run_id=context.run_id,
+                agent_name=getattr(context, "agent_name", None),
+                tool_name=tool_name,
+                risk_level=str(spec.risk_level),
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                roles=list(getattr(context, "roles", [])),
+                permissions=list(getattr(context, "permissions", [])),
+                metadata={
+                    "requires_approval": spec.requires_approval,
+                    "required_permissions": spec.permissions,
+                },
+            )
+            policy_decision = await self.policy_engine.evaluate_tool_call(policy_ctx)
+
+            # Log that policy was evaluated (all decisions)
+            await self.audit_logger.log(AuditEvent(
+                event_id=str(uuid.uuid4()),
+                run_id=context.run_id,
+                event_type="policy.evaluated",
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                tool_name=tool_name,
+                approval_id=None,
+                data={
+                    "action": policy_decision.action.value,
+                    "rule_name": policy_decision.metadata.get("rule_name"),
+                    "reason": policy_decision.reason,
+                },
+            ))
+
+            if policy_decision.action == PolicyAction.DENY:
+                error_detail = {
+                    "type": "policy_denied",
+                    "message": policy_decision.reason or "Denied by policy",
+                    "tool_name": tool_name,
+                    "rule_name": policy_decision.metadata.get("rule_name"),
+                }
+                await self.audit_logger.log(AuditEvent(
+                    event_id=str(uuid.uuid4()),
+                    run_id=context.run_id,
+                    event_type="policy.denied",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    tool_name=tool_name,
+                    data={"error": error_detail, "reason": policy_decision.reason},
+                ))
+                await self._record_event(
+                    event_type=RunEventType.TOOL_FAILED,
+                    context=context,
+                    tool_name=tool_name,
+                    status="failed",
+                    error=error_detail,
+                )
+                return ToolExecutionResult(
+                    status=ToolExecutionStatus.FAILED.value,
+                    tool_name=tool_name,
+                    error=error_detail,
+                )
+
+            if policy_decision.action == PolicyAction.REQUIRE_APPROVAL:
+                from agent_app.governance.approval import ApprovalRequest
+                from datetime import datetime, timedelta, timezone
+                sanitized_arguments = sanitize_payload(arguments)
+                metadata = {
+                    "argument_keys": sorted(arguments.keys()),
+                    "requester_context": {
+                        "user_id": context.user_id,
+                        "tenant_id": context.tenant_id,
+                        "trace_id": context.trace_id,
+                    },
+                    "rule_name": policy_decision.metadata.get("rule_name"),
+                    "policy_reason": policy_decision.reason,
+                }
+                # Policy TTL overrides default_ttl_seconds
+                ttl = policy_decision.ttl_seconds or self.default_ttl_seconds
+                expires_at = None
+                if ttl is not None and ttl > 0:
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                approval = ApprovalRequest(
+                    approval_id=f"apv_{secrets.token_hex(16)}",
+                    run_id=context.run_id,
+                    agent_name=None,
+                    tool_name=tool_name,
+                    arguments=sanitized_arguments,
+                    risk_level=spec.risk_level,
+                    tenant_id=context.tenant_id,
+                    metadata=metadata,
+                    expires_at=expires_at,
+                )
+                await self.approval_store.create(approval)
+                await self.audit_logger.log(AuditEvent(
+                    event_id=str(uuid.uuid4()),
+                    run_id=context.run_id,
+                    event_type="policy.approval_required",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    tool_name=tool_name,
+                    approval_id=approval.approval_id,
+                    data={
+                        "arguments": sanitized_arguments,
+                        "risk_level": spec.risk_level,
+                        "reason": policy_decision.reason,
+                        "rule_name": policy_decision.metadata.get("rule_name"),
+                        "ttl_seconds": ttl,
+                    },
+                ))
+                await self._record_event(
+                    event_type=RunEventType.TOOL_APPROVAL_REQUIRED,
+                    context=context,
+                    tool_name=tool_name,
+                    status="interrupted",
+                    approval_id=approval.approval_id,
+                    data={
+                        "argument_keys": sorted(arguments.keys()),
+                        "risk_level": str(spec.risk_level),
+                        "rule_name": policy_decision.metadata.get("rule_name"),
+                    },
+                )
+                await self._record_event(
+                    event_type=RunEventType.APPROVAL_CREATED,
+                    context=context,
+                    tool_name=tool_name,
+                    approval_id=approval.approval_id,
+                    data={"risk_level": str(spec.risk_level)},
+                )
+                return ToolExecutionResult(
+                    status=ToolExecutionStatus.INTERRUPTED.value,
+                    tool_name=tool_name,
+                    approval_request=approval,
+                )
+
+            if policy_decision.action == PolicyAction.AUDIT_ONLY:
+                await self.audit_logger.log(AuditEvent(
+                    event_id=str(uuid.uuid4()),
+                    run_id=context.run_id,
+                    event_type="policy.audit_only",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    tool_name=tool_name,
+                    data={
+                        "reason": policy_decision.reason,
+                        "rule_name": policy_decision.metadata.get("rule_name"),
+                    },
+                ))
+                # Continue to existing governance checks — do not block
+
+            # ALLOW → continue to existing governance checks
 
         # -- Phase 12: tool.started --
         await self._record_event(
