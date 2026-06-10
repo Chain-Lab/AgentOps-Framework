@@ -1929,3 +1929,78 @@ async def test_openai_backend_run_error_is_sanitized(monkeypatch: Any, agent_spe
         "message": "Backend execution failed; check server logs for details.",
     }
     assert "secret OpenAI backend token" not in str(result.error)
+
+
+# Phase 20 Task 6: Wrapper governance integration tests
+
+@pytest.mark.asyncio
+async def test_compile_tool_high_risk_wrapper_returns_approval_required(monkeypatch: Any, run_context: RunContext) -> None:
+    """High-risk tools routed through ToolExecutor return approval_required in wrapper mode."""
+    _install_fake_sdk(monkeypatch)
+    from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+    from agent_app.governance.approval import InMemoryApprovalStore
+    from agent_app.governance.audit import InMemoryAuditLogger
+    from agent_app.governance.permission import DefaultPermissionChecker
+    from agent_app.runtime.tool_executor import ToolExecutor
+
+    registry = ToolRegistry()
+
+    async def dangerous_tool(path: str) -> dict[str, str]:
+        return {"deleted": path}
+
+    registry.register(
+        "file.delete",
+        ToolSpec(name="file.delete", description="Delete file", risk_level="high"),
+        fn=dangerous_tool,
+    )
+    approvals = InMemoryApprovalStore()
+    executor = ToolExecutor(
+        tool_registry=registry,
+        approval_store=approvals,
+        permission_checker=DefaultPermissionChecker(),
+        audit_logger=InMemoryAuditLogger(),
+    )
+    backend = OpenAIAgentsBackend(tool_registry=registry, tool_executor=executor)
+    sdk_tool = backend.compile_tool(registry.get_entry("file.delete"), context=run_context)
+
+    output = await sdk_tool(path="/tmp/important")
+
+    assert output["status"] == "approval_required"
+    assert output["tool_name"] == "file.delete"
+    assert output["approval_id"].startswith("apv_")
+    pending = await approvals.list_pending(tenant_id="t1")
+    assert [request.tool_name for request in pending] == ["file.delete"]
+
+
+@pytest.mark.asyncio
+async def test_compile_tool_low_risk_wrapper_executes(monkeypatch: Any, run_context: RunContext) -> None:
+    """Low-risk tools routed through ToolExecutor execute normally in wrapper mode."""
+    _install_fake_sdk(monkeypatch)
+    from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+    from agent_app.governance.approval import InMemoryApprovalStore
+    from agent_app.governance.audit import InMemoryAuditLogger
+    from agent_app.governance.permission import DefaultPermissionChecker
+    from agent_app.runtime.tool_executor import ToolExecutor
+
+    registry = ToolRegistry()
+
+    async def lookup_order(order_id: str) -> dict[str, str]:
+        return {"order_id": order_id, "status": "paid"}
+
+    registry.register(
+        "order.lookup",
+        ToolSpec(name="order.lookup", description="Lookup order", risk_level="low"),
+        fn=lookup_order,
+    )
+    executor = ToolExecutor(
+        tool_registry=registry,
+        approval_store=InMemoryApprovalStore(),
+        permission_checker=DefaultPermissionChecker(),
+        audit_logger=InMemoryAuditLogger(),
+    )
+    backend = OpenAIAgentsBackend(tool_registry=registry, tool_executor=executor)
+    sdk_tool = backend.compile_tool(registry.get_entry("order.lookup"), context=run_context)
+
+    output = await sdk_tool(order_id="ord-1")
+
+    assert output == {"order_id": "ord-1", "status": "paid"}
