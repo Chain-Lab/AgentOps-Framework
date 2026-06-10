@@ -652,7 +652,12 @@ All notable changes to Agent App Framework are documented here.
 - **`max_handoffs` on handoff workflows** — `Workflow.handoff()` accepts `max_handoffs` (default 3); `_run_handoff()` enforces the limit and returns `MaxHandoffsExceeded` error when exceeded.
 - **`max_agent_calls` on orchestrator workflows** — `Workflow.orchestrator()` accepts `max_agent_calls` (default 5); `_run_orchestrator()` caps specialist dispatch and returns `MaxAgentCallsExceeded` error when exceeded.
 - **Orchestrator interruption propagation** — specialist interruptions (approval gates, rate limits) are collected and propagated to the workflow-level `AppRunResult.interruptions`; orchestrator status set to `interrupted` when specialists are interrupted.
-- **22 multi-agent governance propagation tests** — approval, permission, rate-limit, TTL, config loader, and metadata propagation tests verified through handoff and orchestrator workflows.
+- **Handoff depth tracking** — `_handoff_depth` in `RunContext.metadata` incremented per handoff hop; propagates to child runs.
+- **`MaxHandoffsExceeded` and `MaxAgentCallsExceeded` errors** — structured error types for multi-agent limit violations.
+- **36 multi-agent governance propagation tests** — 22 unit tests + 13 customer_support eval tests + 4 SDK compile/trace tests covering approval, permission, rate-limit, TTL, config loader, metadata, and execution trace.
+- **customer_support multi-agent eval suite** — `customer_support_multi_agent_governance.yaml` with 12 eval cases for handoff and orchestrator governance.
+- **Marker-gated SDK integration test** — `test_real_openai_agents_multi_agent.py` verifies SDK module loads and backend compiles multi-agent structures (opt-in via `RUN_OPENAI_AGENTS_INTEGRATION=1`).
+- **Security: non-negative validation** — config loader coerces `max_handoffs`/`max_agent_calls` via `max(0, int(...))`; Pydantic `field_validator` rejects negative values (defense in depth against fail-open bypass).
 
 ### Changed
 

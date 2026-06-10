@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_app import AgentApp, AgentSpec, ToolSpec, Workflow
+from agent_app.config.loader import _bundle
 from agent_app.core.workflow import WorkflowType
 from agent_app.core.routing import RoutingPolicy, RoutingRule, RoutingMatchType
 from agent_app.governance.risk import RiskLevel
@@ -721,3 +722,161 @@ class TestMetadataPropagation:
         # Must still be interrupted — metadata cannot bypass the gate
         assert result.status == "interrupted"
         assert result.interruptions[0]["type"] == "approval_required"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI SDK compile integration (DryRunBackend — always runs)
+# ---------------------------------------------------------------------------
+
+# NOTE: SDK-specific compile tests (compile_agent with handoffs, compile_tool)
+# are in tests/integration/test_real_openai_agents_multi_agent.py (marker-gated).
+# The tests below verify the full multi-agent execution path with DryRunBackend.
+
+    @pytest.mark.asyncio
+    async def test_handoff_workflow_trace_with_backend(self, bundle):
+        """Handoff workflow execution captures trace and handoff data."""
+        from agent_app.runtime.backends import DryRunBackend
+        from agent_app.runtime.app_runner import AppRunner
+        from agent_app.runtime.approval_store import InMemoryApprovalStore
+        from agent_app.runtime.session import InMemorySessionStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.governance.risk import RiskLevel
+
+        backend = DryRunBackend()
+        audit = InMemoryAuditLogger()
+        app = AgentApp(
+            registry=bundle,
+            session_store=InMemorySessionStore(),
+            approval_store=InMemoryApprovalStore(),
+            backend=backend,
+            audit_logger=audit,
+        )
+        ToolSpec_local = ToolSpec
+
+        def _register_tool(a: AgentApp, name: str, **spec_kwargs) -> ToolSpec_local:
+            spec = ToolSpec_local(name=name, description=f"Tool {name}", **spec_kwargs)
+
+            async def _fn(**kwargs):
+                return {"tool": name, "result": "ok"}
+
+            a.register_tool(spec, fn=_fn)
+            return spec
+
+        _register_tool(
+            app, "refund.request",
+            risk_level=RiskLevel.HIGH, requires_approval=True,
+            permissions=["refund:create"],
+        )
+        _register_tool(
+            app, "billing.query",
+            risk_level="low", requires_approval=False,
+            permissions=["order:read"],
+        )
+        _register_tool(
+            app, "order.query",
+            risk_level="low", requires_approval=False,
+            permissions=["order:read"],
+        )
+
+        app.register_agent(AgentSpec(name="triage", instructions="Triage", tools=[]))
+        app.register_agent(AgentSpec(
+            name="refund", instructions="Refund", tools=["refund.request"],
+        ))
+        app.register_agent(AgentSpec(
+            name="billing", instructions="Billing", tools=["billing.query"],
+        ))
+        wf = Workflow.handoff(
+            entry="triage",
+            agents=["refund", "billing"],
+            name="cs_compile",
+        )
+        app.register_workflow(wf)
+
+        result = await app.run(
+            workflow="cs_compile",
+            input="I want a refund for order 123",
+            permissions=["order:read", "refund:create"],
+        )
+        assert result.workflow_trace is not None
+        assert len(result.workflow_trace.steps) > 0
+        routing_steps = [
+            s for s in result.workflow_trace.steps if s.step_type == "routing"
+        ]
+        assert len(routing_steps) >= 1
+        assert result.handoffs[0]["to_agent"] == "refund"
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_trace_with_backend(self, bundle):
+        """Orchestrator workflow execution captures agent_calls and trace data."""
+        from agent_app.runtime.backends import DryRunBackend
+        from agent_app.runtime.approval_store import InMemoryApprovalStore
+        from agent_app.runtime.session import InMemorySessionStore
+        from agent_app.governance.risk import RiskLevel
+
+        backend = DryRunBackend()
+        app = AgentApp(
+            registry=bundle,
+            session_store=InMemorySessionStore(),
+            approval_store=InMemoryApprovalStore(),
+            backend=backend,
+        )
+        ToolSpec_local = ToolSpec
+
+        def _register_tool(a: AgentApp, name: str, **spec_kwargs) -> ToolSpec_local:
+            spec = ToolSpec_local(name=name, description=f"Tool {name}", **spec_kwargs)
+
+            async def _fn(**kwargs):
+                return {"tool": name, "result": "ok"}
+
+            a.register_tool(spec, fn=_fn)
+            return spec
+
+        _register_tool(
+            app, "refund.request",
+            risk_level=RiskLevel.HIGH, requires_approval=True,
+            permissions=["refund:create"],
+        )
+        _register_tool(
+            app, "billing.query",
+            risk_level="low", requires_approval=False,
+            permissions=["order:read"],
+        )
+
+        app.register_agent(AgentSpec(name="manager", instructions="Manager", tools=[]))
+        app.register_agent(AgentSpec(
+            name="refund_spec", instructions="Refund", tools=["refund.request"],
+        ))
+        app.register_agent(AgentSpec(
+            name="billing_spec", instructions="Billing", tools=["billing.query"],
+        ))
+        wf = Workflow.orchestrator(
+            manager="manager",
+            agents_as_tools=["refund_spec", "billing_spec"],
+            name="orch_compile",
+        )
+        policy = RoutingPolicy(name="compile_policy", rules=[
+            RoutingRule(
+                name="refund_rule", target="refund_spec",
+                match_type=RoutingMatchType.KEYWORD,
+                keywords=["refund"], priority=100,
+            ),
+            RoutingRule(
+                name="billing_rule", target="billing_spec",
+                match_type=RoutingMatchType.KEYWORD,
+                keywords=["invoice", "billing"], priority=80,
+            ),
+        ])
+        wf.routing_policy = policy
+        app.register_workflow(wf)
+
+        result = await app.run(
+            workflow="orch_compile",
+            input="process a refund for order 123",
+            permissions=["refund:create"],
+        )
+        assert len(result.agent_calls) >= 1
+        assert result.agent_calls[0]["agent_name"] == "refund_spec"
+        assert result.workflow_trace is not None
+        step_types = {s.step_type for s in result.workflow_trace.steps}
+        assert "routing" in step_types
+        assert "agent" in step_types
