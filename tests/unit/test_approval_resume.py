@@ -323,3 +323,28 @@ async def test_approve_and_resume_sanitizes_backend_resume_exception() -> None:
         "message": "Backend resume failed; check server logs for details.",
     }
     assert "secret backend resume failure" not in str(result.error)
+
+
+# Phase 20 Task 7: Backward compatibility test
+
+@pytest.mark.asyncio
+async def test_approve_and_resume_keeps_existing_resume_method_available() -> None:
+    """approve_and_resume() must not break the legacy resume() method."""
+    approvals = InMemoryApprovalStore()
+    run_states = InMemoryRunStateStore()
+    backend = FakeResumeBackend()
+    app = AgentApp(approval_store=approvals, run_state_store=run_states, backend=backend)
+    app.register_agent(AgentSpec(name="bot", instructions="help"))
+    await approvals.create(ApprovalRequest(
+        approval_id="apv_1",
+        run_id="run-1",
+        tool_name="danger.tool",
+        risk_level="high",
+    ))
+    await _seed_interrupted_run(run_states)
+
+    resumed = await app.approve_and_resume("apv_1", decided_by="admin")
+    legacy = await app.resume("run-1", approval_id="apv_1")
+
+    assert resumed.status == "completed"
+    assert legacy.status in {"completed", "failed", "interrupted"}
