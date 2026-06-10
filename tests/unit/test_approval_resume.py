@@ -102,11 +102,17 @@ async def test_approve_and_resume_marks_approval_and_calls_backend_resume() -> N
         run_id="run-1",
         tool_name="danger.tool",
         risk_level="high",
+        tenant_id="t1",
         metadata={"sdk_call_id": "call-1"},
     ))
     await _seed_interrupted_run(run_states)
 
-    result = await app.approve_and_resume("apv_1", decided_by="admin", decision_note="approved")
+    result = await app.approve_and_resume(
+        "apv_1",
+        decided_by="admin",
+        decision_note="approved",
+        tenant_id="t1",
+    )
 
     assert result.status == "completed"
     assert result.final_output == "resumed by fake backend"
@@ -140,10 +146,16 @@ async def test_reject_approval_does_not_call_backend_resume() -> None:
         run_id="run-1",
         tool_name="danger.tool",
         risk_level="high",
+        tenant_id="t1",
     ))
     await _seed_interrupted_run(run_states)
 
-    result = await app.reject_approval("apv_1", decided_by="admin", reason="too risky")
+    result = await app.reject_approval(
+        "apv_1",
+        decided_by="admin",
+        reason="too risky",
+        tenant_id="t1",
+    )
 
     assert result.status == "completed"
     assert "rejected" in result.final_output
@@ -154,6 +166,89 @@ async def test_reject_approval_does_not_call_backend_resume() -> None:
     assert interrupted.status == "completed"
     event_types = [event.event_type for event in audit.list_events(run_id="run-1")]
     assert "approval.rejected" in event_types
+
+
+@pytest.mark.asyncio
+async def test_approve_and_resume_wrong_tenant_does_not_mutate_or_resume() -> None:
+    approvals = InMemoryApprovalStore()
+    run_states = InMemoryRunStateStore()
+    backend = FakeResumeBackend()
+    app = AgentApp(approval_store=approvals, run_state_store=run_states, backend=backend)
+    app.register_agent(AgentSpec(name="bot", instructions="help"))
+    await approvals.create(ApprovalRequest(
+        approval_id="apv_1",
+        run_id="run-1",
+        tool_name="danger.tool",
+        risk_level="high",
+        tenant_id="t1",
+    ))
+    await _seed_interrupted_run(run_states)
+
+    result = await app.approve_and_resume("apv_1", decided_by="admin", tenant_id="t2")
+
+    assert result.status == "failed"
+    assert result.error == {
+        "type": "approval_forbidden",
+        "message": "Approval is not available for this tenant.",
+    }
+    loaded_approval = await approvals.get("apv_1")
+    assert loaded_approval.status == ApprovalStatus.PENDING
+    assert backend.resume_calls == []
+
+
+@pytest.mark.asyncio
+async def test_approve_and_resume_run_state_mismatch_does_not_mutate_or_resume() -> None:
+    approvals = InMemoryApprovalStore()
+    run_states = InMemoryRunStateStore()
+    backend = FakeResumeBackend()
+    app = AgentApp(approval_store=approvals, run_state_store=run_states, backend=backend)
+    app.register_agent(AgentSpec(name="bot", instructions="help"))
+    await approvals.create(ApprovalRequest(
+        approval_id="apv_1",
+        run_id="run-1",
+        tool_name="danger.tool",
+        risk_level="high",
+        tenant_id="t1",
+    ))
+    await _seed_interrupted_run(run_states, approval_id="apv_other", run_id="run-1")
+
+    result = await app.approve_and_resume("apv_1", decided_by="admin", tenant_id="t1")
+
+    assert result.status == "failed"
+    assert result.error == {
+        "type": "approval_run_mismatch",
+        "message": "Approval is not associated with this interrupted run.",
+    }
+    loaded_approval = await approvals.get("apv_1")
+    assert loaded_approval.status == ApprovalStatus.PENDING
+    assert backend.resume_calls == []
+
+
+@pytest.mark.asyncio
+async def test_reject_approval_wrong_tenant_does_not_mutate() -> None:
+    approvals = InMemoryApprovalStore()
+    run_states = InMemoryRunStateStore()
+    backend = FakeResumeBackend()
+    app = AgentApp(approval_store=approvals, run_state_store=run_states, backend=backend)
+    app.register_agent(AgentSpec(name="bot", instructions="help"))
+    await approvals.create(ApprovalRequest(
+        approval_id="apv_1",
+        run_id="run-1",
+        tool_name="danger.tool",
+        risk_level="high",
+        tenant_id="t1",
+    ))
+    await _seed_interrupted_run(run_states)
+
+    result = await app.reject_approval("apv_1", decided_by="admin", tenant_id="t2")
+
+    assert result.status == "failed"
+    assert result.error == {
+        "type": "approval_forbidden",
+        "message": "Approval is not available for this tenant.",
+    }
+    loaded_approval = await approvals.get("apv_1")
+    assert loaded_approval.status == ApprovalStatus.PENDING
 
 
 @pytest.mark.asyncio

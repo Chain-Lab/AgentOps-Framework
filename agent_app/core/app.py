@@ -866,6 +866,7 @@ class AgentApp:
         approval_id: str,
         decided_by: str,
         decision_note: str | None = None,
+        tenant_id: str | None = None,
     ) -> Any:
         """Approve a pending approval and resume its interrupted run."""
         if self.approval_store is None:
@@ -898,6 +899,7 @@ class AgentApp:
             approval_id=approval_id,
             decided_by=decided_by,
             decision_note=decision_note,
+            tenant_id=tenant_id,
         )
 
     async def reject_approval(
@@ -905,6 +907,7 @@ class AgentApp:
         approval_id: str,
         decided_by: str,
         reason: str | None = None,
+        tenant_id: str | None = None,
     ) -> Any:
         """Reject a pending approval without resuming backend execution."""
         if self.approval_store is None:
@@ -937,6 +940,7 @@ class AgentApp:
             approval_id=approval_id,
             decided_by=decided_by,
             reason=reason,
+            tenant_id=tenant_id,
         )
 
     async def resume(

@@ -43,14 +43,11 @@ class ApprovalResumeService:
         approval_id: str,
         decided_by: str,
         decision_note: str | None = None,
+        tenant_id: str | None = None,
     ) -> AppRunResult:
         """Approve an approval request and resume its interrupted run."""
         try:
-            approval = await self.approval_store.approve(
-                approval_id,
-                decided_by,
-                decision_note,
-            )
+            approval = await self.approval_store.get(approval_id)
         except KeyError:
             return AppRunResult(
                 run_id="",
@@ -60,6 +57,51 @@ class ApprovalResumeService:
                     "message": f"Approval '{approval_id}' not found.",
                 },
             )
+        if tenant_id is not None and approval.tenant_id != tenant_id:
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "approval_forbidden",
+                    "message": "Approval is not available for this tenant.",
+                },
+            )
+
+        try:
+            interrupted = await self.run_state_store.get(approval.run_id)
+        except KeyError:
+            await self._audit(
+                event_type="run.resume_blocked",
+                run_id=approval.run_id,
+                approval_id=approval.approval_id,
+                tool_name=approval.tool_name,
+                user_id=decided_by,
+                tenant_id=approval.tenant_id,
+                data={"reason": "run_state_missing"},
+            )
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "run_state_missing",
+                    "message": "Run state is missing or no longer resumable.",
+                },
+            )
+        if approval.approval_id not in interrupted.approval_ids:
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "approval_run_mismatch",
+                    "message": "Approval is not associated with this interrupted run.",
+                },
+            )
+
+        approval = await self.approval_store.approve(
+            approval_id,
+            decided_by,
+            decision_note,
+        )
 
         await self._audit(
             event_type="approval.approved",
@@ -188,10 +230,11 @@ class ApprovalResumeService:
         approval_id: str,
         decided_by: str,
         reason: str | None = None,
+        tenant_id: str | None = None,
     ) -> AppRunResult:
         """Reject an approval request without resuming backend execution."""
         try:
-            approval = await self.approval_store.reject(approval_id, decided_by, reason)
+            approval = await self.approval_store.get(approval_id)
         except KeyError:
             return AppRunResult(
                 run_id="",
@@ -201,6 +244,30 @@ class ApprovalResumeService:
                     "message": f"Approval '{approval_id}' not found.",
                 },
             )
+        if tenant_id is not None and approval.tenant_id != tenant_id:
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "approval_forbidden",
+                    "message": "Approval is not available for this tenant.",
+                },
+            )
+        try:
+            interrupted = await self.run_state_store.get(approval.run_id)
+        except KeyError:
+            interrupted = None
+        if interrupted is not None and approval.approval_id not in interrupted.approval_ids:
+            return AppRunResult(
+                run_id=approval.run_id,
+                status="failed",
+                error={
+                    "type": "approval_run_mismatch",
+                    "message": "Approval is not associated with this interrupted run.",
+                },
+            )
+
+        approval = await self.approval_store.reject(approval_id, decided_by, reason)
 
         await self._audit(
             event_type="approval.rejected",
