@@ -1170,13 +1170,13 @@
 
 ## Phase 20: OpenAI Tool Interception and RunState Resume
 
-- [ ] Verify `tests/unit/test_tool_executor.py` passes.
-- [ ] Verify `tests/unit/test_approval_resume.py` passes.
-- [ ] Verify `tests/unit/test_openai_backend.py` passes with fake SDK only.
-- [ ] Verify `tests/unit/test_native_hitl.py` passes with fake RunState only.
-- [ ] Verify `tests/unit/test_cli.py -q` passes.
-- [ ] Verify recovery admin/CLI/daemon baseline passes.
-- [ ] Verify full pytest suite passes.
-- [ ] Confirm dry-run defaults were not changed.
-- [ ] Confirm recovery daemon default-off behavior was not changed.
-- [ ] Confirm no real OpenAI API key is required by default tests.
+- [x] Verify `tests/unit/test_tool_executor.py` passes.
+- [x] Verify `tests/unit/test_approval_resume.py` passes.
+- [x] Verify `tests/unit/test_openai_backend.py` passes with fake SDK only.
+- [x] Verify `tests/unit/test_native_hitl.py` passes with fake RunState only.
+- [x] Verify `tests/unit/test_cli.py -q` passes.
+- [x] Verify recovery admin/CLI/daemon baseline passes.
+- [x] Verify full pytest suite passes.
+- [x] Confirm dry-run defaults were not changed.
+- [x] Confirm recovery daemon default-off behavior was not changed.
+- [x] Confirm no real OpenAI API key is required by default tests.
