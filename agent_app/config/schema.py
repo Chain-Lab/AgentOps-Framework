@@ -234,6 +234,48 @@ class TracingConfig(BaseModel):
     max_events_per_trace: int | None = Field(default=None, description="Max events per trace in memory")
 
 
+# ---------------------------------------------------------------------------
+# Phase 23: Policy Engine config
+# ---------------------------------------------------------------------------
+
+from agent_app.governance.policy import _VALID_ACTIONS
+
+
+class PolicyRuleConfig(BaseModel):
+    """A single policy rule from YAML config."""
+
+    name: str = Field(..., description="Unique rule name")
+    when: dict[str, Any] = Field(
+        ...,
+        description="Conditions to match (tool_name, risk_level, etc.)",
+    )
+    then: dict[str, Any] = Field(
+        ...,
+        description="Actions to take when conditions match",
+    )
+
+
+class PolicyEngineConfig(BaseModel):
+    """Governance policy engine configuration."""
+
+    enabled: bool = Field(default=False, description="Enable policy engine")
+    default_action: str = Field(default="allow", description="Fallback when no rule matches")
+    rules: list[PolicyRuleConfig] = Field(
+        default_factory=list,
+        description="Ordered policy rules",
+    )
+
+    @field_validator("default_action")
+    @classmethod
+    def _validate_default_action(cls, v: str) -> str:
+        valid = {"allow", "deny", "require_approval", "audit_only"}
+        if v not in valid:
+            raise ValueError(
+                f"Invalid default_action '{v}'. Must be one of: {sorted(valid)}."
+            )
+        return v
+
+
 class LeaseRenewalConfig(BaseModel):
     """Configuration for best-effort background lease renewal (Phase 15.2).
 
@@ -505,6 +547,10 @@ class GovernanceConfig(BaseModel):
     audit: AuditConfig = Field(default_factory=AuditConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     rate_limit: RateLimitConfig | None = Field(default=None, description="Rate limiting config")
+    policies: PolicyEngineConfig | None = Field(
+        default=None,
+        description="Policy engine configuration (Phase 23)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -550,7 +596,7 @@ class AppConfig(BaseModel):
         gov = result.get("governance")
         if isinstance(gov, dict):
             normalized_gov = {}
-            for section in ("approvals", "audit", "permissions"):
+            for section in ("approvals", "audit", "permissions", "policies"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val
