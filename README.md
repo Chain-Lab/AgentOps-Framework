@@ -484,6 +484,19 @@ interruptions are detected in the SDK result.
 - **Native HITL** — requires `openai-agents >= 0.2.0` with `needs_approval` /
   `RunState` support; use `wrapper` mode for older SDK versions
 
+### OpenAI backend tool approval and resume safety
+
+When using the OpenAI Agents SDK backend, registered framework tools still pass
+through Agent App governance before executing. Low-risk tools execute when
+permissions allow them. Medium-risk tools remain permission-checked and audited.
+High-risk and critical tools, and any tool with `requires_approval=True`, create
+pending approval requests instead of executing immediately.
+
+Approval decisions should be applied through `await app.approve_and_resume(...)`
+or `await app.reject_approval(...)`. The OpenAI SDK dependency remains isolated to
+the adapter layer, and default tests use fake SDK objects rather than a real OpenAI
+API key.
+
 ### Example
 
 See `examples/openai_basic/` for a complete working example.

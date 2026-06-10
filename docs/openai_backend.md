@@ -625,3 +625,17 @@ def compile_agent_as_tool(
    through the framework's `ToolExecutor` permission/approval pipeline.
 4. **No parallel execution** — Orchestrator specialists are conceptually
    parallel but executed serially through the SDK.
+
+## Tool approval and native RunState resume
+
+The OpenAI backend compiles framework tools into SDK tools, but execution
+still passes through Agent App governance when a tool registry and run
+context are available. High-risk and critical tools, plus any tool with
+`requires_approval=True`, produce pending framework approval requests
+instead of executing immediately.
+
+Native SDK RunState support is isolated in `agent_app.adapters.openai_agents`.
+The framework stores backend-specific state in `InterruptedRun.backend_state`
+and maps framework approval IDs to SDK call IDs before resuming. Default unit
+tests use fake SDK and fake RunState objects; real SDK smoke tests must remain
+explicitly marker-gated.

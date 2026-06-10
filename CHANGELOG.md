@@ -630,6 +630,23 @@ All notable changes to Agent App Framework are documented here.
 
 ## Phase 18: Recovery Observability + Admin API (0.10.0)
 
+## Phase 20: OpenAI Tool Interception and RunState Resume (0.10.0)
+
+### Added
+
+- Shared governance approval policy: `requires_approval=True` and high/critical-risk tools now pause for approval before execution.
+- Approval resume service for approving, rejecting, and resuming interrupted backend runs through one runtime boundary.
+- OpenAI backend SDK interruption mapping from framework approval IDs to SDK call IDs for safer fake RunState resume tests.
+- Conservative sanitization for approval arguments, audit payloads, and user-facing backend errors.
+
+### Safety
+
+- Default tests do not require a real OpenAI API key.
+- Core modules do not import the OpenAI Agents SDK.
+- Dry-run defaults and recovery daemon default-off behavior are unchanged.
+
+## Phase 18: Recovery Observability + Admin API (0.10.0)
+
 ### Added
 
 - **`RecoverySystemStatus`** — snapshot of recovery subsystem health: enabled, dry_run, daemon_configured, scanner/recovery_service availability, last tick, policy

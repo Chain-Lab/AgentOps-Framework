@@ -1167,3 +1167,16 @@
 - [x] Verify UI scans remain dry-run and reject `dry_run=false` attempts.
 - [x] Verify live recovery requires confirmation token plus `confirm_no_dry_run=true`.
 - [x] Verify `docs/recovery_admin_console.md` documents mounting, safety defaults, best-effort recovery, and current limitations.
+
+## Phase 20: OpenAI Tool Interception and RunState Resume
+
+- [ ] Verify `tests/unit/test_tool_executor.py` passes.
+- [ ] Verify `tests/unit/test_approval_resume.py` passes.
+- [ ] Verify `tests/unit/test_openai_backend.py` passes with fake SDK only.
+- [ ] Verify `tests/unit/test_native_hitl.py` passes with fake RunState only.
+- [ ] Verify `tests/unit/test_cli.py -q` passes.
+- [ ] Verify recovery admin/CLI/daemon baseline passes.
+- [ ] Verify full pytest suite passes.
+- [ ] Confirm dry-run defaults were not changed.
+- [ ] Confirm recovery daemon default-off behavior was not changed.
+- [ ] Confirm no real OpenAI API key is required by default tests.
