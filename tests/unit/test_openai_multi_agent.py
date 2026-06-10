@@ -405,7 +405,8 @@ class TestHandoffWorkflow:
         wf = Workflow.handoff(entry="triage", agents=["refund"], name="test")
         result = await backend._run_handoff_workflow(wf, "hello", run_context)
         assert result.status == "failed"
-        assert "SDK failure" in str(result.error)
+        assert result.error["type"] == "backend_execution_failed"
+        assert "SDK failure" not in str(result.error)
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +627,8 @@ class TestOrchestratorWorkflow:
         )
         result = await backend._run_orchestrator_workflow(wf, "input", run_context)
         assert result.status == "failed"
-        assert "SDK orchestrator failure" in str(result.error)
+        assert result.error["type"] == "backend_execution_failed"
+        assert "SDK orchestrator failure" not in str(result.error)
 
     @pytest.mark.asyncio
     async def test_orchestrator_no_tool_calls_still_completes(
