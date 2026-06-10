@@ -1357,3 +1357,38 @@ def _make_fake_executor(status: str = "completed", output: Any = None) -> Any:
             )
 
     return FakeToolExecutor()
+
+
+# Phase 20 Task 5: Resume error sanitization regression test
+
+class FakeRunnerResumeFailure(FakeRunnerNative):
+    """Fake Runner that raises on resume."""
+    async def run(self, native_agent: Any, input: Any = "", **kwargs: Any) -> Any:
+        if hasattr(input, "get_interruptions"):
+            raise RuntimeError("secret resume backend token")
+        return await super().run(native_agent, input=input, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_native_resume_error_is_sanitized(monkeypatch: Any, agent_spec: AgentSpec, run_context: RunContext, tool_registry: ToolRegistry) -> None:
+    """Backend resume errors must not leak internal exception details."""
+    runner = FakeRunnerResumeFailure()
+    _install_fake_native_sdk(monkeypatch, runner=runner)
+    from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+    backend = OpenAIAgentsBackend(tool_registry=tool_registry, hitl_mode="native")
+    first = await backend.run(agent_spec, "delete file", run_context)
+    result = await backend.resume(
+        agent_spec=agent_spec,
+        context=run_context,
+        backend_state=first.backend_state,
+        approvals=[{"approval_id": first.interruptions[0]["approval_id"], "status": "approved"}],
+        interruptions=first.interruptions,
+    )
+
+    assert result.status == "failed"
+    assert result.error == {
+        "type": "backend_resume_failed",
+        "message": "Backend resume failed; check server logs for details.",
+    }
+    assert "secret resume backend token" not in str(result.error)

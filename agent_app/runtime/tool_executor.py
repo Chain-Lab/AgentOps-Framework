@@ -12,6 +12,7 @@ Phase 3: in-memory stores, no OpenAI SDK binding.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from enum import Enum
 from typing import Any
@@ -207,7 +208,7 @@ class ToolExecutor:
                 },
             }
             approval = ApprovalRequest(
-                approval_id=f"apv_{uuid.uuid4().hex[:12]}",
+                approval_id=f"apv_{secrets.token_hex(16)}",
                 run_id=context.run_id,
                 agent_name=None,
                 tool_name=tool_name,

@@ -537,8 +537,8 @@ class TestBackendRun:
 
         assert result.status == "failed"
         assert result.error is not None
-        assert result.error["type"] == "RuntimeError"
-        assert "SDK exploded" in result.error["message"]
+        assert result.error["type"] == "backend_execution_failed"
+        assert result.error["message"] == "Backend execution failed; check server logs for details."
 
     @pytest.mark.asyncio
     async def test_run_stores_last_native_agent(
@@ -1908,3 +1908,24 @@ class TestGovernanceEdgeCases:
         # The actual sync invocation path uses asyncio.run() which can't
         # be tested in an async test. Verify ToolExecutor was set up.
         assert backend._tool_executor is fake_tool_executor
+
+
+# Phase 20 Task 5: Error sanitization regression tests
+
+@pytest.mark.asyncio
+async def test_openai_backend_run_error_is_sanitized(monkeypatch: Any, agent_spec: AgentSpec, run_context: RunContext) -> None:
+    """Backend run errors must not leak internal exception details."""
+    runner = FakeRunner()
+    runner._force_run_exception = RuntimeError("secret OpenAI backend token")
+    _install_fake_sdk(monkeypatch, runner=runner)
+    from agent_app.adapters.openai_agents import OpenAIAgentsBackend
+
+    backend = OpenAIAgentsBackend()
+    result = await backend.run(agent_spec, "hello", run_context)
+
+    assert result.status == "failed"
+    assert result.error == {
+        "type": "backend_execution_failed",
+        "message": "Backend execution failed; check server logs for details.",
+    }
+    assert "secret OpenAI backend token" not in str(result.error)

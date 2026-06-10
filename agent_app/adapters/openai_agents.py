@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import secrets
 import time
 import uuid
 from typing import Any, AsyncGenerator, Callable
@@ -639,12 +640,12 @@ class OpenAIAgentsBackend:
                 context,
                 agent_name=agent_spec.name,
                 status="failed",
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error={"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."},
             )
             return AppRunResult(
                 run_id=context.run_id,
                 status="failed",
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error={"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."},
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
 
@@ -667,7 +668,7 @@ class OpenAIAgentsBackend:
                 framework_interruptions: list[dict[str, Any]] = []
                 sdk_metadata: list[dict[str, Any]] = []
                 for item in sdk_interruptions:
-                    approval_id = f"apv_{uuid.uuid4().hex[:12]}"
+                    approval_id = f"apv_{secrets.token_hex(16)}"
                     sdk_call_id = _sdk_interruption_call_id(item)
                     tool_name = getattr(
                         item,
@@ -905,7 +906,7 @@ class OpenAIAgentsBackend:
             return AppRunResult(
                 run_id=context.run_id,
                 status="failed",
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error={"type": "backend_resume_failed", "message": "Backend resume failed; check server logs for details."},
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
 
@@ -998,7 +999,7 @@ class OpenAIAgentsBackend:
             yield StreamEvent(
                 type=StreamEventType.RUN_FAILED,
                 run_id=context.run_id,
-                data={"error": {"type": type(exc).__name__, "message": str(exc)}},
+                data={"error": {"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."}},
             )
             return
 
@@ -1172,12 +1173,12 @@ class OpenAIAgentsBackend:
                 step_type="error",
                 agent_name=entry_name,
                 status="failed",
-                output_summary=str(exc),
+                output_summary="backend execution failed",
             ))
             return AppRunResult(
                 run_id=context.run_id,
                 status="failed",
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error={"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."},
                 workflow_trace=trace,
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
@@ -1345,12 +1346,12 @@ class OpenAIAgentsBackend:
                 step_type="error",
                 agent_name=manager_name,
                 status="failed",
-                output_summary=str(exc),
+                output_summary="backend execution failed",
             ))
             return AppRunResult(
                 run_id=context.run_id,
                 status="failed",
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error={"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."},
                 workflow_trace=trace,
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )

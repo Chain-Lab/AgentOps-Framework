@@ -295,7 +295,7 @@ class AppRunner:
             )
         except Exception as exc:
             latency = int((time.perf_counter() - t0) * 1000)
-            error_detail = {"type": type(exc).__name__, "message": str(exc)}
+            error_detail = {"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."}
             result = AppRunResult(
                 run_id=run_id,
                 status="failed",
