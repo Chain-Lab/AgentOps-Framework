@@ -147,6 +147,62 @@ def main() -> int:
     replay_parser.add_argument("--rule-id", default=None, help="Filter by original rule name")
     replay_parser.add_argument("--limit", type=int, default=100, help="Max decisions to replay")
     replay_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    replay_parser.add_argument(
+        "--background", action="store_true",
+        help="Submit as background job instead of running synchronously",
+    )
+    replay_parser.add_argument(
+        "--requested-by", default=None,
+        help="Identity of who requested the replay (for background jobs)",
+    )
+    replay_parser.add_argument(
+        "--store", default="memory", choices=["memory", "sqlite"],
+        help="Replay result store type (default: memory)",
+    )
+    replay_parser.add_argument(
+        "--db-path", default=None,
+        help="SQLite database path (for --store sqlite)",
+    )
+
+    # Phase 28: replay run-job subcommand
+    run_job_parser = policy_sub.add_parser("run-job", help="Run a queued replay job")
+    run_job_parser.add_argument(
+        "job_id", help="Job ID to run"
+    )
+    run_job_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    run_job_parser.add_argument(
+        "--store", default="memory", choices=["memory", "sqlite"],
+        help="Replay result store type (default: memory)",
+    )
+    run_job_parser.add_argument(
+        "--db-path", default=None,
+        help="SQLite database path (for --store sqlite)",
+    )
+    run_job_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    # Phase 28: replay jobs subcommand
+    jobs_parser = policy_sub.add_parser("jobs", help="List replay jobs")
+    jobs_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    jobs_parser.add_argument(
+        "--store", default="memory", choices=["memory", "sqlite"],
+        help="Job store type (default: memory)",
+    )
+    jobs_parser.add_argument(
+        "--db-path", default=None,
+        help="SQLite database path (for --store sqlite)",
+    )
+    jobs_parser.add_argument(
+        "--limit", type=int, default=20, help="Max jobs to show (default: 20)"
+    )
+    jobs_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
 
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
@@ -308,6 +364,12 @@ def main() -> int:
 
     if args.command == "policy" and args.policy_command == "replay":
         return asyncio.run(_cmd_policy_replay(args))
+
+    if args.command == "policy" and args.policy_command == "run-job":
+        return asyncio.run(_cmd_policy_replay_run_job(args))
+
+    if args.command == "policy" and args.policy_command == "jobs":
+        return asyncio.run(_cmd_policy_replay_jobs(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -1338,9 +1400,19 @@ async def _cmd_policy_export(args: argparse.Namespace) -> int:
 
 
 async def _cmd_policy_replay(args: argparse.Namespace) -> int:
-    """Replay policy decisions against the current policy engine."""
+    """Replay policy decisions against the current policy engine.
+
+    Runs synchronously by default, or submits as background job with --background.
+    """
     from agent_app.config.loader import build_app
     from agent_app.governance.policy_replay import PolicyReplayRunner
+    from agent_app.runtime.policy_replay_store import create_replay_store
+    from agent_app.runtime.policy_replay_jobs import (
+        InMemoryPolicyReplayJobStore,
+        create_replay_job_store,
+    )
+    from agent_app.runtime.policy_replay_background import PolicyReplayBackgroundRunner
+    from agent_app.governance.policy_replay_context import PolicyReplayContextBuilder
 
     try:
         app = build_app(args.config)
@@ -1359,11 +1431,63 @@ async def _cmd_policy_replay(args: argparse.Namespace) -> int:
         from agent_app.governance.policy import DefaultPolicyEngine
         engine = DefaultPolicyEngine()
 
+    # Set up replay store
+    replay_store = create_replay_store(
+        store_type=args.store,
+        db_path=args.db_path,
+    )
+
+    # Set up context builder
+    context_builder = PolicyReplayContextBuilder()
+
     runner = PolicyReplayRunner(
         decision_store=store,
         policy_engine=engine,
+        replay_store=replay_store,
+        context_builder=context_builder,
     )
 
+    # Background mode: submit job and exit
+    if args.background:
+        job_store = create_replay_job_store(
+            store_type=args.store,
+            db_path=args.db_path,
+        )
+        bg_runner = PolicyReplayBackgroundRunner(
+            replay_runner=runner,
+            job_store=job_store,
+            replay_store=replay_store,
+        )
+        job = await bg_runner.submit(
+            limit=args.limit,
+            tenant_id=args.tenant_id,
+            tool_name=args.tool_name,
+            rule_id=args.rule_id,
+            requested_by=args.requested_by,
+        )
+        if args.json:
+            data = {
+                "job_id": job.job_id,
+                "status": job.status,
+                "limit": job.limit,
+                "tenant_id": job.tenant_id,
+                "tool_name": job.tool_name,
+                "rule_id": job.rule_id,
+                "requested_by": job.requested_by,
+                "created_at": job.created_at.isoformat(),
+            }
+            print(json.dumps(data, indent=2, default=str))
+        else:
+            print("Policy replay job queued")
+            print()
+            print(f"Job ID:       {job.job_id}")
+            print(f"Status:       {job.status}")
+            print(f"Requested by: {job.requested_by or 'anonymous'}")
+            print()
+            print(f"Run with: agentapp policy run-job {job.job_id} --config {args.config}")
+        return 0
+
+    # Synchronous mode (default)
     try:
         result = await runner.run_replay(
             limit=args.limit,
@@ -1393,6 +1517,7 @@ async def _cmd_policy_replay(args: argparse.Namespace) -> int:
                     "original_rule_id": c.original_rule_id,
                     "replayed_rule_id": c.replayed_rule_id,
                     "reason": c.reason,
+                    "context_metadata": c.context_metadata,
                 }
                 for c in result.changes
             ],
@@ -1422,6 +1547,142 @@ async def _cmd_policy_replay(args: argparse.Namespace) -> int:
                 for c in result.changes:
                     if c.replayed_action == "error":
                         print(f"  {c.decision_id}: {c.reason}")
+            if result.replay.failed_count == 0 and result.replay.changed_count == 0:
+                print("  All decisions produced the same action. No regressions detected.")
+
+    return 0
+
+
+async def _cmd_policy_replay_run_job(args: argparse.Namespace) -> int:
+    """Run a queued replay job."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_replay import PolicyReplayRunner
+    from agent_app.runtime.policy_replay_store import create_replay_store
+    from agent_app.runtime.policy_replay_jobs import create_replay_job_store
+    from agent_app.runtime.policy_replay_background import PolicyReplayBackgroundRunner
+    from agent_app.governance.policy_replay_context import PolicyReplayContextBuilder
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "policy_decision_store", None)
+    if store is None:
+        print("Policy decision store not configured.", file=sys.stderr)
+        return 1
+
+    engine = getattr(app, "policy_engine", None)
+    if engine is None:
+        from agent_app.governance.policy import DefaultPolicyEngine
+        engine = DefaultPolicyEngine()
+
+    replay_store = create_replay_store(
+        store_type=args.store,
+        db_path=args.db_path,
+    )
+    job_store = create_replay_job_store(
+        store_type=args.store,
+        db_path=args.db_path,
+    )
+    context_builder = PolicyReplayContextBuilder()
+
+    runner = PolicyReplayRunner(
+        decision_store=store,
+        policy_engine=engine,
+        replay_store=replay_store,
+        context_builder=context_builder,
+    )
+    bg_runner = PolicyReplayBackgroundRunner(
+        replay_runner=runner,
+        job_store=job_store,
+        replay_store=replay_store,
+    )
+
+    try:
+        job = await bg_runner.run_job(args.job_id)
+    except KeyError:
+        print(f"Job '{args.job_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running job: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        output = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "replay_id": job.replay_id,
+            "requested_by": job.requested_by,
+            "error": job.error,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        }
+        print(json.dumps(output, indent=2, default=str))
+    else:
+        if job.status == "completed":
+            print("Policy replay job completed")
+            print()
+            print(f"Job ID:       {job.job_id}")
+            print(f"Replay ID:    {job.replay_id}")
+            print(f"Status:       {job.status}")
+        elif job.status == "failed":
+            print("Policy replay job failed")
+            print()
+            print(f"Job ID:  {job.job_id}")
+            print(f"Error:   {job.error}")
+        else:
+            print(f"Job ID: {job.job_id}")
+            print(f"Status: {job.status}")
+
+    return 0 if job.status == "completed" else 1
+
+
+async def _cmd_policy_replay_jobs(args: argparse.Namespace) -> int:
+    """List replay jobs."""
+    from agent_app.runtime.policy_replay_jobs import create_replay_job_store
+
+    job_store = create_replay_job_store(
+        store_type=args.store,
+        db_path=args.db_path,
+    )
+
+    jobs = await job_store.list(limit=args.limit)
+
+    if not jobs:
+        print("No replay jobs found.")
+        return 0
+
+    if args.json:
+        data = [
+            {
+                "job_id": j.job_id,
+                "status": j.status,
+                "replay_id": j.replay_id,
+                "limit": j.limit,
+                "tenant_id": j.tenant_id,
+                "tool_name": j.tool_name,
+                "rule_id": j.rule_id,
+                "requested_by": j.requested_by,
+                "error": j.error,
+                "created_at": j.created_at.isoformat(),
+                "started_at": j.started_at.isoformat() if j.started_at else None,
+                "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            }
+            for j in jobs
+        ]
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Job ID':<20} {'Status':<12} {'Replay ID':<20} {'Tenant':<15} {'Created'}")
+        print("-" * 85)
+        for j in jobs:
+            print(
+                f"{j.job_id:<20} {j.status:<12} "
+                f"{(j.replay_id or '—'):<20} "
+                f"{(j.tenant_id or '—'):<15} "
+                f"{j.created_at.isoformat()[:19]}"
+            )
 
     return 0
 

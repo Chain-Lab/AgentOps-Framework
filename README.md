@@ -991,6 +991,32 @@ live recovery requires a confirmation token plus `confirm_no_dry_run=true`.
 See [`docs/recovery_admin_console.md`](docs/recovery_admin_console.md) for the
 full route list, safety defaults, HMAC token details, and current limitations.
 
+## Policy Replay & Regression
+
+The Policy Replay system re-evaluates historical policy decisions against the
+current policy configuration to detect regressions before deployment.
+
+```bash
+# Synchronous replay
+agentapp policy replay --config examples/customer_support/agentapp.yaml
+
+# Background job (persisted with SQLite)
+agentapp policy replay --config examples/customer_support/agentapp.yaml \
+  --background --store sqlite --db-path .agent_app/policy_replays.db
+
+# Run a background job
+agentapp policy run-job job_abc123... --config examples/customer_support/agentapp.yaml
+
+# List recent jobs
+agentapp policy jobs --config examples/customer_support/agentapp.yaml
+```
+
+Console pages (`/policy-console/replays` and `/policy-console/replay-jobs`) are
+available when the console is enabled. Replay results persist across restarts when
+using the SQLite store.
+
+See [`docs/policy_replay.md`](docs/policy_replay.md) for full documentation.
+
 ## Current limitations
 
 - **OpenAI backend multi-agent** — handoff targets and orchestrator agent_calls are traced but not fully extracted from SDK results
@@ -1207,3 +1233,11 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.10 — Recovery scanner and manual recovery with lease protection for DAG workflow runs ✅ (Phase 16.5)
 - v0.10 — Automatic recovery daemon with policy-driven scan/recover cycles (dry-run by default, conservative) ✅ (Phase 17)
 - v0.10 — Recovery observability and admin API: status, inspect, history, scan-once, recover, optional FastAPI router ✅ (Phase 18)
+- v0.14 — Recovery Admin Console: server-rendered UI for recovery management with dry-run/live safety boundaries ✅ (Phase 19)
+- v0.14 — OpenAI tool interception and RunState resume with approval governance ✅ (Phase 20)
+- v0.14 — Multi-agent handoff/orchestrator with governance propagation ✅ (Phase 22)
+- v0.15 — Policy engine with rule-based tool allow/deny/condition enforcement ✅ (Phase 23)
+- v0.15 — Policy Decision Store: trace-level decision recording with InMemory + SQLite persistence ✅ (Phase 25)
+- v0.15 — Policy Console Lite: read-only governance dashboard with decision history and report pages ✅ (Phase 26)
+- v0.15 — Policy Replay & Regression Dashboard: re-evaluate historical decisions against current policy ✅ (Phase 27)
+- v0.16 — Persistent policy replay, background jobs, context reconstruction with SQLite stores ✅ (Phase 28)

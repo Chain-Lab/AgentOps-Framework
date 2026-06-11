@@ -1047,3 +1047,54 @@ All notable changes to Agent App Framework are documented here.
 - Replay logic lives in governance/runtime modules, not templates
 - Console remains disabled by default
 - No duplicate policy reporting/query logic in console layer
+
+## Phase 28: Persistent Policy Replay, Background Jobs, Context Reconstruction (0.16.0)
+
+### Added
+
+- **`SQLitePolicyReplayStore`** — persistent replay result storage with `policy_replay_runs` and `policy_replay_changes` tables
+- **`SQLitePolicyReplayJobStore`** — persistent job storage with QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED lifecycle
+- **`PolicyReplayJob`** — background job model with metadata, filters, and error tracking
+- **`PolicyReplayJobStore`** protocol — `create()`, `get()`, `update()`, `list()` async interface
+- **`PolicyReplayContextBuilder`** — enhanced context reconstruction with missing field tracking
+- **`PolicyReplayContext`** — model with `missing_fields` list for transparent replay quality reporting
+- **`PolicyReplayBackgroundRunner`** — lightweight submit/run_job execution without external task queues
+- **`create_replay_store()` factory** — unified factory for memory or sqlite store types
+- **`create_replay_job_store()` factory** — unified factory for memory or sqlite job stores
+- **CLI extensions** — `--background`, `--store`, `--db-path`, `--requested-by`, `run-job`, `jobs` subcommands
+- **Console pages** — Replay Jobs Index (`/policy-console/replay-jobs`) and Job Detail (`/policy-console/replay-jobs/{id}`)
+- **Console nav** — Replay Jobs link added to base layout
+- **`context_metadata`** on decision changes — tracks context reconstruction quality per decision
+- **Missing context handling** — required fields missing → replay fails; optional fields → tracked and continue
+- **Cross-process persistence** — SQLite stores survive CLI process boundaries for background jobs
+- **`docs/policy_replay.md`** — updated with Phase 28 features, limitations, and architecture
+
+### New Files
+
+- `agent_app/governance/policy_replay_context.py` — context builder + replay context model (12 tests)
+- `agent_app/runtime/policy_replay_jobs.py` — job model + store protocol + memory + sqlite impl (20 tests)
+- `agent_app/runtime/policy_replay_background.py` — background runner (8 tests)
+- `tests/unit/test_sqlite_policy_replay_store.py` — 13 tests for SQLite replay store
+- `tests/unit/test_policy_replay_context.py` — 12 tests for context builder
+- `tests/unit/test_policy_replay_jobs.py` — 20 tests for job stores + background runner
+- `tests/unit/test_policy_replay_console_jobs.py` — 11 tests for console job pages
+- `tests/unit/test_policy_replay_cli_jobs.py` — CLI tests for background/jobs subcommands
+
+### Modified Files
+
+- `agent_app/governance/policy_replay.py` — extended `PolicyReplayDecisionChange` with `context_metadata`; `PolicyReplayRunner` accepts `context_builder`
+- `agent_app/runtime/policy_replay_store.py` — extended `PolicyReplayStore` protocol; added `SQLitePolicyReplayStore` + `create_replay_store()` factory
+- `agent_app/cli.py` — added `--background`, `--store`, `--db-path`, `--requested-by`; new `run-job` and `jobs` subcommands
+- `agent_app/console/router.py` — added replay job routes + templates
+- `agent_app/console/templates/replay_jobs.html` — new
+- `agent_app/console/templates/replay_job_detail.html` — new
+- `agent_app/console/templates/base.html` — added Replay Jobs nav link
+- `agent_app/adapters/fastapi.py` — passes job store to console router
+- `docs/policy_replay.md` — Phase 28 documentation added
+
+### Architecture Boundaries Maintained
+
+- Core modules (`policy_replay_context`, `policy_replay_jobs`, `policy_replay_background`) have no FastAPI/Jinja2 imports
+- Console templates only mount when console is enabled
+- Background runner is a plain async class — no framework coupling
+- Job and replay stores are independent protocols — no shared state leakage

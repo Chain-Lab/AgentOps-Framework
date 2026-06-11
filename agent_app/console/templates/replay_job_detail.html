@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Job {{ job.job_id }}{% endblock %}
+
+{% block content %}
+<h1>Replay Job: {{ job.job_id }}</h1>
+
+{% if error %}
+<div class="error-state">
+  <p>{{ error }}</p>
+</div>
+{% else %}
+<p><strong>Status:</strong> <span class="badge badge-{{ job.status }}">{{ job.status }}</span></p>
+<p><strong>Replay ID:</strong>
+  {% if job.replay_id != '—' %}
+    <a href="{{ base_path }}/replays/{{ job.replay_id }}">{{ job.replay_id }}</a>
+  {% else %}
+    {{ job.replay_id }}
+  {% endif %}
+</p>
+<p><strong>Limit:</strong> {{ job.limit or 'default (100)' }}</p>
+<p><strong>Tenant:</strong> {{ job.tenant_id }}</p>
+<p><strong>Tool:</strong> {{ job.tool_name }}</p>
+<p><strong>Rule:</strong> {{ job.rule_id }}</p>
+<p><strong>Requested By:</strong> {{ job.requested_by or 'anonymous' }}</p>
+{% if job.error %}
+<p><strong>Error:</strong> {{ job.error }}</p>
+{% endif %}
+<p><strong>Created:</strong> {{ job.created_at[:19] if job.created_at else '—' }}</p>
+<p><strong>Started:</strong> {{ job.started_at[:19] if job.started_at and job.started_at != '—' else '—' }}</p>
+<p><strong>Completed:</strong> {{ job.completed_at[:19] if job.completed_at and job.completed_at != '—' else '—' }}</p>
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/replay-jobs">← Back to Jobs</a>
+</p>
+{% endif %}
+{% endblock %}

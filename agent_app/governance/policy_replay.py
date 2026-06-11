@@ -5,6 +5,7 @@ Phase 27: lightweight policy replay and regression analysis.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -34,6 +35,7 @@ class PolicyReplayDecisionChange(BaseModel):
         original_rule_id: Rule that matched originally (if any).
         replayed_rule_id: Rule that matches under current policy (if any).
         reason: Explanation of why it changed (if applicable).
+        context_metadata: Context reconstruction metadata (Phase 28).
     """
     decision_id: str = Field(..., description="Original decision trace ID")
     original_action: str = Field(..., description="Original action")
@@ -42,6 +44,9 @@ class PolicyReplayDecisionChange(BaseModel):
     original_rule_id: str | None = Field(default=None, description="Original rule name")
     replayed_rule_id: str | None = Field(default=None, description="Replayed rule name")
     reason: str | None = Field(default=None, description="Change reason")
+    context_metadata: dict[str, Any] | None = Field(
+        default=None, description="Context reconstruction metadata"
+    )
 
 
 class PolicyReplayRun(BaseModel):
@@ -151,6 +156,7 @@ class PolicyReplayRunner:
         decision_store: Source of historical policy decisions.
         policy_engine: Current policy engine to re-evaluate with.
         replay_store: Optional store for persisting results.
+        context_builder: Optional context builder for richer reconstruction.
     """
 
     def __init__(
@@ -158,10 +164,12 @@ class PolicyReplayRunner:
         decision_store: Any,
         policy_engine: Any,
         replay_store: Any = None,
+        context_builder: Any = None,
     ) -> None:
         self._decision_store = decision_store
         self._policy_engine = policy_engine
         self._replay_store = replay_store
+        self._context_builder = context_builder
 
     async def run_replay(
         self,
@@ -203,8 +211,32 @@ class PolicyReplayRunner:
 
         for trace in traces:
             try:
-                # Reconstruct evaluation context from trace data
-                ctx = self._trace_to_context(trace)
+                replay_context_info: dict[str, Any] = {}
+
+                # Use context builder if available
+                if self._context_builder is not None:
+                    replay_ctx = self._context_builder.build(trace)
+                    replay_context_info = {
+                        "missing_fields": replay_ctx.missing_fields,
+                        "source": replay_ctx.source,
+                        "permissions_used": replay_ctx.permissions,
+                        "roles": replay_ctx.roles,
+                        "user_id": replay_ctx.user_id,
+                        "tenant_id": replay_ctx.tenant_id,
+                    }
+
+                    # Check if required fields are available
+                    eval_ctx = self._context_builder.build_evaluation_context(trace)
+                    if eval_ctx is None:
+                        raise ValueError(
+                            "Cannot replay decision: required context fields "
+                            f"missing ({', '.join(replay_ctx.missing_fields)}) "
+                            f"for decision {trace.decision_id}"
+                        )
+                    ctx = eval_ctx
+                else:
+                    # Fallback to direct trace-to-context conversion
+                    ctx = self._trace_to_context(trace)
 
                 # Guard: need at least tool_name to evaluate
                 if not ctx.tool_name:
@@ -227,6 +259,7 @@ class PolicyReplayRunner:
                         changed=False,
                         original_rule_id=trace.rule_name,
                         replayed_rule_id=new_decision.metadata.get("rule_name"),
+                        context_metadata=replay_context_info or None,
                     ))
                 else:
                     changed += 1
@@ -238,6 +271,7 @@ class PolicyReplayRunner:
                         original_rule_id=trace.rule_name,
                         replayed_rule_id=new_decision.metadata.get("rule_name"),
                         reason=new_decision.reason,
+                        context_metadata=replay_context_info or None,
                     ))
             except Exception as exc:
                 failed += 1

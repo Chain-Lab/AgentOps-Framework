@@ -13,7 +13,8 @@
       <a href="/policy-console/" class="{% if request.url.path == '/policy-console/' %}active{% endif %}">Dashboard</a>
       <a href="/policy-console/decisions" class="{% if '/decisions' in request.url.path and '/detail' not in request.url.path %}active{% endif %}">Decisions</a>
       <a href="/policy-console/report" class="{% if '/report' in request.url.path %}active{% endif %}">Report</a>
-      <a href="/policy-console/replays" class="{% if '/replays' in request.url.path %}active{% endif %}">Replays</a>
+      <a href="/policy-console/replays" class="{% if '/replays' in request.url.path and '/replay-jobs' not in request.url.path %}active{% endif %}">Replays</a>
+      <a href="/policy-console/replay-jobs" class="{% if '/replay-jobs' in request.url.path %}active{% endif %}">Replay Jobs</a>
     </nav>
   </header>
   <main class="console-main">

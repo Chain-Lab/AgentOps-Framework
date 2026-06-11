@@ -760,13 +760,19 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         return
     from agent_app.console.router import build_policy_console_router
     from agent_app.runtime.policy_replay_store import InMemoryPolicyReplayStore
+    from agent_app.runtime.policy_replay_jobs import InMemoryPolicyReplayJobStore
     store = getattr(agent_app, "policy_decision_store", None)
     # Phase 27: replay store (in-memory, created on mount)
     replay_store = getattr(agent_app, "_replay_store", None)
     if replay_store is None:
         replay_store = InMemoryPolicyReplayStore()
+    # Phase 28: replay job store (in-memory, created on mount)
+    replay_job_store = getattr(agent_app, "_replay_job_store", None)
+    if replay_job_store is None:
+        replay_job_store = InMemoryPolicyReplayJobStore()
     router = build_policy_console_router(
-        store=store, config=console_config, replay_store=replay_store
+        store=store, config=console_config, replay_store=replay_store,
+        replay_job_store=replay_job_store,
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

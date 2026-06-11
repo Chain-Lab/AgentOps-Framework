@@ -29,12 +29,15 @@ def build_policy_console_router(
     store: PolicyDecisionStore | None,
     config: Any = None,
     replay_store: PolicyReplayStore | None = None,
+    replay_job_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
     Args:
         store: The policy decision store (may be None).
         config: PolicyConsoleConfig with title, base_path, page_size.
+        replay_store: Optional policy replay result store.
+        replay_job_store: Optional policy replay job store (Phase 28).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -278,6 +281,89 @@ def build_policy_console_router(
                     "failed_count": run.failed_count,
                     "changes": changes,
                 },
+                "error": None,
+            },
+        )
+
+    # Phase 28: replay job routes
+    @router.get("/replay-jobs", response_class=HTMLResponse)
+    async def replay_jobs_index(request: Request):
+        """Replay jobs index."""
+        jobs_list: list[dict] = []
+        if replay_job_store is not None:
+            jobs = await replay_job_store.list(limit=page_size)
+            for j in jobs:
+                jobs_list.append({
+                    "job_id": j.job_id,
+                    "status": j.status,
+                    "replay_id": j.replay_id or "—",
+                    "limit": j.limit,
+                    "tenant_id": j.tenant_id or "—",
+                    "tool_name": j.tool_name or "—",
+                    "requested_by": j.requested_by or "—",
+                    "created_at": j.created_at.isoformat() if hasattr(j.created_at, "isoformat") else str(j.created_at),
+                })
+        return templates.TemplateResponse(
+            request,
+            "replay_jobs.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "jobs": jobs_list,
+                "store_available": replay_job_store is not None,
+            },
+        )
+
+    @router.get("/replay-jobs/{job_id}", response_class=HTMLResponse)
+    async def replay_job_detail(request: Request, job_id: str):
+        """Single replay job detail."""
+        if replay_job_store is None:
+            return templates.TemplateResponse(
+                request,
+                "replay_job_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "job": None,
+                    "error": "Replay job store not configured.",
+                },
+            )
+        job = await replay_job_store.get(job_id)
+        if job is None:
+            return templates.TemplateResponse(
+                request,
+                "replay_job_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "job": None,
+                    "error": f"Job '{job_id}' not found.",
+                },
+            )
+        job_dict = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "replay_id": job.replay_id or "—",
+            "limit": job.limit,
+            "tenant_id": job.tenant_id or "—",
+            "tool_name": job.tool_name or "—",
+            "rule_id": job.rule_id or "—",
+            "requested_by": job.requested_by or "—",
+            "error": job.error,
+            "created_at": job.created_at.isoformat() if hasattr(job.created_at, "isoformat") else str(job.created_at),
+            "started_at": job.started_at.isoformat() if job.started_at and hasattr(job.started_at, "isoformat") else str(job.started_at) if job.started_at else "—",
+            "completed_at": job.completed_at.isoformat() if job.completed_at and hasattr(job.completed_at, "isoformat") else str(job.completed_at) if job.completed_at else "—",
+        }
+        return templates.TemplateResponse(
+            request,
+            "replay_job_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "job": job_dict,
                 "error": None,
             },
         )

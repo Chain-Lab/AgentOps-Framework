@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Replay Jobs{% endblock %}
+
+{% block content %}
+<h1>Policy Replay Jobs</h1>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Replay job store is not configured.</p>
+  <p>Jobs will not be persisted across restarts.</p>
+</div>
+{% elif jobs|length == 0 %}
+<div class="empty-state">
+  <p>No replay jobs yet.</p>
+  <p>Submit a job from the CLI: <code>agentapp policy replay --config &lt;path&gt; --background</code></p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Job ID</th>
+      <th>Status</th>
+      <th>Replay ID</th>
+      <th>Tenant</th>
+      <th>Tool</th>
+      <th>Requested By</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr>
+      <td><a href="{{ base_path }}/replay-jobs/{{ j.job_id }}">{{ j.job_id }}</a></td>
+      <td><span class="badge badge-{{ j.status }}">{{ j.status }}</span></td>
+      <td>{% if j.replay_id != '—' %}<a href="{{ base_path }}/replays/{{ j.replay_id }}">{{ j.replay_id }}</a>{% else %}{{ j.replay_id }}{% endif %}</td>
+      <td>{{ j.tenant_id }}</td>
+      <td>{{ j.tool_name }}</td>
+      <td>{{ j.requested_by }}</td>
+      <td>{{ j.created_at[:19] if j.created_at else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/replays">← Back to Replays</a>
+</p>
+{% endblock %}
