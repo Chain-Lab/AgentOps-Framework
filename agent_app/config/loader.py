@@ -246,6 +246,11 @@ def build_app(
         else:
             policy_decision_store = InMemoryPolicyDecisionStore()
 
+    # -- Phase 26: Policy console config --
+    console_config: Any = None
+    if gov and getattr(gov, "policy_console", None):
+        console_config = gov.policy_console
+
     # -- Merge tools from global default registry (registered via @tool) --
     default_tr = get_default_registry()
     for name in default_tr.list():
@@ -368,6 +373,8 @@ def build_app(
     )
     # Phase 17: Store recovery config for auto-recovery policy
     app._recovery_config = getattr(runtime_cfg, "recovery_config", None)
+    # Phase 26: Store console config for FastAPI adapter
+    app._console_config = console_config
     return app
 
 

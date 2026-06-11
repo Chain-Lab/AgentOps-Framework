@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if not store_available %}
+<div class="empty-state">
+  <h2>Policy Decision Store Not Configured</h2>
+  <p>The policy decision store is not configured. Enable it in your <code>agentapp.yaml</code> under <code>governance.policy_decisions</code>.</p>
+  <pre><code>governance:
+  policy_decisions:
+    type: sqlite
+    path: .agent_app/policy_decisions.db</code></pre>
+</div>
+{% else %}
+<div class="dashboard">
+  {% if report %}
+  <section class="stats-grid">
+    <div class="stat-card total">
+      <h3>Total Decisions</h3>
+      <p class="stat-value">{{ report.total_decisions }}</p>
+    </div>
+    {% for action, count in report.action_breakdown.items() %}
+    <div class="stat-card action-{{ action }}">
+      <h3>{{ action }}</h3>
+      <p class="stat-value">{{ count }}</p>
+    </div>
+    {% endfor %}
+  </section>
+
+  {% if report.rule_breakdown %}
+  <section class="breakdown">
+    <h2>Top Rules</h2>
+    <table>
+      <thead><tr><th>Rule</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for rule, count in report.rule_breakdown.items() %}
+        <tr><td>{{ rule }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if report.tool_breakdown %}
+  <section class="breakdown">
+    <h2>Top Tools</h2>
+    <table>
+      <thead><tr><th>Tool</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for tool, count in report.tool_breakdown.items() %}
+        <tr><td>{{ tool }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if report.time_range.start or report.time_range.end %}
+  <section class="time-range">
+    <p>
+      <strong>Time range:</strong>
+      {{ report.time_range.start or '—' }} — {{ report.time_range.end or '—' }}
+    </p>
+  </section>
+  {% endif %}
+  {% endif %}
+
+  {% if recent %}
+  <section class="recent">
+    <h2>Recent Decisions</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Action</th>
+          <th>Rule</th>
+          <th>Tool</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in recent %}
+        <tr>
+          <td>{{ d.created_at }}</td>
+          <td><span class="badge badge-{{ d.action }}">{{ d.action }}</span></td>
+          <td>{{ d.rule_name or '—' }}</td>
+          <td>{{ d.tool_name or '—' }}</td>
+          <td>{{ d.reason or '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="table-footer">
+      <a href="/policy-console/decisions">View all decisions →</a>
+    </p>
+  </section>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

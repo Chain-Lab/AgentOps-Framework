@@ -276,6 +276,33 @@ class PolicyEngineConfig(BaseModel):
         return v
 
 
+class PolicyConsoleConfig(BaseModel):
+    """Policy console UI configuration (Phase 26).
+
+    Defaults to disabled.  When enabled, a read-only HTML console is
+    mounted at ``base_path`` under the FastAPI app.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable policy ops console (default: disabled)",
+    )
+    base_path: str = Field(
+        default="/policy-console",
+        description="URL prefix for console routes",
+    )
+    title: str = Field(
+        default="Agent App Policy Console",
+        description="Page title shown in the console",
+    )
+    page_size: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Default page size for decision lists",
+    )
+
+
 class PolicyDecisionStoreConfig(BaseModel):
     """Policy decision persistence configuration (Phase 25)."""
 
@@ -568,6 +595,10 @@ class GovernanceConfig(BaseModel):
         default=None,
         description="Policy decision store configuration (Phase 25)",
     )
+    policy_console: PolicyConsoleConfig | None = Field(
+        default=None,
+        description="Policy ops console configuration (Phase 26)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -613,7 +644,8 @@ class AppConfig(BaseModel):
         gov = result.get("governance")
         if isinstance(gov, dict):
             normalized_gov = {}
-            for section in ("approvals", "audit", "permissions", "policies"):
+            for section in ("approvals", "audit", "permissions", "policies",
+                            "policy_decisions", "policy_console"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/policy-console/static/console.css">
+</head>
+<body>
+  <header class="console-header">
+    <h1>{{ title }}</h1>
+    <nav class="console-nav">
+      <a href="/policy-console/" class="{% if request.url.path == '/policy-console/' %}active{% endif %}">Dashboard</a>
+      <a href="/policy-console/decisions" class="{% if '/decisions' in request.url.path and '/detail' not in request.url.path %}active{% endif %}">Decisions</a>
+      <a href="/policy-console/report" class="{% if '/report' in request.url.path %}active{% endif %}">Report</a>
+    </nav>
+  </header>
+  <main class="console-main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="console-footer">
+    <p>Read-only. Policy Console Lite — Phase 26.</p>
+  </footer>
+</body>
+</html>

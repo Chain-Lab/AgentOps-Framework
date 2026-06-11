@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if error %}
+<div class="error-state">
+  <h2>Error</h2>
+  <p>{{ error }}</p>
+  <a href="/policy-console/decisions">← Back to decisions</a>
+</div>
+{% elif decision %}
+<div class="detail-page">
+  <div class="detail-header">
+    <h2>Decision {{ decision.decision_id[:16] }}…</h2>
+    <span class="badge badge-{{ decision.action }}">{{ decision.action }}</span>
+  </div>
+
+  <dl class="detail-fields">
+    <dt>Timestamp</dt><dd>{{ decision.created_at }}</dd>
+    <dt>Rule</dt><dd>{{ decision.rule_name or '—' }}</dd>
+    <dt>Tool</dt><dd>{{ decision.tool_name or '—' }}</dd>
+    <dt>Workflow</dt><dd>{{ decision.workflow_type or '—' }}</dd>
+    <dt>Target Agent</dt><dd>{{ decision.target_agent or '—' }}</dd>
+    <dt>Run ID</dt><dd>{{ decision.run_id or '—' }}</dd>
+    <dt>User</dt><dd>{{ decision.user_id or '—' }}</dd>
+    <dt>Tenant</dt><dd>{{ decision.tenant_id or '—' }}</dd>
+    <dt>Reason</dt><dd>{{ decision.reason or '—' }}</dd>
+  </dl>
+
+  {% if decision.matched_conditions %}
+  <section class="detail-section">
+    <h3>Matched Conditions</h3>
+    <pre>{{ decision.matched_conditions | tojson(indent=2) }}</pre>
+  </section>
+  {% endif %}
+
+  {% if decision.context_summary %}
+  <section class="detail-section">
+    <h3>Context Summary</h3>
+    <pre>{{ decision.context_summary | tojson(indent=2) }}</pre>
+  </section>
+  {% endif %}
+
+  <p class="back-link"><a href="/policy-console/decisions">← Back to decisions</a></p>
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>Loading…</h2>
+</div>
+{% endif %}
+{% endblock %}

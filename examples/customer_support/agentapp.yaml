@@ -44,6 +44,11 @@ governance:
   policy_decisions:
     type: sqlite
     path: .agent_app/policy_decisions.db
+  policy_console:
+    enabled: true
+    base_path: /policy-console
+    title: Customer Support Policy Console
+    page_size: 50
 
 agents:
   triage:

@@ -992,3 +992,17 @@ All notable changes to Agent App Framework are documented here.
 - Core modules have no FastAPI dependency
 - Core modules have no openai-agents dependency
 - SQLite via stdlib `sqlite3` only (no ORM)
+
+## Phase 26: Policy Console Lite v1 (0.14.0)
+
+### Added
+
+- **`PolicyConsoleConfig`** — `enabled`, `base_path`, `title`, `page_size` fields in `GovernanceConfig`
+- **Policy Console HTML pages** — Dashboard, Decisions List, Decision Detail, Report
+- **Jinja2 templates** — `base.html` + 4 page templates in `agent_app/console/templates/`
+- **CSS styling** — `console.css` with responsive layout, badges, pagination
+- **FastAPI integration** — console router conditionally mounted in `create_fastapi_app()`
+- **Static file serving** — CSS/JS served from `/policy-console/static/`
+- **Jinja2 optional** — graceful error page when jinja2 not installed
+- **customer_support example** — policy_console config added
+- **11 new unit tests** for PolicyConsoleConfig + router registration

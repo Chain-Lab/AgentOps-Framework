@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if not store_available %}
+<div class="empty-state">
+  <h2>Policy Decision Store Not Configured</h2>
+  <p>Enable <code>governance.policy_decisions</code> in your config to view reports.</p>
+</div>
+{% elif not report %}
+<div class="empty-state">
+  <h2>No Data</h2>
+  <p>No policy decisions recorded yet.</p>
+</div>
+{% else %}
+<div class="report-page">
+  <section class="report-section">
+    <h2>Overview</h2>
+    <p><strong>Total decisions:</strong> {{ report.total_decisions }}</p>
+    {% if report.time_range.start or report.time_range.end %}
+    <p><strong>Time range:</strong> {{ report.time_range.start or '—' }} — {{ report.time_range.end or '—' }}</p>
+    {% endif %}
+  </section>
+
+  {% if report.action_breakdown %}
+  <section class="report-section">
+    <h2>By Action</h2>
+    <table>
+      <thead><tr><th>Action</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for action, count in report.action_breakdown.items() %}
+        <tr>
+          <td><span class="badge badge-{{ action }}">{{ action }}</span></td>
+          <td>{{ count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if report.rule_breakdown %}
+  <section class="report-section">
+    <h2>By Rule</h2>
+    <table>
+      <thead><tr><th>Rule</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for rule, count in report.rule_breakdown.items() %}
+        <tr><td>{{ rule }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if report.tool_breakdown %}
+  <section class="report-section">
+    <h2>By Tool</h2>
+    <table>
+      <thead><tr><th>Tool</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for tool, count in report.tool_breakdown.items() %}
+        <tr><td>{{ tool }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

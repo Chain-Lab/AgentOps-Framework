@@ -17,6 +17,7 @@ from agent_app.runtime.streaming import StreamEvent
 try:
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import StreamingResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 except ImportError as e:
     raise ImportError(
@@ -127,11 +128,13 @@ class PolicyDecisionSummary(BaseModel):
 # App factory
 # ---------------------------------------------------------------------------
 
-def create_fastapi_app(agent_app: AgentApp) -> FastAPI:
+def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastAPI:
     """Create a FastAPI application wrapping *agent_app*.
 
     Args:
         agent_app: A configured :class:`AgentApp` instance.
+        console_config: Optional PolicyConsoleConfig.  When not provided,
+            reads from ``agent_app._console_config`` if available.
 
     Returns:
         A ``FastAPI`` application ready to serve.
@@ -141,6 +144,13 @@ def create_fastapi_app(agent_app: AgentApp) -> FastAPI:
         description="HTTP API for AgentApp runs and management.",
         version="0.1.0",
     )
+
+    # Phase 26: Resolve console config — explicit arg > agent_app attr > None
+    if console_config is None:
+        console_config = getattr(agent_app, "_console_config", None)
+
+    # -- Phase 26: Mount policy console if enabled --
+    _mount_policy_console(api, agent_app, console_config)
 
     @api.get("/health")
     async def health() -> dict:
@@ -742,6 +752,27 @@ def create_fastapi_app(agent_app: AgentApp) -> FastAPI:
         return report.model_dump(mode="json")
 
     return api
+
+
+def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any) -> None:
+    """Mount the policy console router if enabled (Phase 26)."""
+    if console_config is None or not getattr(console_config, "enabled", False):
+        return
+    from agent_app.console.router import build_policy_console_router
+    store = getattr(agent_app, "policy_decision_store", None)
+    router = build_policy_console_router(store=store, config=console_config)
+    base_path = getattr(console_config, "base_path", "/policy-console")
+    api.include_router(router, prefix=base_path, tags=["Policy Console"])
+
+    # Serve static files
+    import os
+    static_dir = os.path.join(os.path.dirname(__file__), "..", "console", "static")
+    if os.path.isdir(static_dir):
+        api.mount(
+            f"{base_path}/static",
+            StaticFiles(directory=static_dir),
+            name="policy-console-static",
+        )
 
 
 def _result_to_dict(result: Any) -> dict:

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if not store_available %}
+<div class="empty-state">
+  <h2>Policy Decision Store Not Configured</h2>
+  <p>Enable <code>governance.policy_decisions</code> in your config to view decisions.</p>
+</div>
+{% else %}
+
+<div class="filter-bar">
+  <form method="get" action="/policy-console/decisions" class="filter-form">
+    <input type="text" name="action" placeholder="Action" value="{{ filters.action }}">
+    <input type="text" name="rule_name" placeholder="Rule" value="{{ filters.rule_name }}">
+    <input type="text" name="tool_name" placeholder="Tool" value="{{ filters.tool_name }}">
+    <input type="text" name="agent_name" placeholder="Agent" value="{{ filters.agent_name }}">
+    <input type="text" name="tenant_id" placeholder="Tenant" value="{{ filters.tenant_id }}">
+    <input type="text" name="run_id" placeholder="Run ID" value="{{ filters.run_id }}">
+    <button type="submit">Filter</button>
+    <a href="/policy-console/decisions" class="clear-btn">Clear</a>
+  </form>
+</div>
+
+{% if decisions %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Action</th>
+      <th>Rule</th>
+      <th>Tool</th>
+      <th>Agent</th>
+      <th>Workflow</th>
+      <th>User</th>
+      <th>Tenant</th>
+      <th>Run ID</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in decisions %}
+    <tr>
+      <td>{{ d.created_at }}</td>
+      <td><span class="badge badge-{{ d.action }}">{{ d.action }}</span></td>
+      <td>{{ d.rule_name }}</td>
+      <td>{{ d.tool_name }}</td>
+      <td>{{ d.agent_name }}</td>
+      <td>{{ d.workflow_type }}</td>
+      <td>{{ d.user_id }}</td>
+      <td>{{ d.tenant_id }}</td>
+      <td><a href="/policy-console/decisions/{{ d.decision_id }}">{{ d.decision_id[:12] }}…</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if pagination.has_prev %}
+    <a href="?limit={{ pagination.limit }}&amp;offset={{ pagination.prev_offset }}{% if filters.action %}&amp;action={{ filters.action }}{% endif %}{% if filters.rule_name %}&amp;rule_name={{ filters.rule_name }}{% endif %}{% if filters.tool_name %}&amp;tool_name={{ filters.tool_name }}{% endif %}{% if filters.agent_name %}&amp;agent_name={{ filters.agent_name }}{% endif %}{% if filters.tenant_id %}&amp;tenant_id={{ filters.tenant_id }}{% endif %}{% if filters.run_id %}&amp;run_id={{ filters.run_id }}{% endif %}">← Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.current }} of {{ pagination.pages }} ({{ pagination.total }} total)</span>
+  {% if pagination.has_next %}
+    <a href="?limit={{ pagination.limit }}&amp;offset={{ pagination.next_offset }}{% if filters.action %}&amp;action={{ filters.action }}{% endif %}{% if filters.rule_name %}&amp;rule_name={{ filters.rule_name }}{% endif %}{% if filters.tool_name %}&amp;tool_name={{ filters.tool_name }}{% endif %}{% if filters.agent_name %}&amp;agent_name={{ filters.agent_name }}{% endif %}{% if filters.tenant_id %}&amp;tenant_id={{ filters.tenant_id }}{% endif %}{% if filters.run_id %}&amp;run_id={{ filters.run_id }}{% endif %}">Next →</a>
+  {% endif %}
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>No Decisions Found</h2>
+  <p>No policy decisions match the current filters.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
