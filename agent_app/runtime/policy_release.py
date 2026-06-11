@@ -54,6 +54,8 @@ class PolicyReleaseService:
         permission_checker: Any = None,
         audit_logger: Any = None,
         allow_gate_bypass: bool = False,
+        activation_store: Any = None,
+        policy_resolver: Any = None,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -68,6 +70,8 @@ class PolicyReleaseService:
         )
         self._audit_logger = audit_logger
         self._allow_gate_bypass = allow_gate_bypass
+        self._activation_store = activation_store
+        self._policy_resolver = policy_resolver
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -457,6 +461,8 @@ class PolicyReleaseService:
         context: RunContext,
         bypass_gate: bool = False,
         bypass_reason: str | None = None,
+        environment: str = "prod",
+        reason: str | None = None,
     ) -> Any:
         """Execute an approved promotion request.
 
@@ -543,8 +549,39 @@ class PolicyReleaseService:
                     f"Gate bypass is not enabled in config (allow_gate_bypass=false)."
                 )
 
-        # Activate the bundle
-        activated = await self._bundle_store.activate(request.bundle_id)
+        # Phase 31: Create activation record
+        from agent_app.governance.policy_activation import PolicyActivation
+
+        bundle = await self._bundle_store.get(request.bundle_id)
+
+        if self._activation_store is not None:
+            activation = PolicyActivation(
+                activation_id=f"pa_{uuid.uuid4().hex[:12]}",
+                environment=environment,
+                bundle_id=request.bundle_id,
+                config_hash=bundle.config_hash,
+                promotion_id=promotion_id,
+                activated_by=executed_by,
+                reason=reason,
+            )
+            activation = await self._activation_store.activate(activation)
+            await self._write_audit(
+                "policy.activation.created",
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                data={
+                    "activation_id": activation.activation_id,
+                    "environment": environment,
+                    "bundle_id": request.bundle_id,
+                    "config_hash": bundle.config_hash,
+                    "promotion_id": promotion_id,
+                    "activated_by": executed_by,
+                    "reason": reason,
+                },
+            )
+        else:
+            activated = await self._bundle_store.activate(request.bundle_id)
+            activation = activated
 
         # Mark promotion as executed
         await self._promotion_store.mark_executed(
@@ -561,10 +598,11 @@ class PolicyReleaseService:
                 "bundle_id": request.bundle_id,
                 "executed_by": executed_by,
                 "bypass_gate": bypass_gate,
+                "environment": environment,
             },
         )
 
-        return activated
+        return activation
 
     @property
     def promotion_store(self) -> Any:
@@ -575,3 +613,31 @@ class PolicyReleaseService:
     def gate_store(self) -> Any:
         """Access the underlying gate store (for console integration)."""
         return self._gate_store
+
+    async def get_active_policy(self, environment: str = "prod") -> Any | None:
+        """Return the active policy bundle for the given environment."""
+        if self._policy_resolver is None:
+            return None
+        return await self._policy_resolver.resolve_active_bundle(environment)
+
+    async def require_active_policy(self, environment: str = "prod") -> Any:
+        """Return the active policy bundle, raising if none is active."""
+        if self._policy_resolver is None:
+            raise RuntimeError("Policy resolver not configured.")
+        return await self._policy_resolver.require_active_bundle(environment)
+
+    async def list_activations(self, environment: str | None = None) -> list[Any]:
+        """List policy activations, optionally filtered by environment."""
+        if self._activation_store is None:
+            return []
+        return await self._activation_store.list(environment=environment)
+
+    @property
+    def activation_store(self) -> Any:
+        """Access the underlying activation store (for console integration)."""
+        return self._activation_store
+
+    @property
+    def policy_resolver(self) -> Any:
+        """Access the underlying policy resolver (for console integration)."""
+        return self._policy_resolver
