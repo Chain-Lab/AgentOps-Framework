@@ -371,8 +371,8 @@ class PolicyReleaseConfig(BaseModel):
         default_factory=PolicyReleaseStoreConfig,
         description="Policy gate result store configuration",
     )
-    promotions: PolicyReleaseStoreConfig = Field(
-        default_factory=PolicyReleaseStoreConfig,
+    promotions: PolicyReleaseStoreConfig | None = Field(
+        default=None,
         description="Policy promotion request store configuration (Phase 30)",
     )
     rules: list[PolicyGateRuleConfig] = Field(
