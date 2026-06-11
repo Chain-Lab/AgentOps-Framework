@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Replay {{ replay.replay_id }}{% endblock %}
+
+{% block content %}
+<h1>Replay: {{ replay.replay_id }}</h1>
+
+{% if error %}
+<div class="error-state">
+  <p>{{ error }}</p>
+</div>
+{% else %}
+<div class="stats-grid">
+  <div class="stat-card">
+    <h3>Source Decisions</h3>
+    <p class="stat-value">{{ replay.source_decision_count }}</p>
+  </div>
+  <div class="stat-card stat-changed">
+    <h3>Changed</h3>
+    <p class="stat-value">{{ replay.changed_count }}</p>
+  </div>
+  <div class="stat-card stat-unchanged">
+    <h3>Unchanged</h3>
+    <p class="stat-value">{{ replay.unchanged_count }}</p>
+  </div>
+  <div class="stat-card">
+    <h3>Failed</h3>
+    <p class="stat-value">{{ replay.failed_count }}</p>
+  </div>
+</div>
+
+<p><strong>Status:</strong> <span class="badge badge-{{ replay.status }}">{{ replay.status }}</span></p>
+<p><strong>Created:</strong> {{ replay.created_at[:19] if replay.created_at else '—' }}</p>
+
+{% if replay.changed_count > 0 %}
+<h2>Changed Decisions</h2>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Decision ID</th>
+      <th>Original Action</th>
+      <th>Replayed Action</th>
+      <th>Original Rule</th>
+      <th>New Rule</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in replay.changes %}
+    {% if c.changed %}
+    <tr>
+      <td><a href="{{ base_path }}/decisions/{{ c.decision_id }}">{{ c.decision_id }}</a></td>
+      <td><span class="badge badge-{{ c.original_action }}">{{ c.original_action }}</span></td>
+      <td><span class="badge badge-{{ c.replayed_action }}">{{ c.replayed_action }}</span></td>
+      <td>{{ c.original_rule_id or '—' }}</td>
+      <td>{{ c.replayed_rule_id or 'default' }}</td>
+      <td>{{ c.reason or '—' }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if replay.failed_count > 0 %}
+<h2>Failed Replays</h2>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Decision ID</th>
+      <th>Original Action</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in replay.changes %}
+    {% if c.replayed_action == 'error' %}
+    <tr>
+      <td>{{ c.decision_id }}</td>
+      <td>{{ c.original_action }}</td>
+      <td>{{ c.reason or 'Unknown error' }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if replay.changed_count == 0 and replay.failed_count == 0 %}
+<p class="success-msg">All decisions produced the same action under current policy. No regressions detected.</p>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/replays">← Back to Replays</a>
+</p>
+{% endif %}
+{% endblock %}

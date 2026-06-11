@@ -1006,3 +1006,44 @@ All notable changes to Agent App Framework are documented here.
 - **Jinja2 optional** — graceful error page when jinja2 not installed
 - **customer_support example** — policy_console config added
 - **11 new unit tests** for PolicyConsoleConfig + router registration
+
+## Phase 27: Policy Replay & Regression Dashboard (0.15.0)
+
+### Added
+
+- **`PolicyReplayRunner`** — re-evaluates historical decisions against current policy engine
+- **Replay models** — `PolicyReplayStatus`, `PolicyReplayDecisionChange`, `PolicyReplayRun`, `PolicyReplayResult`
+- **`InMemoryPolicyReplayStore`** — in-memory persistence for replay results (save/get/list)
+- **Context reconstruction** — rebuilds `PolicyEvaluationContext` from `PolicyDecisionTrace.context_summary`
+- **Failed replay handling** — decisions missing `tool_name` are marked failed with clear reason
+- **CLI command** — `agentapp policy replay` with filters (--tenant-id, --tool-name, --rule-id, --limit, --json)
+- **Console pages** — Replay Index (`/policy-console/replays`) and Replay Detail (`/policy-console/replays/{id}`)
+- **Console nav** — Replays link added to base layout
+- **`docs/policy_replay.md`** — full documentation with limitations and security notes
+
+### New Files
+
+- `agent_app/governance/policy_replay.py` — models + runner
+- `agent_app/runtime/policy_replay_store.py` — store protocol + in-memory impl
+- `tests/unit/test_policy_replay.py` — 12 tests
+- `tests/unit/test_policy_replay_store.py` — 6 tests
+- `tests/unit/test_policy_replay_cli.py` — 4 tests
+- `tests/unit/test_policy_replay_console.py` — 6 tests
+- `docs/policy_replay.md` — documentation
+
+### Modified Files
+
+- `agent_app/cli.py` — added `policy replay` subcommand
+- `agent_app/console/router.py` — added replay routes + templates
+- `agent_app/console/templates/replay_index.html` — new
+- `agent_app/console/templates/replay_detail.html` — new
+- `agent_app/console/templates/base.html` — added Replays nav link
+- `agent_app/adapters/fastapi.py` — passes replay_store to console router
+
+### Architecture Boundaries Maintained
+
+- Core modules have no FastAPI dependency
+- Core modules have no Jinja2 dependency
+- Replay logic lives in governance/runtime modules, not templates
+- Console remains disabled by default
+- No duplicate policy reporting/query logic in console layer

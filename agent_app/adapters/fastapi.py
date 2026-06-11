@@ -759,8 +759,15 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
     if console_config is None or not getattr(console_config, "enabled", False):
         return
     from agent_app.console.router import build_policy_console_router
+    from agent_app.runtime.policy_replay_store import InMemoryPolicyReplayStore
     store = getattr(agent_app, "policy_decision_store", None)
-    router = build_policy_console_router(store=store, config=console_config)
+    # Phase 27: replay store (in-memory, created on mount)
+    replay_store = getattr(agent_app, "_replay_store", None)
+    if replay_store is None:
+        replay_store = InMemoryPolicyReplayStore()
+    router = build_policy_console_router(
+        store=store, config=console_config, replay_store=replay_store
+    )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])
 

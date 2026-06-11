@@ -137,6 +137,17 @@ def main() -> int:
     export_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
     export_parser.add_argument("--limit", type=int, default=10000, help="Max records")
 
+    # Phase 27: policy replay subcommand
+    replay_parser = policy_sub.add_parser("replay", help="Replay policy decisions against current policy")
+    replay_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    replay_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
+    replay_parser.add_argument("--tool-name", default=None, help="Filter by tool name")
+    replay_parser.add_argument("--rule-id", default=None, help="Filter by original rule name")
+    replay_parser.add_argument("--limit", type=int, default=100, help="Max decisions to replay")
+    replay_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -294,6 +305,9 @@ def main() -> int:
 
     if args.command == "policy" and args.policy_command == "export":
         return asyncio.run(_cmd_policy_export(args))
+
+    if args.command == "policy" and args.policy_command == "replay":
+        return asyncio.run(_cmd_policy_replay(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -1320,6 +1334,95 @@ async def _cmd_policy_export(args: argparse.Namespace) -> int:
         )
 
     print(f"Exported {count} policy decisions to {args.output}")
+    return 0
+
+
+async def _cmd_policy_replay(args: argparse.Namespace) -> int:
+    """Replay policy decisions against the current policy engine."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_replay import PolicyReplayRunner
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "policy_decision_store", None)
+    if store is None:
+        print("Policy decision store not configured.", file=sys.stderr)
+        return 1
+
+    engine = getattr(app, "policy_engine", None)
+    if engine is None:
+        print("Policy engine is not configured. Using default allow policy.", file=sys.stderr)
+        from agent_app.governance.policy import DefaultPolicyEngine
+        engine = DefaultPolicyEngine()
+
+    runner = PolicyReplayRunner(
+        decision_store=store,
+        policy_engine=engine,
+    )
+
+    try:
+        result = await runner.run_replay(
+            limit=args.limit,
+            tenant_id=args.tenant_id,
+            tool_name=args.tool_name,
+            rule_id=args.rule_id,
+        )
+    except Exception as exc:
+        print(f"Error during replay: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "replay_id": result.replay.replay_id,
+            "status": result.replay.status,
+            "source_decision_count": result.replay.source_decision_count,
+            "changed_count": result.replay.changed_count,
+            "unchanged_count": result.replay.unchanged_count,
+            "failed_count": result.replay.failed_count,
+            "created_at": result.replay.created_at.isoformat(),
+            "changes": [
+                {
+                    "decision_id": c.decision_id,
+                    "original_action": c.original_action,
+                    "replayed_action": c.replayed_action,
+                    "changed": c.changed,
+                    "original_rule_id": c.original_rule_id,
+                    "replayed_rule_id": c.replayed_rule_id,
+                    "reason": c.reason,
+                }
+                for c in result.changes
+            ],
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Policy replay completed")
+        print()
+        print(f"Replay ID:     {result.replay.replay_id}")
+        print(f"Source decisions: {result.replay.source_decision_count}")
+        print(f"Changed:       {result.replay.changed_count}")
+        print(f"Unchanged:     {result.replay.unchanged_count}")
+        print(f"Failed:        {result.replay.failed_count}")
+        print()
+        if result.changes:
+            print("Changes:")
+            for c in result.changes:
+                if c.changed:
+                    print(
+                        f"  {c.decision_id}: "
+                        f"{c.original_action} -> {c.replayed_action} "
+                        f"(rule: {c.replayed_rule_id or 'default'})"
+                    )
+            if result.replay.failed_count > 0:
+                print()
+                print("Failures:")
+                for c in result.changes:
+                    if c.replayed_action == "error":
+                        print(f"  {c.decision_id}: {c.reason}")
+
     return 0
 
 

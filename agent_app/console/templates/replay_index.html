@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Replays{% endblock %}
+
+{% block content %}
+<h1>Policy Replays</h1>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Replay store is not configured. Replay results will appear here after running <code>agentapp policy replay</code>.</p>
+</div>
+{% elif replays|length == 0 %}
+<div class="empty-state">
+  <p>No replay results yet. Run <code>agentapp policy replay</code> from the CLI to get started.</p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Replay ID</th>
+      <th>Status</th>
+      <th>Created</th>
+      <th>Source</th>
+      <th>Changed</th>
+      <th>Unchanged</th>
+      <th>Failed</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in replays %}
+    <tr>
+      <td><a href="{{ base_path }}/replays/{{ r.replay_id }}">{{ r.replay_id }}</a></td>
+      <td><span class="badge badge-{{ r.status }}">{{ r.status }}</span></td>
+      <td>{{ r.created_at[:19] if r.created_at else '—' }}</td>
+      <td>{{ r.source_decision_count }}</td>
+      <td>{% if r.changed_count > 0 %}<strong class="text-danger">{{ r.changed_count }}</strong>{% else %}{{ r.changed_count }}{% endif %}</td>
+      <td>{{ r.unchanged_count }}</td>
+      <td>{% if r.failed_count > 0 %}<strong class="text-danger">{{ r.failed_count }}</strong>{% else %}{{ r.failed_count }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/">← Back to Dashboard</a>
+</p>
+{% endblock %}

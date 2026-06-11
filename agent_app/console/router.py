@@ -22,11 +22,13 @@ from agent_app.governance.policy_decision_store import (
     PolicyDecisionStore,
     PolicyReportingService,
 )
+from agent_app.runtime.policy_replay_store import PolicyReplayStore
 
 
 def build_policy_console_router(
     store: PolicyDecisionStore | None,
     config: Any = None,
+    replay_store: PolicyReplayStore | None = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -47,9 +49,11 @@ def build_policy_console_router(
 
     router = APIRouter()
     title = "Agent App Policy Console"
+    base_path = "/policy-console"
     page_size = 50
     if config is not None:
         title = getattr(config, "title", title)
+        base_path = getattr(config, "base_path", base_path)
         page_size = getattr(config, "page_size", page_size)
 
     templates = Jinja2Templates(directory=_get_templates_dir())
@@ -186,6 +190,95 @@ def build_policy_console_router(
                 "title": title,
                 "report": _report_to_dict(report) if report else None,
                 "store_available": store is not None,
+            },
+        )
+
+    # Phase 27: replay pages
+    @router.get("/replays", response_class=HTMLResponse)
+    async def replays_index(request: Request):
+        """Replay results index."""
+        replay_runs: list[dict] = []
+        if replay_store is not None:
+            runs = await replay_store.list(limit=page_size)
+            for run in runs:
+                replay_runs.append({
+                    "replay_id": run.replay_id,
+                    "status": run.status,
+                    "created_at": run.created_at.isoformat() if hasattr(run.created_at, "isoformat") else str(run.created_at),
+                    "source_decision_count": run.source_decision_count,
+                    "changed_count": run.changed_count,
+                    "unchanged_count": run.unchanged_count,
+                    "failed_count": run.failed_count,
+                })
+        return templates.TemplateResponse(
+            request,
+            "replay_index.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "replays": replay_runs,
+                "store_available": replay_store is not None,
+            },
+        )
+
+    @router.get("/replays/{replay_id}", response_class=HTMLResponse)
+    async def replay_detail(request: Request, replay_id: str):
+        """Single replay detail."""
+        if replay_store is None:
+            return templates.TemplateResponse(
+                request,
+                "replay_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "replay": None,
+                    "error": "Replay store not configured.",
+                },
+            )
+        result = await replay_store.get(replay_id)
+        if result is None:
+            return templates.TemplateResponse(
+                request,
+                "replay_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "replay": None,
+                    "error": f"Replay '{replay_id}' not found.",
+                },
+            )
+        run = result.replay
+        changes = []
+        for c in result.changes:
+            changes.append({
+                "decision_id": c.decision_id,
+                "original_action": c.original_action,
+                "replayed_action": c.replayed_action,
+                "changed": c.changed,
+                "original_rule_id": c.original_rule_id,
+                "replayed_rule_id": c.replayed_rule_id,
+                "reason": c.reason,
+            })
+        return templates.TemplateResponse(
+            request,
+            "replay_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "replay": {
+                    "replay_id": run.replay_id,
+                    "status": run.status,
+                    "created_at": run.created_at.isoformat() if hasattr(run.created_at, "isoformat") else str(run.created_at),
+                    "source_decision_count": run.source_decision_count,
+                    "changed_count": run.changed_count,
+                    "unchanged_count": run.unchanged_count,
+                    "failed_count": run.failed_count,
+                    "changes": changes,
+                },
+                "error": None,
             },
         )
 

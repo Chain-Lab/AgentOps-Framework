@@ -13,7 +13,7 @@ business logic and LLM agent runtimes. It gives you:
 - **Tool governance** — risk levels, permissions, human approval gates, audit logging
 - **Policy engine** — configurable YAML-driven policy rules with explainable decision traces
 - **Policy decision store** — persistent, queryable policy decision storage with reporting and export (JSONL/CSV)
-- **Policy console** — read-only HTML console for browsing policy decisions and reports (Phase 26)
+- **Policy console** — read-only HTML console for browsing policy decisions, reports, and replay results (Phase 26/27)
 - **Session management** — in-memory or SQLite-backed conversation history
 - **Streaming events** — real-time token delta, tool call, and run lifecycle events
 - **Eval runner** — YAML-defined regression suites with assertions for status, output, approvals, routing
