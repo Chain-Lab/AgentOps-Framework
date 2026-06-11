@@ -251,6 +251,11 @@ def build_app(
     if gov and getattr(gov, "policy_console", None):
         console_config = gov.policy_console
 
+    # -- Phase 29: Policy release config --
+    release_config: Any = None
+    if gov and getattr(gov, "policy_release", None):
+        release_config = gov.policy_release
+
     # -- Merge tools from global default registry (registered via @tool) --
     default_tr = get_default_registry()
     for name in default_tr.list():
@@ -375,6 +380,8 @@ def build_app(
     app._recovery_config = getattr(runtime_cfg, "recovery_config", None)
     # Phase 26: Store console config for FastAPI adapter
     app._console_config = console_config
+    # Phase 29: Store release config
+    app._release_config = release_config
     return app
 
 

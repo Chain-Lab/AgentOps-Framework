@@ -316,6 +316,67 @@ class PolicyDecisionStoreConfig(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 29: Policy Release config
+# ---------------------------------------------------------------------------
+
+class PolicyGateRuleConfig(BaseModel):
+    """A single release gate rule from YAML config."""
+
+    name: str = Field(..., description="Unique rule name")
+    description: str | None = Field(default=None, description="Rule description")
+    max_changed_decisions: int | None = Field(
+        default=None, description="Max changed decisions allowed"
+    )
+    max_changed_ratio: float | None = Field(
+        default=None,
+        description="Max changed ratio (0.0–1.0)",
+    )
+    max_failed_replays: int | None = Field(
+        default=None, description="Max failed replays allowed"
+    )
+    max_new_denies: int | None = Field(
+        default=None, description="Max new denies introduced"
+    )
+    max_new_approvals: int | None = Field(
+        default=None, description="Max new approvals introduced"
+    )
+    fail_on_missing_required_context: bool = Field(
+        default=False,
+        description="Fail if required context is missing in replay",
+    )
+
+
+class PolicyReleaseStoreConfig(BaseModel):
+    """Policy release store configuration."""
+
+    type: str = Field(
+        default="memory",
+        description="Store backend: memory | sqlite",
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite database path (required when type=sqlite)",
+    )
+
+
+class PolicyReleaseConfig(BaseModel):
+    """Policy release gate configuration (Phase 29)."""
+
+    bundles: PolicyReleaseStoreConfig = Field(
+        default_factory=PolicyReleaseStoreConfig,
+        description="Policy bundle store configuration",
+    )
+    gates: PolicyReleaseStoreConfig = Field(
+        default_factory=PolicyReleaseStoreConfig,
+        description="Policy gate result store configuration",
+    )
+    rules: list[PolicyGateRuleConfig] = Field(
+        default_factory=list,
+        description="Release gate rules",
+    )
+
+
 class LeaseRenewalConfig(BaseModel):
     """Configuration for best-effort background lease renewal (Phase 15.2).
 
@@ -599,6 +660,10 @@ class GovernanceConfig(BaseModel):
         default=None,
         description="Policy ops console configuration (Phase 26)",
     )
+    policy_release: PolicyReleaseConfig | None = Field(
+        default=None,
+        description="Policy release gate configuration (Phase 29)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -645,7 +710,7 @@ class AppConfig(BaseModel):
         if isinstance(gov, dict):
             normalized_gov = {}
             for section in ("approvals", "audit", "permissions", "policies",
-                            "policy_decisions", "policy_console"):
+                            "policy_decisions", "policy_console", "policy_release"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val
