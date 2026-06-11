@@ -776,6 +776,9 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 29: policy release stores
         bundle_store=_get_bundle_store(agent_app),
         gate_store=_get_gate_store(agent_app),
+        # Phase 30: promotion store and release service
+        promotion_store=_get_promotion_store(agent_app),
+        release_service=getattr(agent_app, "_release_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])
@@ -804,6 +807,14 @@ def _get_gate_store(agent_app: Any) -> Any:
     release_service = getattr(agent_app, "_release_service", None)
     if release_service is not None:
         return getattr(release_service, "gate_store", None)
+    return None
+
+
+def _get_promotion_store(agent_app: Any) -> Any:
+    """Extract the promotion request store from the agent app (Phase 30)."""
+    release_service = getattr(agent_app, "_release_service", None)
+    if release_service is not None:
+        return getattr(release_service, "promotion_store", None)
     return None
 
 

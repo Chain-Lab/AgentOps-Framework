@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Promotion Requests</h1>
+
+{% if error %}
+<div class="error-state">
+  <h2>Error</h2>
+  <p>{{ error }}</p>
+</div>
+{% elif not store_available %}
+<div class="empty-state">
+  <p>Promotion store not configured.</p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Promotion ID</th>
+      <th>Bundle ID</th>
+      <th>Status</th>
+      <th>Requested By</th>
+      <th>Resolved By</th>
+      <th>Created</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in promotions %}
+    <tr>
+      <td><a href="{{ base_path }}/promotions/{{ p.promotion_id }}">{{ p.promotion_id }}</a></td>
+      <td><a href="{{ base_path }}/bundles/{{ p.bundle_id }}">{{ p.bundle_id }}</a></td>
+      <td>{{ p.status }}</td>
+      <td>{{ p.requested_by }}</td>
+      <td>{{ p.resolved_by }}</td>
+      <td>{{ p.created_at }}</td>
+      <td>
+        {% if p.status == 'pending' %}
+        <a href="{{ base_path }}/promotions/{{ p.promotion_id }}">Review</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if not promotions %}
+<div class="empty-state">
+  <p>No promotion requests.</p>
+</div>
+{% endif %}
+
+<div class="detail-section" style="margin-top: 2rem;">
+  <h3>Create Promotion Request</h3>
+  <form method="post" action="{{ base_path }}/promotions">
+    <label>Bundle ID: <input type="text" name="bundle_id" required></label><br>
+    <label>Requested By: <input type="text" name="requested_by" required></label><br>
+    <label>Reason: <input type="text" name="reason"></label><br>
+    <label>Permissions (comma-separated): <input type="text" name="permissions" value="policy.promotion.request"></label><br>
+    <button type="submit">Create Request</button>
+  </form>
+</div>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/bundles">← Bundles</a>
+</p>
+{% endblock %}

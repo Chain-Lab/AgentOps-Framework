@@ -34,6 +34,8 @@ def build_policy_console_router(
     replay_job_store: Any = None,
     bundle_store: Any = None,
     gate_store: Any = None,
+    promotion_store: Any = None,
+    release_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -44,6 +46,8 @@ def build_policy_console_router(
         replay_job_store: Optional policy replay job store (Phase 28).
         bundle_store: Optional policy bundle store (Phase 29).
         gate_store: Optional policy gate result store (Phase 29).
+        promotion_store: Optional promotion request store (Phase 30).
+        release_service: Optional policy release service (Phase 30).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -494,6 +498,248 @@ def build_policy_console_router(
             },
         )
 
+    # Phase 30: policy promotion pages
+    @router.get("/promotions", response_class=HTMLResponse)
+    async def promotions_index(request: Request):
+        """Policy promotion requests list."""
+        promotions_list: list[dict] = []
+        if promotion_store is not None:
+            requests = await promotion_store.list()
+            for r in requests[:page_size]:
+                promotions_list.append(_promotion_to_row(r))
+        return templates.TemplateResponse(
+            request,
+            "policy_promotions.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotions": promotions_list,
+                "store_available": promotion_store is not None,
+            },
+        )
+
+    @router.get("/promotions/{promotion_id}", response_class=HTMLResponse)
+    async def promotion_detail(request: Request, promotion_id: str):
+        """Single promotion request detail."""
+        if promotion_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_promotion_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "promotion": None,
+                    "error": "Promotion store not configured.",
+                },
+            )
+        req = await promotion_store.get(promotion_id)
+        if req is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_promotion_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "promotion": None,
+                    "error": f"Promotion request '{promotion_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "promotion": _promotion_to_detail(req),
+                "error": None,
+            },
+        )
+
+    # POST routes for promotion write actions
+    @router.post("/promotions", response_class=HTMLResponse)
+    async def create_promotion(request: Request):
+        """Create a new promotion request."""
+        error_msg = None
+        created_request = None
+        if release_service is None:
+            error_msg = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                bundle_id = form.get("bundle_id", "")
+                requested_by = form.get("requested_by", "")
+                reason = form.get("reason") or None
+                if not bundle_id or not requested_by:
+                    error_msg = "bundle_id and requested_by are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{requested_by}",
+                        user_id=requested_by,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    created_request = await release_service.request_promotion(
+                        bundle_id=bundle_id,
+                        requested_by=requested_by,
+                        context=context,
+                        reason=reason,
+                    )
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_promotions.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotions": [],
+                "store_available": promotion_store is not None,
+                "error": error_msg,
+                "created_request": created_request,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/approve", response_class=HTMLResponse)
+    async def approve_promotion(request: Request, promotion_id: str):
+        """Approve a promotion request."""
+        error_msg = None
+        updated = None
+        if release_service is None:
+            error_msg = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                approved_by = form.get("approved_by", "")
+                reason = form.get("reason") or None
+                if not approved_by:
+                    error_msg = "approved_by is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{approved_by}",
+                        user_id=approved_by,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    updated = await release_service.approve_promotion(
+                        promotion_id=promotion_id,
+                        approved_by=approved_by,
+                        context=context,
+                        reason=reason,
+                    )
+            except PermissionError as exc:
+                error_msg = f"Permission denied: {exc}"
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": promotion_store is not None,
+                "promotion": updated if updated else (await promotion_store.get(promotion_id) if promotion_store else None),
+                "error": error_msg,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/reject", response_class=HTMLResponse)
+    async def reject_promotion(request: Request, promotion_id: str):
+        """Reject a promotion request."""
+        error_msg = None
+        updated = None
+        if release_service is None:
+            error_msg = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                rejected_by = form.get("rejected_by", "")
+                reason = form.get("reason") or None
+                if not rejected_by:
+                    error_msg = "rejected_by is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{rejected_by}",
+                        user_id=rejected_by,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    updated = await release_service.reject_promotion(
+                        promotion_id=promotion_id,
+                        rejected_by=rejected_by,
+                        context=context,
+                        reason=reason,
+                    )
+            except PermissionError as exc:
+                error_msg = f"Permission denied: {exc}"
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": promotion_store is not None,
+                "promotion": updated if updated else (await promotion_store.get(promotion_id) if promotion_store else None),
+                "error": error_msg,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/execute", response_class=HTMLResponse)
+    async def execute_promotion(request: Request, promotion_id: str):
+        """Execute an approved promotion."""
+        error_msg = None
+        result = None
+        if release_service is None:
+            error_msg = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                executed_by = form.get("executed_by", "")
+                bypass_gate = form.get("bypass_gate") == "on"
+                bypass_reason = form.get("bypass_reason") or None
+                if not executed_by:
+                    error_msg = "executed_by is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{executed_by}",
+                        user_id=executed_by,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    result = await release_service.execute_promotion(
+                        promotion_id=promotion_id,
+                        executed_by=executed_by,
+                        context=context,
+                        bypass_gate=bypass_gate,
+                        bypass_reason=bypass_reason,
+                    )
+            except PermissionError as exc:
+                error_msg = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                error_msg = str(exc)
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": promotion_store is not None,
+                "promotion": await promotion_store.get(promotion_id) if promotion_store else None,
+                "error": error_msg,
+                "executed_bundle": result,
+            },
+        )
+
     return router
 
 
@@ -505,6 +751,55 @@ def _get_templates_dir() -> str:
     """Return the templates directory path."""
     import os
     return os.path.join(os.path.dirname(__file__), "templates")
+
+
+def _promotion_to_row(req: Any) -> dict:
+    """Convert PromotionRequest to a table row dict."""
+    created = req.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    resolved = req.resolved_at
+    if hasattr(resolved, "isoformat"):
+        resolved = resolved.isoformat()
+    return {
+        "promotion_id": req.promotion_id,
+        "bundle_id": req.bundle_id,
+        "status": req.status,
+        "requested_by": req.requested_by,
+        "resolved_by": req.resolved_by or "—",
+        "created_at": created,
+        "resolved_at": resolved or "—",
+        "reason": req.reason or "—",
+    }
+
+
+def _promotion_to_detail(req: Any) -> dict:
+    """Convert PromotionRequest to a detail page dict."""
+    created = req.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    resolved = req.resolved_at
+    if hasattr(resolved, "isoformat"):
+        resolved = resolved.isoformat()
+    executed = req.executed_at
+    if hasattr(executed, "isoformat"):
+        executed = executed.isoformat()
+    return {
+        "promotion_id": req.promotion_id,
+        "bundle_id": req.bundle_id,
+        "gate_result_id": req.gate_result_id or "—",
+        "status": req.status,
+        "requested_by": req.requested_by,
+        "tenant_id": req.tenant_id or "—",
+        "reason": req.reason or "—",
+        "approval_reason": req.approval_reason or "—",
+        "rejection_reason": req.rejection_reason or "—",
+        "resolved_by": req.resolved_by or "—",
+        "resolved_at": resolved,
+        "executed_by": req.executed_by or "—",
+        "executed_at": executed,
+        "created_at": created,
+    }
 
 
 def _bundle_to_row(bundle: Any) -> dict:

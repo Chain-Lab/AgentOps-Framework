@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Promotion Request Detail</h1>
+
+{% if error %}
+<div class="error-state">
+  <h2>{% if promotion %}Action Result{% else %}Error{% endif %}</h2>
+  <p>{{ error }}</p>
+</div>
+{% elif not promotion %}
+<div class="empty-state">
+  <p>Loading promotion request...</p>
+</div>
+{% else %}
+<div class="detail-header">
+  <h2>{{ promotion.promotion_id }}</h2>
+  <span class="badge badge-allow">{{ promotion.status }}</span>
+</div>
+
+<dl class="detail-fields">
+  <dt>Promotion ID</dt>
+  <dd><code>{{ promotion.promotion_id }}</code></dd>
+
+  <dt>Bundle ID</dt>
+  <dd><a href="{{ base_path }}/bundles/{{ promotion.bundle_id }}">{{ promotion.bundle_id }}</a></dd>
+
+  <dt>Gate Result ID</dt>
+  <dd>{{ promotion.gate_result_id }}</dd>
+
+  <dt>Status</dt>
+  <dd>{{ promotion.status }}</dd>
+
+  <dt>Requested By</dt>
+  <dd>{{ promotion.requested_by }}</dd>
+
+  <dt>Tenant ID</dt>
+  <dd>{{ promotion.tenant_id }}</dd>
+
+  <dt>Reason</dt>
+  <dd>{{ promotion.reason }}</dd>
+
+  <dt>Approval Reason</dt>
+  <dd>{{ promotion.approval_reason }}</dd>
+
+  <dt>Rejection Reason</dt>
+  <dd>{{ promotion.rejection_reason }}</dd>
+
+  <dt>Resolved By</dt>
+  <dd>{{ promotion.resolved_by }}</dd>
+
+  <dt>Resolved At</dt>
+  <dd>{{ promotion.resolved_at }}</dd>
+
+  <dt>Executed By</dt>
+  <dd>{{ promotion.executed_by }}</dd>
+
+  <dt>Executed At</dt>
+  <dd>{{ promotion.executed_at }}</dd>
+
+  <dt>Created At</dt>
+  <dd>{{ promotion.created_at }}</dd>
+</dl>
+
+{% if promotion.status == 'pending' %}
+<div class="detail-section">
+  <h3>Approve</h3>
+  <form method="post" action="{{ base_path }}/promotions/{{ promotion.promotion_id }}/approve">
+    <label>Approved By: <input type="text" name="approved_by" required></label><br>
+    <label>Reason: <input type="text" name="reason"></label><br>
+    <label>Permissions: <input type="text" name="permissions" value="policy.promotion.approve"></label><br>
+    <button type="submit">Approve</button>
+  </form>
+</div>
+
+<div class="detail-section">
+  <h3>Reject</h3>
+  <form method="post" action="{{ base_path }}/promotions/{{ promotion.promotion_id }}/reject">
+    <label>Rejected By: <input type="text" name="rejected_by" required></label><br>
+    <label>Reason: <input type="text" name="reason"></label><br>
+    <label>Permissions: <input type="text" name="permissions" value="policy.promotion.reject"></label><br>
+    <button type="submit">Reject</button>
+  </form>
+</div>
+{% endif %}
+
+{% if promotion.status == 'approved' %}
+<div class="detail-section">
+  <h3>Execute Promotion</h3>
+  <form method="post" action="{{ base_path }}/promotions/{{ promotion.promotion_id }}/execute">
+    <label>Executed By: <input type="text" name="executed_by" required></label><br>
+    <label>Permissions: <input type="text" name="permissions" value="policy.promotion.execute"></label><br>
+    <button type="submit">Execute</button>
+  </form>
+</div>
+{% endif %}
+
+{% if executed_bundle %}
+<div class="detail-section">
+  <h3>Execution Result</h3>
+  <p>Bundle activated: {{ executed_bundle.bundle_id }} (status: {{ executed_bundle.status }})</p>
+</div>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/promotions">← Back to Promotion Requests</a>
+</p>
+{% endif %}
+{% endblock %}

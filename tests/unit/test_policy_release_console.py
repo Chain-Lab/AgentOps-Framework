@@ -321,3 +321,375 @@ class TestReleaseConsoleRouter:
         resp = client.get("/policy-console/gates")
         assert resp.status_code == 200
         assert "not configured" in resp.text.lower()
+
+
+class TestPromotionConsoleRouter:
+    """Tests for Phase 30 console promotion pages."""
+
+    def _make_app(self):
+        """Create a minimal FastAPI app for console testing."""
+        from agent_app import AgentApp
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.registry.agent_registry import AgentRegistry
+        from agent_app.registry.tool_registry import ToolRegistry
+        from agent_app.registry.workflow_registry import WorkflowRegistry
+        from agent_app.adapters.fastapi import create_fastapi_app
+
+        ar = AgentRegistry()
+        tr = ToolRegistry()
+        wr = WorkflowRegistry()
+        app = AgentApp(
+            registry=type("B", (), {"agent_registry": ar, "tool_registry": tr, "workflow_registry": wr})()
+        )
+        app.agent_registry = ar
+        app.tool_registry = tr
+        app.workflow_registry = wr
+        app.approval_store = InMemoryApprovalStore()
+        app.audit_logger = InMemoryAuditLogger()
+        return create_fastapi_app(app)
+
+    def _get_client(self, api):
+        from starlette.testclient import TestClient
+        return TestClient(api)
+
+    def test_promotions_page_returns_200(self):
+        """Promotions list page returns 200."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import InMemoryPromotionRequestStore
+
+        store = InMemoryPromotionRequestStore()
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/promotions")
+        assert resp.status_code == 200
+        assert "Promotion Requests" in resp.text or "promotions" in resp.text
+
+    def test_promotions_detail_page_returns_200(self):
+        """Promotion detail page returns 200."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import (
+            InMemoryPromotionRequestStore,
+            PromotionRequest,
+            PromotionRequestStatus,
+        )
+        from datetime import datetime, timezone
+
+        store = InMemoryPromotionRequestStore()
+        req = PromotionRequest(
+            promotion_id="pr_test123",
+            bundle_id="pb_001",
+            requested_by="alice",
+            status=PromotionRequestStatus.PENDING,
+            reason="Release it",
+            created_at=datetime.now(timezone.utc),
+        )
+        store._requests["pr_test123"] = req
+        store._order.append("pr_test123")
+
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/promotions/pr_test123")
+        assert resp.status_code == 200
+
+    def test_promotion_detail_not_found(self):
+        """Promotion detail page handles missing promotion gracefully."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import InMemoryPromotionRequestStore
+
+        store = InMemoryPromotionRequestStore()
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/promotions/pr_nonexistent")
+        assert resp.status_code == 200
+        assert "not found" in resp.text.lower() or "error" in resp.text.lower()
+
+    def test_create_promotion_post(self):
+        """POST to /promotions creates a promotion request."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import InMemoryPromotionRequestStore
+        from agent_app.runtime.policy_release import PolicyReleaseService
+        from agent_app.governance.policy_bundle import (
+            InMemoryPolicyBundleStore, PolicyBundle, compute_config_hash,
+        )
+
+        bundle_store = InMemoryPolicyBundleStore()
+        bundle = PolicyBundle(
+            bundle_id="pb_001",
+            name="test",
+            version="1.0.0",
+            config_hash=compute_config_hash("test"),
+            created_by="alice",
+        )
+        bundle_store._bundles["pb_001"] = bundle
+        bundle_store._order.append("pb_001")
+
+        store = InMemoryPromotionRequestStore()
+        release_service = PolicyReleaseService(
+            bundle_store=bundle_store, replay_runner=None, replay_store=None,
+            gate_evaluator=None, gate_store=None, promotion_store=store,
+        )
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+            release_service=release_service,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.post("/policy-console/promotions", data={
+            "bundle_id": "pb_001",
+            "requested_by": "alice",
+            "reason": "Console request",
+            "permissions": "policy.promotion.request",
+        })
+        assert resp.status_code in (200, 302)
+        requests = list(store._requests.values())
+        assert len(requests) == 1
+        assert requests[0].bundle_id == "pb_001"
+
+    def test_approve_post(self):
+        """POST to /promotions/{id}/approve approves a request."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import (
+            InMemoryPromotionRequestStore,
+            PromotionRequest,
+            PromotionRequestStatus,
+        )
+        from agent_app.runtime.policy_release import PolicyReleaseService
+        from datetime import datetime, timezone
+
+        store = InMemoryPromotionRequestStore()
+        req = PromotionRequest(
+            promotion_id="pr_test",
+            bundle_id="pb_001",
+            requested_by="alice",
+            status=PromotionRequestStatus.PENDING,
+            created_at=datetime.now(timezone.utc),
+        )
+        store._requests["pr_test"] = req
+        store._order.append("pr_test")
+
+        release_service = PolicyReleaseService(
+            bundle_store=None, replay_runner=None, replay_store=None,
+            gate_evaluator=None, gate_store=None, promotion_store=store,
+        )
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+            release_service=release_service,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.post("/policy-console/promotions/pr_test/approve", data={
+            "approved_by": "reviewer",
+            "reason": "Looks good",
+            "permissions": "policy.promotion.approve",
+        })
+        assert resp.status_code in (200, 302)
+        updated = store._requests.get("pr_test")
+        assert updated is not None
+        assert updated.status == PromotionRequestStatus.APPROVED
+
+    def test_reject_post(self):
+        """POST to /promotions/{id}/reject rejects a request."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import (
+            InMemoryPromotionRequestStore,
+            PromotionRequest,
+            PromotionRequestStatus,
+        )
+        from agent_app.runtime.policy_release import PolicyReleaseService
+        from datetime import datetime, timezone
+
+        store = InMemoryPromotionRequestStore()
+        req = PromotionRequest(
+            promotion_id="pr_test",
+            bundle_id="pb_001",
+            requested_by="alice",
+            status=PromotionRequestStatus.PENDING,
+            created_at=datetime.now(timezone.utc),
+        )
+        store._requests["pr_test"] = req
+        store._order.append("pr_test")
+
+        release_service = PolicyReleaseService(
+            bundle_store=None, replay_runner=None, replay_store=None,
+            gate_evaluator=None, gate_store=None, promotion_store=store,
+        )
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+            release_service=release_service,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.post("/policy-console/promotions/pr_test/reject", data={
+            "rejected_by": "reviewer",
+            "reason": "Too risky",
+            "permissions": "policy.promotion.reject",
+        })
+        assert resp.status_code in (200, 302)
+        updated = store._requests.get("pr_test")
+        assert updated is not None
+        assert updated.status == PromotionRequestStatus.REJECTED
+
+    def test_execute_post(self):
+        """POST to /promotions/{id}/execute executes an approved request."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import (
+            InMemoryPromotionRequestStore,
+            PromotionRequest,
+            PromotionRequestStatus,
+        )
+        from agent_app.governance.policy_bundle import (
+            InMemoryPolicyBundleStore,
+            PolicyBundle,
+            PolicyBundleStatus,
+        )
+        from agent_app.governance.policy_gate import PolicyGateEvaluator, PolicyGateRule
+        from agent_app.runtime.policy_gate_store import InMemoryPolicyGateStore
+        from agent_app.runtime.policy_release import PolicyReleaseService
+        from datetime import datetime, timezone
+
+        bundle_store = InMemoryPolicyBundleStore()
+        gate_store = InMemoryPolicyGateStore()
+        promo_store = InMemoryPromotionRequestStore()
+
+        # Create a bundle and run a passing gate
+        bundle = PolicyBundle(
+            bundle_id="pb_001",
+            name="test",
+            version="1.0.0",
+            config_hash="abc",
+            created_at=datetime.now(timezone.utc),
+        )
+        bundle_store._bundles["pb_001"] = bundle
+        bundle_store._order.append("pb_001")
+
+        from agent_app.governance.policy_replay import (
+            PolicyReplayResult, PolicyReplayRun, PolicyReplayStatus,
+            PolicyReplayDecisionChange,
+        )
+        from agent_app.governance.policy_gate import PolicyGateResult, PolicyGateStatus
+        run = PolicyReplayRun(
+            replay_id="replay_1",
+            status=PolicyReplayStatus.COMPLETED,
+            source_decision_count=10,
+            changed_count=1,
+            unchanged_count=9,
+            failed_count=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        changes = [PolicyReplayDecisionChange(
+            decision_id="dec_1", original_action="allow",
+            replayed_action="allow", changed=False,
+        ) for _ in range(10)]
+        replay_result = PolicyReplayResult(replay=run, changes=changes)
+
+        # Manually create a passing gate result (evaluate is async)
+        gate_result = PolicyGateResult(
+            gate_result_id="gr_exec_test",
+            bundle_id="pb_001",
+            replay_id="replay_1",
+            status=PolicyGateStatus.PASSED,
+            passed=True,
+            total_decisions=10,
+            changed_decisions=1,
+            failed_replays=0,
+            changed_ratio=0.1,
+            rule_results=[{"rule_name": "safe_default", "passed": True, "status": "passed"}],
+            created_by="admin",
+        )
+        gate_store._results[gate_result.gate_result_id] = gate_result
+        gate_store._order.append(gate_result.gate_result_id)
+
+        req = PromotionRequest(
+            promotion_id="pr_test",
+            bundle_id="pb_001",
+            gate_result_id=gate_result.gate_result_id,
+            requested_by="alice",
+            status=PromotionRequestStatus.APPROVED,
+            created_at=datetime.now(timezone.utc),
+        )
+        promo_store._requests["pr_test"] = req
+        promo_store._order.append("pr_test")
+
+        service = PolicyReleaseService(
+            bundle_store=bundle_store,
+            replay_runner=None,
+            replay_store=None,
+            gate_evaluator=PolicyGateEvaluator(rules=[
+                PolicyGateRule(name="safe_default", max_changed_ratio=0.10, max_failed_replays=0),
+            ]),
+            gate_store=gate_store,
+            promotion_store=promo_store,
+        )
+
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=bundle_store, gate_store=gate_store,
+            promotion_store=promo_store,
+            release_service=service,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.post("/policy-console/promotions/pr_test/execute", data={
+            "executed_by": "release_manager",
+            "permissions": "policy.promotion.execute",
+        })
+        assert resp.status_code in (200, 302)
+        updated = promo_store._requests.get("pr_test")
+        assert updated is not None
+        assert updated.status == PromotionRequestStatus.EXECUTED
+        active = bundle_store._bundles.get("pb_001")
+        assert active is not None
+        assert active.status == PolicyBundleStatus.ACTIVE
+
+    def test_permission_error_renders_cleanly(self):
+        """Permission errors render as page messages, not tracebacks."""
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.promotion_store import InMemoryPromotionRequestStore
+
+        store = InMemoryPromotionRequestStore()
+        # No release_service provided — POST will show error gracefully
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None,
+            promotion_store=store,
+            release_service=None,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.post("/policy-console/promotions", data={
+            "bundle_id": "pb_001",
+            "requested_by": "alice",
+        })
+        # Should return 200 with error message, not 500
+        assert resp.status_code == 200
+        assert "Traceback" not in resp.text
