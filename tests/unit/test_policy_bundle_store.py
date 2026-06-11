@@ -230,3 +230,122 @@ class TestInMemoryPolicyBundleStore:
 
         fetched = await store.get("pb_1")
         assert fetched.name == "updated"
+
+
+# ---------------------------------------------------------------------------
+# SQLite tests
+# ---------------------------------------------------------------------------
+
+from agent_app.governance.policy_bundle import SQLitePolicyBundleStore
+
+
+def _make_db_path(tmp_path):
+    """Create a temp db path."""
+    return str(tmp_path / "test_bundles.db")
+
+
+class TestSQLitePolicyBundleStore:
+    """Tests for SQLitePolicyBundleStore."""
+
+    async def test_persists_across_instances(self, tmp_path):
+        """Bundles survive store recreation."""
+        db_path = _make_db_path(tmp_path)
+        store1 = SQLitePolicyBundleStore(db_path)
+        bundle = _make_bundle("pb_persist")
+        await store1.create(bundle)
+        store1.close()
+
+        # New instance, same db
+        store2 = SQLitePolicyBundleStore(db_path)
+        fetched = await store2.get("pb_persist")
+        assert fetched is not None
+        assert fetched.name == "test-bundle"
+        store2.close()
+
+    async def test_list_sorted_desc(self, tmp_path):
+        """List returns bundles sorted by created_at descending."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        b1 = _make_bundle("pb_1")
+        b2 = _make_bundle("pb_2")
+        b3 = _make_bundle("pb_3")
+        import asyncio
+        await store.create(b1)
+        await asyncio.sleep(0.01)
+        await store.create(b2)
+        await asyncio.sleep(0.01)
+        await store.create(b3)
+
+        bundles = await store.list()
+        assert len(bundles) == 3
+        assert bundles[0].bundle_id == "pb_3"
+        assert bundles[1].bundle_id == "pb_2"
+        assert bundles[2].bundle_id == "pb_1"
+        store.close()
+
+    async def test_activate_archives_previous_active(self, tmp_path):
+        """Activating a new bundle archives the previous active one."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        b1 = _make_bundle("pb_1", status=PolicyBundleStatus.DRAFT)
+        b2 = _make_bundle("pb_2", status=PolicyBundleStatus.DRAFT)
+        await store.create(b1)
+        await store.create(b2)
+
+        await store.activate("pb_1")
+        await store.activate("pb_2")
+
+        b1_fetched = await store.get("pb_1")
+        assert b1_fetched.status == PolicyBundleStatus.ARCHIVED
+        assert b1_fetched.archived_at is not None
+
+        b2_fetched = await store.get("pb_2")
+        assert b2_fetched.status == PolicyBundleStatus.ACTIVE
+        store.close()
+
+    async def test_get_active_empty(self, tmp_path):
+        """get_active returns None when no active bundle."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        result = await store.get_active()
+        assert result is None
+        store.close()
+
+    async def test_get_active_returns_active(self, tmp_path):
+        """get_active returns the active bundle."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        bundle = _make_bundle("pb_active")
+        await store.create(bundle)
+        await store.activate("pb_active")
+
+        active = await store.get_active()
+        assert active is not None
+        assert active.bundle_id == "pb_active"
+        store.close()
+
+    async def test_activate_missing_raises(self, tmp_path):
+        """Activating non-existent bundle raises KeyError."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        with pytest.raises(KeyError, match="not found"):
+            await store.activate("pb_nonexistent")
+        store.close()
+
+    async def test_archive_missing_raises(self, tmp_path):
+        """Archiving non-existent bundle raises KeyError."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        with pytest.raises(KeyError, match="not found"):
+            await store.archive("pb_nonexistent")
+        store.close()
+
+    async def test_list_with_limit(self, tmp_path):
+        """List respects limit parameter."""
+        db_path = _make_db_path(tmp_path)
+        store = SQLitePolicyBundleStore(db_path)
+        for i in range(5):
+            await store.create(_make_bundle(f"pb_{i}"))
+        bundles = await store.list(limit=2)
+        assert len(bundles) == 2
+        store.close()
