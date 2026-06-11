@@ -17,13 +17,14 @@
       <a href="/policy-console/replay-jobs" class="{% if '/replay-jobs' in request.url.path %}active{% endif %}">Replay Jobs</a>
       <a href="/policy-console/bundles" class="{% if '/bundles' in request.url.path %}active{% endif %}">Bundles</a>
       <a href="/policy-console/gates" class="{% if '/gates' in request.url.path %}active{% endif %}">Gates</a>
+      <a href="/policy-console/promotions" class="{% if '/promotions' in request.url.path %}active{% endif %}">Promotions</a>
     </nav>
   </header>
   <main class="console-main">
     {% block content %}{% endblock %}
   </main>
   <footer class="console-footer">
-    <p>Read-only. Policy Console Lite — Phase 26.</p>
+    <p>Read-only. Policy Console Lite — Phase 26. Promotion write actions — Phase 30.</p>
   </footer>
 </body>
 </html>

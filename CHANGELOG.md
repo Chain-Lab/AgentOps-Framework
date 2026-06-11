@@ -2,7 +2,27 @@
 
 All notable changes to Agent App Framework are documented here.
 
-## 0.10.0
+## Phase 30: Policy Promotion Approval, RBAC, and Console Write Governance (0.18.0)
+
+### Added
+
+- **PolicyReleasePermission** — 8 granular permissions for policy release operations (BUNDLE_CREATE, GATE_RUN, PROMOTION_REQUEST, PROMOTION_APPROVE, PROMOTION_REJECT, PROMOTION_EXECUTE, ROLLBACK_EXECUTE, BYPASS_GATE)
+- **PolicyReleasePermissionChecker** — RBAC checker; BUNDLE_CREATE and GATE_RUN allowed by default; all others require explicit permission grant
+- **PromotionRequest model** — Full lifecycle model with PENDING → APPROVED → REJECTED → EXECUTED / CANCELLED status
+- **PromotionRequestStore** — Protocol + InMemory + SQLite implementation for promotion request persistence
+- **PolicyReleaseService extensions** — `request_promotion()`, `approve_promotion()`, `reject_promotion()`, `execute_promotion()` with RBAC checks and audit logging
+- **Gate bypass controls** — Triple gate: `bypass_gate=True` param AND `allow_gate_bypass=True` config AND `BYPASS_GATE` permission AND non-empty `bypass_reason`
+- **Audit events** — `policy.promotion.requested`, `approved`, `rejected`, `executed`, `execute_blocked`, `gate.bypass_used`, `permission_denied`
+- **Config extensions** — `promotions` store config, `require_promotion_approval`, `allow_gate_bypass` fields
+- **CLI promotion subcommands** — `agentapp policy promotion request/list/approve/reject/execute` with `--actor-id`/`--permissions`
+- **Console promotion pages** — GET list/detail + POST create/approve/reject/execute with permission-aware form handling
+- **68+ tests** — RBAC, promotion model, promotion store, release service, CLI, console tests
+
+### Changed
+
+- `PolicyReleasePermissionError` now extends `PermissionError` for proper CLI exception handling
+
+## Phase 29: Policy Release Gates & Versioned Policy Bundles (0.17.0)
 
 ### Added
 
