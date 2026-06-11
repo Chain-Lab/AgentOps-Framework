@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_app.runtime.policy_release import PolicyReleaseService
+from agent_app.runtime.policy_release import PolicyReleaseService, PolicyReleasePermissionError
 from agent_app.governance.policy_bundle import (
     InMemoryPolicyBundleStore,
     PolicyBundle,
@@ -28,6 +28,10 @@ from agent_app.governance.policy_replay import (
     PolicyReplayStatus,
     PolicyReplayDecisionChange,
 )
+from agent_app.core.context import RunContext
+from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+from agent_app.runtime.promotion_store import InMemoryPromotionRequestStore, PromotionRequest, PromotionRequestStatus
+from agent_app.governance.audit import InMemoryAuditLogger
 
 
 def _make_bundle(
@@ -105,6 +109,30 @@ def _make_service(
         gate_evaluator=evaluator,
         gate_store=gate_store,
     )
+
+
+def _make_mock_replay_runner(total=100, changed=5, failed=0):
+    class MockRunner:
+        async def run_replay(self, **kwargs):
+            return _make_replay_result(total=total, changed=changed, failed=failed)
+    return MockRunner()
+
+
+def _make_mock_replay_store():
+    class MockStore:
+        async def save(self, result):
+            return result
+    return MockStore()
+
+
+def _make_default_evaluator():
+    return PolicyGateEvaluator(rules=[
+        PolicyGateRule(name="safe_default", max_changed_ratio=0.10, max_failed_replays=0),
+    ])
+
+
+def _make_context(permissions: list[str], user_id: str = "alice", tenant_id: str = "tenant_1") -> RunContext:
+    return RunContext(run_id="run_1", user_id=user_id, tenant_id=tenant_id, permissions=permissions)
 
 
 class TestPolicyReleaseService:
@@ -324,3 +352,163 @@ class _MockReplayRunner:
 
     async def run_replay(self, **kwargs):
         return _make_replay_result()
+
+
+class TestPolicyReleaseServiceRBAC:
+    """Tests for RBAC and promotion lifecycle."""
+
+    def _make_service(self, promotion_store=None, permission_checker=None, audit_logger=None):
+        if promotion_store is None:
+            promotion_store = InMemoryPromotionRequestStore()
+        if permission_checker is None:
+            permission_checker = PolicyReleasePermissionChecker()
+        return PolicyReleaseService(
+            bundle_store=InMemoryPolicyBundleStore(),
+            replay_runner=_make_mock_replay_runner(),
+            replay_store=_make_mock_replay_store(),
+            gate_evaluator=_make_default_evaluator(),
+            gate_store=InMemoryPolicyGateStore(),
+            promotion_store=promotion_store,
+            permission_checker=permission_checker,
+            audit_logger=audit_logger,
+        )
+
+    async def test_request_promotion_requires_permission(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=[])
+        with pytest.raises(PolicyReleasePermissionError, match="policy.promotion.request"):
+            await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+
+    async def test_request_promotion_success(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx, reason="release")
+        assert req.status == PromotionRequestStatus.PENDING
+        assert req.bundle_id == bundle.bundle_id
+        assert req.reason == "release"
+        assert req.promotion_id.startswith("pr_")
+
+    async def test_approve_promotion_requires_permission(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx_req = _make_context(permissions=["policy.promotion.request"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx_req)
+        ctx_approve = _make_context(permissions=[])
+        with pytest.raises(PolicyReleasePermissionError, match="policy.promotion.approve"):
+            await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx_approve)
+
+    async def test_approve_promotion_success(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.approve"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        updated = await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx, reason="ok")
+        assert updated.status == PromotionRequestStatus.APPROVED
+        assert updated.resolved_by == "reviewer"
+
+    async def test_reject_promotion_requires_permission(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx_req = _make_context(permissions=["policy.promotion.request"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx_req)
+        ctx_reject = _make_context(permissions=[])
+        with pytest.raises(PolicyReleasePermissionError, match="policy.promotion.reject"):
+            await service.reject_promotion(promotion_id=req.promotion_id, rejected_by="reviewer", context=ctx_reject)
+
+    async def test_reject_promotion_success(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.reject"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        updated = await service.reject_promotion(promotion_id=req.promotion_id, rejected_by="reviewer", context=ctx, reason="too risky")
+        assert updated.status == PromotionRequestStatus.REJECTED
+
+    async def test_execute_pending_fails(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        with pytest.raises(ValueError, match="must be approved"):
+            await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+
+    async def test_execute_rejected_fails(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.reject", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        await service.reject_promotion(promotion_id=req.promotion_id, rejected_by="reviewer", context=ctx)
+        with pytest.raises(ValueError, match="must be approved"):
+            await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+
+    async def test_execute_approved_activates_bundle(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        await service.run_gate(bundle_id=bundle.bundle_id, created_by="admin")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.approve", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx)
+        result = await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+        assert result.status == PolicyBundleStatus.ACTIVE
+
+    async def test_execute_requires_permission(self):
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.approve"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx)
+        ctx_exec = _make_context(permissions=[])
+        with pytest.raises(PolicyReleasePermissionError, match="policy.promotion.execute"):
+            await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx_exec)
+
+    async def test_bypass_gate_requires_config_and_permission(self):
+        bundle_store = InMemoryPolicyBundleStore()
+        gate_store = InMemoryPolicyGateStore()
+        promo_store = InMemoryPromotionRequestStore()
+        checker = PolicyReleasePermissionChecker()
+        evaluator = PolicyGateEvaluator(rules=[PolicyGateRule(name="always_fail", max_changed_ratio=0.0)])
+        service = PolicyReleaseService(
+            bundle_store=bundle_store,
+            replay_runner=_make_mock_replay_runner(changed=1, total=10),
+            replay_store=_make_mock_replay_store(),
+            gate_evaluator=evaluator,
+            gate_store=gate_store,
+            promotion_store=promo_store,
+            permission_checker=checker,
+            allow_gate_bypass=True,
+        )
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        await service.run_gate(bundle_id=bundle.bundle_id, created_by="admin")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.approve", "policy.promotion.execute", "policy.gate.bypass"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx)
+        # Without bypass reason should fail
+        with pytest.raises(ValueError, match="bypass_reason"):
+            await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx, bypass_gate=True, bypass_reason=None)
+        # With bypass reason should succeed
+        result = await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx, bypass_gate=True, bypass_reason="Emergency release")
+        assert result.status == PolicyBundleStatus.ACTIVE
+
+    async def test_audit_events_written(self):
+        audit = InMemoryAuditLogger()
+        service = PolicyReleaseService(
+            bundle_store=InMemoryPolicyBundleStore(),
+            replay_runner=_make_mock_replay_runner(),
+            replay_store=_make_mock_replay_store(),
+            gate_evaluator=_make_default_evaluator(),
+            gate_store=InMemoryPolicyGateStore(),
+            promotion_store=InMemoryPromotionRequestStore(),
+            permission_checker=PolicyReleasePermissionChecker(),
+            audit_logger=audit,
+        )
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.approve", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx, reason="release")
+        await service.approve_promotion(promotion_id=req.promotion_id, approved_by="reviewer", context=ctx)
+        await service.run_gate(bundle_id=bundle.bundle_id, created_by="admin")
+        await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+        event_types = [e.event_type for e in audit.list_events()]
+        assert "policy.promotion.requested" in event_types
+        assert "policy.promotion.approved" in event_types
+        assert "policy.promotion.executed" in event_types

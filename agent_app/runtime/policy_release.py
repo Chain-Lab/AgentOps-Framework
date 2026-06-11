@@ -1,6 +1,7 @@
 """Policy release service — orchestrates bundle creation, gate evaluation, promote, and rollback.
 
 Phase 29: provides the release safety gate workflow.
+Phase 30: adds RBAC, promotion lifecycle, and audit logging.
 """
 
 from __future__ import annotations
@@ -11,6 +12,17 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from agent_app.core.context import RunContext
+from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+from agent_app.governance.policy_promotion import PromotionRequest, PromotionRequestStatus
+from agent_app.governance.audit import AuditEvent
+
+
+class PolicyReleasePermissionError(Exception):
+    """Raised when a policy release permission check fails."""
+
+    pass
 
 
 class PolicyReleaseService:
@@ -38,12 +50,61 @@ class PolicyReleaseService:
         replay_store: Any,
         gate_evaluator: Any,
         gate_store: Any,
+        promotion_store: Any = None,
+        permission_checker: Any = None,
+        audit_logger: Any = None,
+        allow_gate_bypass: bool = False,
+        require_promotion_approval: bool = True,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
         self._replay_store = replay_store
         self._gate_evaluator = gate_evaluator
         self._gate_store = gate_store
+        self._promotion_store = promotion_store
+        self._permission_checker = (
+            permission_checker
+            if permission_checker is not None
+            else PolicyReleasePermissionChecker()
+        )
+        self._audit_logger = audit_logger
+        self._allow_gate_bypass = allow_gate_bypass
+        self._require_promotion_approval = require_promotion_approval
+
+    async def _check_permission(
+        self, permission: PolicyReleasePermission, context: RunContext
+    ) -> None:
+        """Raise PolicyReleasePermissionError if the context lacks the permission."""
+        if not await self._permission_checker.check(permission, context):
+            await self._write_audit(
+                "policy.promotion.permission_denied",
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                data={"required_permission": permission.value},
+            )
+            raise PolicyReleasePermissionError(
+                f"Permission denied: '{permission.value}' required."
+            )
+
+    async def _write_audit(
+        self,
+        event_type: str,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        data: dict | None = None,
+    ) -> None:
+        """Write an audit event if an audit logger is configured."""
+        if self._audit_logger is None:
+            return
+        await self._audit_logger.log(
+            AuditEvent(
+                event_id=f"ae_{uuid.uuid4().hex[:12]}",
+                event_type=event_type,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                data=data or {},
+            )
+        )
 
     async def create_bundle(
         self,
@@ -228,10 +289,289 @@ class PolicyReleaseService:
         # Rollback = activate the target bundle
         return await self._bundle_store.activate(target_bundle_id)
 
+    async def request_promotion(
+        self,
+        bundle_id: str,
+        requested_by: str,
+        context: RunContext,
+        reason: str | None = None,
+        gate_result_id: str | None = None,
+    ) -> PromotionRequest:
+        """Request promotion of a policy bundle.
+
+        Args:
+            bundle_id: The bundle to promote.
+            requested_by: Identity of who is requesting promotion.
+            context: Current run context for RBAC.
+            reason: Optional reason for the promotion request.
+            gate_result_id: Optional gate evaluation result reference.
+
+        Returns:
+            The created PromotionRequest.
+
+        Raises:
+            PolicyReleasePermissionError: If the context lacks PROMOTION_REQUEST permission.
+            KeyError: If bundle_id not found.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.PROMOTION_REQUEST, context
+        )
+
+        bundle = await self._bundle_store.get(bundle_id)
+        if bundle is None:
+            raise KeyError(
+                f"Bundle '{bundle_id}' not found in policy bundle store."
+            )
+
+        request = PromotionRequest(
+            promotion_id=f"pr_{uuid.uuid4().hex[:12]}",
+            bundle_id=bundle_id,
+            gate_result_id=gate_result_id,
+            requested_by=requested_by,
+            tenant_id=context.tenant_id,
+            reason=reason,
+        )
+
+        if self._promotion_store is not None:
+            request = await self._promotion_store.create(request)
+
+        await self._write_audit(
+            "policy.promotion.requested",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "promotion_id": request.promotion_id,
+                "bundle_id": bundle_id,
+                "reason": reason,
+            },
+        )
+
+        return request
+
+    async def approve_promotion(
+        self,
+        promotion_id: str,
+        approved_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> PromotionRequest:
+        """Approve a pending promotion request.
+
+        Args:
+            promotion_id: The promotion request to approve.
+            approved_by: Identity of who is approving.
+            context: Current run context for RBAC.
+            reason: Optional approval reason.
+
+        Returns:
+            The updated PromotionRequest.
+
+        Raises:
+            PolicyReleasePermissionError: If the context lacks PROMOTION_APPROVE permission.
+            KeyError: If promotion_id not found.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.PROMOTION_APPROVE, context
+        )
+
+        if self._promotion_store is None:
+            raise RuntimeError(
+                "No promotion store configured. "
+                "Set promotion_store to use promotion approval."
+            )
+
+        updated = await self._promotion_store.approve(
+            promotion_id=promotion_id,
+            approved_by=approved_by,
+            reason=reason,
+        )
+
+        await self._write_audit(
+            "policy.promotion.approved",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "promotion_id": promotion_id,
+                "bundle_id": updated.bundle_id,
+                "approved_by": approved_by,
+                "reason": reason,
+            },
+        )
+
+        return updated
+
+    async def reject_promotion(
+        self,
+        promotion_id: str,
+        rejected_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> PromotionRequest:
+        """Reject a pending promotion request.
+
+        Args:
+            promotion_id: The promotion request to reject.
+            rejected_by: Identity of who is rejecting.
+            context: Current run context for RBAC.
+            reason: Optional rejection reason.
+
+        Returns:
+            The updated PromotionRequest.
+
+        Raises:
+            PolicyReleasePermissionError: If the context lacks PROMOTION_REJECT permission.
+            KeyError: If promotion_id not found.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.PROMOTION_REJECT, context
+        )
+
+        if self._promotion_store is None:
+            raise RuntimeError(
+                "No promotion store configured. "
+                "Set promotion_store to use promotion rejection."
+            )
+
+        updated = await self._promotion_store.reject(
+            promotion_id=promotion_id,
+            rejected_by=rejected_by,
+            reason=reason,
+        )
+
+        await self._write_audit(
+            "policy.promotion.rejected",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "promotion_id": promotion_id,
+                "bundle_id": updated.bundle_id,
+                "rejected_by": rejected_by,
+                "reason": reason,
+            },
+        )
+
+        return updated
+
+    async def execute_promotion(
+        self,
+        promotion_id: str,
+        executed_by: str,
+        context: RunContext,
+        bypass_gate: bool = False,
+        bypass_reason: str | None = None,
+    ) -> Any:
+        """Execute an approved promotion request.
+
+        Validates the request is APPROVED, checks gate results,
+        optionally allows gate bypass, then activates the bundle.
+
+        Args:
+            promotion_id: The promotion request to execute.
+            executed_by: Identity of who is executing.
+            context: Current run context for RBAC.
+            bypass_gate: If True, allow execution even if gate failed.
+            bypass_reason: Required reason when bypassing a failed gate.
+
+        Returns:
+            The activated PolicyBundle.
+
+        Raises:
+            PolicyReleasePermissionError: If the context lacks PROMOTION_EXECUTE or BYPASS_GATE.
+            ValueError: If request is not APPROVED, or if gate failed without bypass.
+            KeyError: If promotion_id or bundle_id not found.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.PROMOTION_EXECUTE, context
+        )
+
+        if self._promotion_store is None:
+            raise RuntimeError(
+                "No promotion store configured. "
+                "Set promotion_store to use promotion execution."
+            )
+
+        request = await self._promotion_store.get(promotion_id)
+        if request is None:
+            raise KeyError(
+                f"Promotion request '{promotion_id}' not found in promotion store."
+            )
+
+        if request.status != PromotionRequestStatus.APPROVED:
+            raise ValueError(
+                f"Cannot execute promotion '{promotion_id}': "
+                f"request status is '{request.status.value}', must be approved."
+            )
+
+        # Check latest gate result for the bundle
+        gate_results = await self._gate_store.list(bundle_id=request.bundle_id, limit=1)
+        gate_failed = gate_results and not gate_results[0].passed
+
+        if gate_failed:
+            if bypass_gate and self._allow_gate_bypass:
+                if not bypass_reason:
+                    raise ValueError(
+                        "bypass_reason is required when bypassing a failed gate."
+                    )
+                await self._check_permission(
+                    PolicyReleasePermission.BYPASS_GATE, context
+                )
+                await self._write_audit(
+                    "policy.gate.bypass_used",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "promotion_id": promotion_id,
+                        "bundle_id": request.bundle_id,
+                        "gate_result_id": gate_results[0].gate_result_id,
+                        "bypass_reason": bypass_reason,
+                    },
+                )
+            else:
+                await self._write_audit(
+                    "policy.promotion.execute_blocked",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "promotion_id": promotion_id,
+                        "bundle_id": request.bundle_id,
+                        "gate_result_id": (
+                            gate_results[0].gate_result_id if gate_results else None
+                        ),
+                    },
+                )
+                raise ValueError(
+                    f"Cannot execute promotion '{promotion_id}': "
+                    f"latest gate for bundle '{request.bundle_id}' failed. "
+                    f"Set bypass_gate=True with allow_gate_bypass config to override."
+                )
+
+        # Activate the bundle
+        activated = await self._bundle_store.activate(request.bundle_id)
+
+        # Mark promotion as executed
+        await self._promotion_store.mark_executed(
+            promotion_id=promotion_id,
+            executed_by=executed_by,
+        )
+
+        await self._write_audit(
+            "policy.promotion.executed",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "promotion_id": promotion_id,
+                "bundle_id": request.bundle_id,
+                "executed_by": executed_by,
+                "bypass_gate": bypass_gate,
+            },
+        )
+
+        return activated
+
     @property
-    def bundle_store(self) -> Any:
-        """Access the underlying bundle store (for console integration)."""
-        return self._bundle_store
+    def promotion_store(self) -> Any:
+        """Access the underlying promotion store (for console integration)."""
+        return self._promotion_store
 
     @property
     def gate_store(self) -> Any:
