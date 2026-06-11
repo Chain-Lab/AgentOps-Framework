@@ -360,8 +360,26 @@ class PolicyReleaseStoreConfig(BaseModel):
     )
 
 
+class PolicyReleaseRuntimeConfig(BaseModel):
+    """Runtime policy activation configuration (Phase 31)."""
+
+    environment: str = Field(
+        default="dev",
+        description="Default policy environment",
+    )
+    require_active_policy: bool = Field(
+        default=False,
+        description="Fail runs if no active policy",
+    )
+    cache_ttl_seconds: int = Field(
+        default=5,
+        ge=0,
+        description="In-process cache TTL (0 = no cache)",
+    )
+
+
 class PolicyReleaseConfig(BaseModel):
-    """Policy release gate configuration (Phase 29, extended Phase 30)."""
+    """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
     bundles: PolicyReleaseStoreConfig = Field(
         default_factory=PolicyReleaseStoreConfig,
@@ -375,6 +393,10 @@ class PolicyReleaseConfig(BaseModel):
         default=None,
         description="Policy promotion request store configuration (Phase 30)",
     )
+    activations: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Policy activation store configuration (Phase 31)",
+    )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,
         description="Release gate rules",
@@ -386,6 +408,10 @@ class PolicyReleaseConfig(BaseModel):
     allow_gate_bypass: bool = Field(
         default=False,
         description="Allow bypassing failed gate with explicit permission and reason (Phase 30)",
+    )
+    runtime: PolicyReleaseRuntimeConfig = Field(
+        default_factory=PolicyReleaseRuntimeConfig,
+        description="Runtime policy resolution configuration (Phase 31)",
     )
 
 

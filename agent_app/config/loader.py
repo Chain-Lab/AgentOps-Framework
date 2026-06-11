@@ -380,7 +380,93 @@ def build_app(
     app._recovery_config = getattr(runtime_cfg, "recovery_config", None)
     # Phase 26: Store console config for FastAPI adapter
     app._console_config = console_config
-    # Phase 29: Store release config
+
+    # -- Phase 29-31: Policy release service --
+    release_service: Any = None
+    if release_config:
+        from agent_app.runtime.policy_release import PolicyReleaseService
+        from agent_app.runtime.policy_gate_store import create_gate_store
+        from agent_app.runtime.promotion_store import create_promotion_store
+        from agent_app.governance.policy_bundle import create_bundle_store
+        from agent_app.governance.policy_gate import PolicyGateEvaluator, PolicyGateRule
+        from agent_app.governance.policy_replay import PolicyReplayRunner
+        from agent_app.governance.policy_replay_context import PolicyReplayContextBuilder
+
+        bundle_store = create_bundle_store(
+            store_type=release_config.bundles.type,
+            db_path=release_config.bundles.path,
+        )
+        gate_store = create_gate_store(
+            store_type=release_config.gates.type,
+            db_path=release_config.gates.path,
+        )
+        promotion_store = None
+        if release_config.promotions:
+            promotion_store = create_promotion_store(
+                store_type=release_config.promotions.type,
+                db_path=release_config.promotions.path,
+            )
+
+        # Build gate evaluator from rules
+        rules = []
+        for rule_cfg in getattr(release_config, "rules", []):
+            rules.append(PolicyGateRule(
+                name=rule_cfg.name,
+                description=getattr(rule_cfg, "description", None),
+                max_changed_decisions=getattr(rule_cfg, "max_changed_decisions", None),
+                max_changed_ratio=getattr(rule_cfg, "max_changed_ratio", None),
+                max_failed_replays=getattr(rule_cfg, "max_failed_replays", None),
+                max_new_denies=getattr(rule_cfg, "max_new_denies", None),
+                max_new_approvals=getattr(rule_cfg, "max_new_approvals", None),
+                fail_on_missing_required_context=getattr(rule_cfg, "fail_on_missing_required_context", False),
+            ))
+        gate_evaluator = PolicyGateEvaluator(rules=rules)
+
+        # Build replay runner from app components
+        replay_runner = PolicyReplayRunner(
+            decision_store=policy_decision_store,
+            policy_engine=policy_engine,
+            replay_store=None,
+            context_builder=PolicyReplayContextBuilder(),
+        )
+
+        # Phase 31: activation store
+        activation_store = None
+        if getattr(release_config, "activations", None):
+            act_cfg = release_config.activations
+            if act_cfg.type == "sqlite":
+                from agent_app.runtime.policy_activation_store import SQLitePolicyActivationStore
+                activation_store = SQLitePolicyActivationStore(
+                    db_path=act_cfg.path or ".agent_app/policy_activations.db"
+                )
+            else:
+                from agent_app.runtime.policy_activation_store import InMemoryPolicyActivationStore
+                activation_store = InMemoryPolicyActivationStore()
+
+        # Phase 31: policy resolver
+        policy_resolver = None
+        if activation_store is not None:
+            from agent_app.runtime.policy_resolver import ActivePolicyResolver
+            runtime_cfg = getattr(release_config, "runtime", None)
+            cache_ttl = getattr(runtime_cfg, "cache_ttl_seconds", 5) if runtime_cfg else 5
+            policy_resolver = ActivePolicyResolver(
+                bundle_store=bundle_store,
+                activation_store=activation_store,
+                cache_ttl_seconds=cache_ttl,
+            )
+
+        release_service = PolicyReleaseService(
+            bundle_store=bundle_store,
+            replay_runner=replay_runner,
+            replay_store=None,
+            gate_evaluator=gate_evaluator,
+            gate_store=gate_store,
+            promotion_store=promotion_store,
+            allow_gate_bypass=getattr(release_config, "allow_gate_bypass", False),
+            activation_store=activation_store,
+            policy_resolver=policy_resolver,
+        )
+        app._release_service = release_service
     app._release_config = release_config
     return app
 
