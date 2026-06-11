@@ -773,6 +773,9 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
     router = build_policy_console_router(
         store=store, config=console_config, replay_store=replay_store,
         replay_job_store=replay_job_store,
+        # Phase 29: policy release stores
+        bundle_store=_get_bundle_store(agent_app),
+        gate_store=_get_gate_store(agent_app),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])
@@ -786,6 +789,22 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
             StaticFiles(directory=static_dir),
             name="policy-console-static",
         )
+
+
+def _get_bundle_store(agent_app: Any) -> Any:
+    """Extract the policy bundle store from the agent app (Phase 29)."""
+    release_service = getattr(agent_app, "_release_service", None)
+    if release_service is not None:
+        return getattr(release_service, "bundle_store", None)
+    return None
+
+
+def _get_gate_store(agent_app: Any) -> Any:
+    """Extract the policy gate store from the agent app (Phase 29)."""
+    release_service = getattr(agent_app, "_release_service", None)
+    if release_service is not None:
+        return getattr(release_service, "gate_store", None)
+    return None
 
 
 def _result_to_dict(result: Any) -> dict:

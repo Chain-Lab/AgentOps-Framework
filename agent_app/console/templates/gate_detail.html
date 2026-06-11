@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Gate Result Detail</h1>
+
+{% if error %}
+<div class="error-state">
+  <h2>Error</h2>
+  <p>{{ error }}</p>
+</div>
+{% elif not gate %}
+<div class="empty-state">
+  <p>Loading gate result...</p>
+</div>
+{% else %}
+<div class="detail-header">
+  <h2>{{ gate.gate_result_id }}</h2>
+  {% if gate.passed %}
+  <span class="badge badge-allow">{{ gate.status }}</span>
+  {% elif gate.status == 'warning' %}
+  <span class="badge badge-require_approval">{{ gate.status }}</span>
+  {% else %}
+  <span class="badge badge-deny">{{ gate.status }}</span>
+  {% endif %}
+</div>
+
+<dl class="detail-fields">
+  <dt>Gate Result ID</dt>
+  <dd><code>{{ gate.gate_result_id }}</code></dd>
+
+  <dt>Bundle ID</dt>
+  <dd><a href="{{ base_path }}/bundles/{{ gate.bundle_id }}">{{ gate.bundle_id }}</a></dd>
+
+  <dt>Status</dt>
+  <dd>{{ gate.status }}</dd>
+
+  <dt>Passed</dt>
+  <dd>{% if gate.passed %}<span class="badge badge-allow">yes</span>{% else %}<span class="badge badge-deny">no</span>{% endif %}</dd>
+
+  <dt>Total Decisions</dt>
+  <dd>{{ gate.total_decisions }}</dd>
+
+  <dt>Changed</dt>
+  <dd>{% if gate.changed_count > 0 %}<strong class="text-danger">{{ gate.changed_count }}</strong>{% else %}{{ gate.changed_count }}{% endif %}</dd>
+
+  <dt>Unchanged</dt>
+  <dd>{{ gate.unchanged_count }}</dd>
+
+  <dt>Failed</dt>
+  <dd>{% if gate.failed_count > 0 %}<strong class="text-danger">{{ gate.failed_count }}</strong>{% else %}{{ gate.failed_count }}{% endif %}</dd>
+
+  <dt>Changed Ratio</dt>
+  <dd>{{ "%.2f" | format(gate.changed_ratio * 100) if gate.changed_ratio is not none else '—' }}%</dd>
+
+  <dt>Created At</dt>
+  <dd>{{ gate.created_at }}</dd>
+
+  <dt>Created By</dt>
+  <dd>{{ gate.created_by }}</dd>
+
+  <dt>Error</dt>
+  <dd>{{ gate.error if gate.error is not none else '—' }}</dd>
+</dl>
+
+{% if gate.rule_results %}
+<div class="detail-section">
+  <h3>Rule Results</h3>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Rule</th>
+        <th>Status</th>
+        <th>Passed</th>
+        <th>Actual</th>
+        <th>Threshold</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in gate.rule_results %}
+      <tr>
+        <td>{{ r.rule_name }}</td>
+        <td>{{ r.status }}</td>
+        <td>{% if r.passed %}<span class="badge badge-allow">yes</span>{% else %}<span class="badge badge-deny">no</span>{% endif %}</td>
+        <td>{{ r.actual if r.actual is not none else '—' }}</td>
+        <td>{{ r.threshold if r.threshold is not none else '—' }}</td>
+        <td>{{ r.message or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/gates">← Back to Gate Results</a>
+</p>
+{% endif %}
+{% endblock %}

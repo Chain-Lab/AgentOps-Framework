@@ -227,3 +227,13 @@ class PolicyReleaseService:
 
         # Rollback = activate the target bundle
         return await self._bundle_store.activate(target_bundle_id)
+
+    @property
+    def bundle_store(self) -> Any:
+        """Access the underlying bundle store (for console integration)."""
+        return self._bundle_store
+
+    @property
+    def gate_store(self) -> Any:
+        """Access the underlying gate store (for console integration)."""
+        return self._gate_store

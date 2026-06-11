@@ -1098,3 +1098,63 @@ All notable changes to Agent App Framework are documented here.
 - Console templates only mount when console is enabled
 - Background runner is a plain async class — no framework coupling
 - Job and replay stores are independent protocols — no shared state leakage
+
+## Phase 29: Policy Release Gates & Versioned Policy Bundles (0.17.0)
+
+### Added
+
+- **`PolicyBundle`** — versioned policy config with `pb_` prefix IDs, SHA-256 config hashing, lifecycle status
+- **`PolicyBundleStatus`** — `draft`, `active`, `archived`, `rolled_back` lifecycle enum
+- **`compute_config_hash()`** — stable SHA-256 hash of JSON-canonicalized config content
+- **`PolicyBundleStore`** protocol — `create()`, `get()`, `list()`, `get_active()`, `activate()`, `archive()` async interface
+- **`InMemoryPolicyBundleStore`** — in-memory bundle store for testing
+- **`SQLitePolicyBundleStore`** — persistent bundle storage; activate archives previous ACTIVE bundle
+- **`create_bundle_store()` factory** — unified factory for memory or sqlite store types
+- **`PolicyGateRule`** — configurable thresholds: `max_changed_decisions`, `max_changed_ratio`, `max_failed_replays`, `max_new_denies`, `fail_on_missing_required_context`
+- **`PolicyGateStatus`** — `passed`, `warning`, `failed` evaluation outcomes
+- **`PolicyGateResult`** — evaluation outcome with per-rule results, counts, changed ratio
+- **`PolicyGateEvaluator`** — evaluates replay results against rules, produces per-rule pass/fail
+- **`PolicyGateStore`** protocol — `save()`, `get()`, `list(bundle_id=?)` async interface
+- **`InMemoryPolicyGateStore`** — in-memory gate result store
+- **`SQLitePolicyGateStore`** — persistent gate result storage
+- **`create_gate_store()` factory** — unified factory for memory or sqlite store types
+- **`PolicyReleaseService`** — orchestrates `create_bundle()`, `run_gate()`, `promote()`, `rollback()`
+- **Bundle lifecycle management** — DRAFT → ACTIVE → ARCHIVED → ROLLED_BACK with automatic archival on promote
+- **Gate-before-promote** — promotion requires passing gate by default; raises ValueError if latest gate failed
+- **Config schema** — `PolicyGateRuleConfig`, `PolicyReleaseStoreConfig`, `PolicyReleaseConfig` in governance section
+- **CLI commands** — `bundle create/list/active/promote/rollback` and `gate run/list` subcommands
+- **Console pages** — Bundles list/detail and Gates list/detail pages with nav links
+- **`docs/policy_release.md`** — Phase 29 documentation added
+
+### New Files
+
+- `agent_app/governance/policy_bundle.py` — PolicyBundle model, hash helper, stores + factory (30 tests)
+- `agent_app/governance/policy_gate.py` — PolicyGateRule, PolicyGateResult, PolicyGateEvaluator (15 tests)
+- `agent_app/runtime/policy_gate_store.py` — PolicyGateStore protocol + InMemory + SQLite + factory (15 tests)
+- `agent_app/runtime/policy_release.py` — PolicyReleaseService orchestrator (11 tests)
+- `agent_app/console/templates/bundles.html` — bundles list page
+- `agent_app/console/templates/bundle_detail.html` — bundle detail page
+- `agent_app/console/templates/gates.html` — gate results list page
+- `agent_app/console/templates/gate_detail.html` — gate result detail page
+- `tests/unit/test_policy_bundle_store.py` — 30 tests for bundle stores
+- `tests/unit/test_policy_gate.py` — 15 tests for gate models and evaluator
+- `tests/unit/test_policy_gate_store.py` — 15 tests for gate stores
+- `tests/unit/test_policy_release.py` — 11 tests for release service
+- `tests/unit/test_policy_release_cli.py` — 8 CLI integration tests
+- `tests/unit/test_policy_release_console.py` — 12 console page tests
+
+### Modified Files
+
+- `agent_app/config/schema.py` — added `PolicyGateRuleConfig`, `PolicyReleaseStoreConfig`, `PolicyReleaseConfig` to `GovernanceConfig`
+- `agent_app/config/loader.py` — extracts `release_config` from governance; stores on `app._release_config`
+- `agent_app/cli.py` — added bundle/gate subcommands with lazy service initialization
+- `agent_app/console/router.py` — added bundle/gate routes + data helpers
+- `agent_app/console/templates/base.html` — added Bundles and Gates nav links
+- `agent_app/adapters/fastapi.py` — passes bundle_store and gate_store to console router
+
+### Architecture Boundaries Maintained
+
+- Core modules (`policy_bundle`, `policy_gate`, `policy_gate_store`, `policy_release`) have no FastAPI/Jinja2 imports
+- Console templates only mount when console is enabled
+- Release service uses store protocols — no direct SQLite coupling in business logic
+- CLI uses lazy service initialization to avoid import cycles

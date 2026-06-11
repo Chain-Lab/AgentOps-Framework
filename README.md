@@ -1241,3 +1241,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.15 — Policy Console Lite: read-only governance dashboard with decision history and report pages ✅ (Phase 26)
 - v0.15 — Policy Replay & Regression Dashboard: re-evaluate historical decisions against current policy ✅ (Phase 27)
 - v0.16 — Persistent policy replay, background jobs, context reconstruction with SQLite stores ✅ (Phase 28)
+- v0.17 — Policy release gates & versioned policy bundles with lifecycle management ✅ (Phase 29)

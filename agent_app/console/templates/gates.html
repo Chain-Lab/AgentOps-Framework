@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Policy Gate Results</h1>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Policy gate store is not configured. Gate results will appear here after running <code>agentapp policy gate run</code>.</p>
+</div>
+{% elif gates|length == 0 %}
+<div class="empty-state">
+  <p>No gate results yet. Run <code>agentapp policy gate run</code> from the CLI to get started.</p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Gate ID</th>
+      <th>Bundle ID</th>
+      <th>Status</th>
+      <th>Passed</th>
+      <th>Changed</th>
+      <th>Unchanged</th>
+      <th>Failed</th>
+      <th>Created</th>
+      <th>Created By</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for g in gates %}
+    <tr>
+      <td><a href="{{ base_path }}/gates/{{ g.gate_result_id }}">{{ g.gate_result_id }}</a></td>
+      <td><a href="{{ base_path }}/bundles/{{ g.bundle_id }}">{{ g.bundle_id }}</a></td>
+      <td>
+        {% if g.passed %}
+        <span class="badge badge-allow">{{ g.status }}</span>
+        {% elif g.status == 'warning' %}
+        <span class="badge badge-require_approval">{{ g.status }}</span>
+        {% else %}
+        <span class="badge badge-deny">{{ g.status }}</span>
+        {% endif %}
+      </td>
+      <td>{% if g.passed %}<span class="badge badge-allow">yes</span>{% else %}<span class="badge badge-deny">no</span>{% endif %}</td>
+      <td>{% if g.changed_count > 0 %}<strong class="text-danger">{{ g.changed_count }}</strong>{% else %}{{ g.changed_count }}{% endif %}</td>
+      <td>{{ g.unchanged_count }}</td>
+      <td>{% if g.failed_count > 0 %}<strong class="text-danger">{{ g.failed_count }}</strong>{% else %}{{ g.failed_count }}{% endif %}</td>
+      <td>{{ g.created_at[:19] if g.created_at else '—' }}</td>
+      <td>{{ g.created_by }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/">← Back to Dashboard</a>
+</p>
+{% endblock %}

@@ -204,6 +204,130 @@ def main() -> int:
         "--json", action="store_true", help="Output as JSON"
     )
 
+    # Phase 29: policy bundle subcommands
+    bundle_parser = policy_sub.add_parser("bundle", help="Policy bundle commands")
+    bundle_sub = bundle_parser.add_subparsers(dest="bundle_command")
+
+    bundle_create_parser = bundle_sub.add_parser("create", help="Create a policy bundle")
+    bundle_create_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    bundle_create_parser.add_argument("--name", required=True, help="Bundle name")
+    bundle_create_parser.add_argument("--version", required=True, help="Bundle version")
+    bundle_create_parser.add_argument(
+        "--config-path", required=True, help="Path to policy config file"
+    )
+    bundle_create_parser.add_argument(
+        "--description", default=None, help="Bundle description"
+    )
+    bundle_create_parser.add_argument(
+        "--created-by", default=None, help="Creator identity"
+    )
+    bundle_create_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    bundle_list_parser = bundle_sub.add_parser("list", help="List policy bundles")
+    bundle_list_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    bundle_list_parser.add_argument(
+        "--limit", type=int, default=20, help="Max bundles to show"
+    )
+    bundle_list_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    bundle_active_parser = bundle_sub.add_parser(
+        "active", help="Show the active policy bundle"
+    )
+    bundle_active_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    bundle_active_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    bundle_promote_parser = bundle_sub.add_parser(
+        "promote", help="Promote a bundle to ACTIVE"
+    )
+    bundle_promote_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    bundle_promote_parser.add_argument(
+        "--bundle-id", required=True, help="Bundle ID to promote"
+    )
+    bundle_promote_parser.add_argument(
+        "--promoted-by", default=None, help="Promoter identity"
+    )
+    bundle_promote_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    bundle_rollback_parser = bundle_sub.add_parser(
+        "rollback", help="Rollback to a previous bundle"
+    )
+    bundle_rollback_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    bundle_rollback_parser.add_argument(
+        "--bundle-id", required=True, help="Bundle ID to rollback to"
+    )
+    bundle_rollback_parser.add_argument(
+        "--rolled-back-by", default=None, help="Operator identity"
+    )
+    bundle_rollback_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    # Phase 29: policy gate subcommands
+    gate_parser = policy_sub.add_parser("gate", help="Policy gate commands")
+    gate_sub = gate_parser.add_subparsers(dest="gate_command")
+
+    gate_run_parser = gate_sub.add_parser(
+        "run", help="Run release gate evaluation for a bundle"
+    )
+    gate_run_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    gate_run_parser.add_argument(
+        "--bundle-id", required=True, help="Bundle ID to evaluate"
+    )
+    gate_run_parser.add_argument(
+        "--limit", type=int, default=None, help="Max decisions to replay"
+    )
+    gate_run_parser.add_argument(
+        "--tenant-id", default=None, help="Filter by tenant"
+    )
+    gate_run_parser.add_argument(
+        "--tool-name", default=None, help="Filter by tool name"
+    )
+    gate_run_parser.add_argument(
+        "--rule-id", default=None, help="Filter by original rule"
+    )
+    gate_run_parser.add_argument(
+        "--created-by", default=None, help="Evaluator identity"
+    )
+    gate_run_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
+    gate_list_parser = gate_sub.add_parser(
+        "list", help="List gate evaluation results"
+    )
+    gate_list_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    gate_list_parser.add_argument(
+        "--bundle-id", default=None, help="Filter by bundle ID"
+    )
+    gate_list_parser.add_argument(
+        "--limit", type=int, default=20, help="Max results to show"
+    )
+    gate_list_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -370,6 +494,26 @@ def main() -> int:
 
     if args.command == "policy" and args.policy_command == "jobs":
         return asyncio.run(_cmd_policy_replay_jobs(args))
+
+    # Phase 29: policy bundle subcommands
+    if args.command == "policy" and args.policy_command == "bundle":
+        if args.bundle_command == "create":
+            return asyncio.run(_cmd_policy_bundle_create(args))
+        if args.bundle_command == "list":
+            return asyncio.run(_cmd_policy_bundle_list(args))
+        if args.bundle_command == "active":
+            return asyncio.run(_cmd_policy_bundle_active(args))
+        if args.bundle_command == "promote":
+            return asyncio.run(_cmd_policy_bundle_promote(args))
+        if args.bundle_command == "rollback":
+            return asyncio.run(_cmd_policy_bundle_rollback(args))
+
+    # Phase 29: policy gate subcommands
+    if args.command == "policy" and args.policy_command == "gate":
+        if args.gate_command == "run":
+            return asyncio.run(_cmd_policy_gate_run(args))
+        if args.gate_command == "list":
+            return asyncio.run(_cmd_policy_gate_list(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -1685,6 +1829,461 @@ async def _cmd_policy_replay_jobs(args: argparse.Namespace) -> int:
             )
 
     return 0
+
+
+# -- Phase 29: Policy Release CLI commands --
+
+
+async def _cmd_policy_bundle_create(args: argparse.Namespace) -> int:
+    """Create a policy bundle."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_release import PolicyReleaseService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        bundle = await service.create_bundle(
+            name=args.name,
+            version=args.version,
+            config_path=args.config_path,
+            description=args.description,
+            created_by=args.created_by,
+        )
+    except Exception as exc:
+        print(f"Error creating bundle: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "bundle_id": bundle.bundle_id,
+            "name": bundle.name,
+            "version": bundle.version,
+            "status": bundle.status,
+            "config_hash": bundle.config_hash,
+            "description": bundle.description,
+            "created_by": bundle.created_by,
+            "created_at": bundle.created_at.isoformat(),
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Policy bundle created")
+        print()
+        print(f"Bundle ID:    {bundle.bundle_id}")
+        print(f"Name:         {bundle.name}")
+        print(f"Version:      {bundle.version}")
+        print(f"Status:       {bundle.status}")
+        print(f"Config Hash:  {bundle.config_hash[:16]}...")
+        if bundle.description:
+            print(f"Description:  {bundle.description}")
+        print(f"Created By:   {bundle.created_by or 'anonymous'}")
+    return 0
+
+
+async def _cmd_policy_bundle_list(args: argparse.Namespace) -> int:
+    """List policy bundles."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_bundle_store(app)
+    if store is None:
+        print("Policy bundle store not configured.", file=sys.stderr)
+        return 1
+
+    bundles = await store.list(limit=args.limit)
+
+    if not bundles:
+        print("No policy bundles found.")
+        return 0
+
+    if args.json:
+        data = []
+        for b in bundles:
+            data.append({
+                "bundle_id": b.bundle_id,
+                "name": b.name,
+                "version": b.version,
+                "status": b.status,
+                "config_hash": b.config_hash[:16] + "...",
+                "description": b.description,
+                "created_by": b.created_by,
+                "created_at": b.created_at.isoformat(),
+                "activated_at": b.activated_at.isoformat() if b.activated_at else None,
+                "archived_at": b.archived_at.isoformat() if b.archived_at else None,
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Bundle ID':<20} {'Name':<20} {'Version':<10} {'Status':<12} {'Created'}")
+        print("-" * 80)
+        for b in bundles:
+            print(
+                f"{b.bundle_id:<20} {b.name:<20} {b.version:<10} "
+                f"{b.status:<12} {b.created_at.isoformat()[:19]}"
+            )
+    return 0
+
+
+async def _cmd_policy_bundle_active(args: argparse.Namespace) -> int:
+    """Show the active policy bundle."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_bundle_store(app)
+    if store is None:
+        print("Policy bundle store not configured.", file=sys.stderr)
+        return 1
+
+    bundle = await store.get_active()
+    if bundle is None:
+        print("No active policy bundle found.")
+        return 0
+
+    if args.json:
+        data = {
+            "bundle_id": bundle.bundle_id,
+            "name": bundle.name,
+            "version": bundle.version,
+            "status": bundle.status,
+            "config_hash": bundle.config_hash[:16] + "...",
+            "activated_at": bundle.activated_at.isoformat() if bundle.activated_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Active Policy Bundle")
+        print("=" * 40)
+        print(f"Bundle ID:    {bundle.bundle_id}")
+        print(f"Name:         {bundle.name}")
+        print(f"Version:      {bundle.version}")
+        print(f"Status:       {bundle.status}")
+        print(f"Config Hash:  {bundle.config_hash[:16]}...")
+        if bundle.activated_at:
+            print(f"Activated:    {bundle.activated_at.isoformat()}")
+    return 0
+
+
+async def _cmd_policy_bundle_promote(args: argparse.Namespace) -> int:
+    """Promote a bundle to ACTIVE."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        bundle = await service.promote(
+            bundle_id=args.bundle_id,
+            promoted_by=args.promoted_by,
+        )
+    except KeyError:
+        print(f"Bundle '{args.bundle_id}' not found.", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "bundle_id": bundle.bundle_id,
+            "name": bundle.name,
+            "version": bundle.version,
+            "status": bundle.status,
+            "activated_at": bundle.activated_at.isoformat() if bundle.activated_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Bundle promoted")
+        print()
+        print(f"Bundle ID:    {bundle.bundle_id}")
+        print(f"Name:         {bundle.name}")
+        print(f"Version:      {bundle.version}")
+        print(f"Status:       {bundle.status}")
+        print(f"Activated:    {bundle.activated_at.isoformat() if bundle.activated_at else 'N/A'}")
+    return 0
+
+
+async def _cmd_policy_bundle_rollback(args: argparse.Namespace) -> int:
+    """Rollback to a previous bundle."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        bundle = await service.rollback(
+            target_bundle_id=args.bundle_id,
+            rolled_back_by=args.rolled_back_by,
+        )
+    except KeyError:
+        print(f"Bundle '{args.bundle_id}' not found.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "bundle_id": bundle.bundle_id,
+            "name": bundle.name,
+            "version": bundle.version,
+            "status": bundle.status,
+            "activated_at": bundle.activated_at.isoformat() if bundle.activated_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Bundle rollback complete")
+        print()
+        print(f"Bundle ID:    {bundle.bundle_id}")
+        print(f"Name:         {bundle.name}")
+        print(f"Version:      {bundle.version}")
+        print(f"Status:       {bundle.status}")
+        print(f"Activated:    {bundle.activated_at.isoformat() if bundle.activated_at else 'N/A'}")
+    return 0
+
+
+async def _cmd_policy_gate_run(args: argparse.Namespace) -> int:
+    """Run release gate evaluation for a bundle."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.run_gate(
+            bundle_id=args.bundle_id,
+            limit=args.limit,
+            tenant_id=args.tenant_id,
+            tool_name=args.tool_name,
+            rule_id=args.rule_id,
+            created_by=args.created_by,
+        )
+    except KeyError:
+        print(f"Bundle '{args.bundle_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running gate: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "gate_result_id": result.gate_result_id,
+            "bundle_id": result.bundle_id,
+            "replay_id": result.replay_id,
+            "status": result.status,
+            "passed": result.passed,
+            "total_decisions": result.total_decisions,
+            "changed_decisions": result.changed_decisions,
+            "failed_replays": result.failed_replays,
+            "changed_ratio": result.changed_ratio,
+            "new_denies": result.new_denies,
+            "new_approvals": result.new_approvals,
+            "missing_context_count": result.missing_context_count,
+            "rule_results": result.rule_results,
+            "summary": result.summary,
+            "created_by": result.created_by,
+            "created_at": result.created_at.isoformat(),
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        status_icon = "PASSED" if result.passed else "FAILED"
+        print(f"Gate evaluation: {status_icon}")
+        print()
+        print(f"Gate Result ID: {result.gate_result_id}")
+        print(f"Bundle ID:      {result.bundle_id}")
+        print(f"Replay ID:      {result.replay_id}")
+        print(f"Status:         {result.status}")
+        print()
+        print("Metrics:")
+        print(f"  Total decisions:    {result.total_decisions}")
+        print(f"  Changed decisions:  {result.changed_decisions}")
+        print(f"  Changed ratio:      {result.changed_ratio:.2%}")
+        print(f"  Failed replays:     {result.failed_replays}")
+        print(f"  New denies:         {result.new_denies}")
+        print(f"  Missing context:    {result.missing_context_count}")
+        if result.rule_results:
+            print()
+            print("Rule Results:")
+            for rr in result.rule_results:
+                status_mark = "PASS" if rr["status"] == "passed" else "FAIL"
+                print(f"  [{status_mark}] {rr['rule_name']}")
+                for failure in rr.get("failures", []):
+                    print(f"         - {failure}")
+    return 0 if result.passed else 1
+
+
+async def _cmd_policy_gate_list(args: argparse.Namespace) -> int:
+    """List gate evaluation results."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_gate_store(app)
+    if store is None:
+        print("Policy gate store not configured.", file=sys.stderr)
+        return 1
+
+    results = await store.list(bundle_id=args.bundle_id, limit=args.limit)
+
+    if not results:
+        print("No gate results found.")
+        return 0
+
+    if args.json:
+        data = []
+        for r in results:
+            data.append({
+                "gate_result_id": r.gate_result_id,
+                "bundle_id": r.bundle_id,
+                "replay_id": r.replay_id,
+                "status": r.status,
+                "passed": r.passed,
+                "total_decisions": r.total_decisions,
+                "changed_decisions": r.changed_decisions,
+                "changed_ratio": r.changed_ratio,
+                "failed_replays": r.failed_replays,
+                "created_at": r.created_at.isoformat(),
+                "created_by": r.created_by,
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Gate ID':<20} {'Bundle ID':<20} {'Status':<10} {'Changed':<10} {'Created'}")
+        print("-" * 80)
+        for r in results:
+            print(
+                f"{r.gate_result_id:<20} {r.bundle_id:<20} "
+                f"{r.status:<10} {r.changed_decisions:<10} "
+                f"{r.created_at.isoformat()[:19]}"
+            )
+    return 0
+
+
+def _get_bundle_store(app: Any) -> Any:
+    """Get the policy bundle store from the app."""
+    service = _get_release_service(app)
+    if service is not None:
+        return service._bundle_store
+    return None
+
+
+def _get_gate_store(app: Any) -> Any:
+    """Get the policy gate store from the app."""
+    service = _get_release_service(app)
+    if service is not None:
+        return service._gate_store
+    return None
+
+
+def _get_release_service(app: Any) -> Any:
+    """Get or create the policy release service from the app."""
+    release_config = getattr(app, "_release_config", None)
+    if release_config is None:
+        return None
+
+    # Check if already created
+    existing = getattr(app, "_release_service", None)
+    if existing is not None:
+        return existing
+
+    # Create stores from config
+    bundle_store_type = getattr(release_config.bundles, "type", "memory")
+    bundle_db_path = getattr(release_config.bundles, "path", None)
+    gate_store_type = getattr(release_config.gates, "type", "memory")
+    gate_db_path = getattr(release_config.gates, "path", None)
+
+    from agent_app.governance.policy_bundle import create_bundle_store
+    from agent_app.runtime.policy_gate_store import create_gate_store
+    from agent_app.governance.policy_gate import PolicyGateEvaluator, PolicyGateRule
+
+    bundle_store = create_bundle_store(
+        store_type=bundle_store_type,
+        db_path=bundle_db_path,
+    )
+    gate_store = create_gate_store(
+        store_type=gate_store_type,
+        db_path=gate_db_path,
+    )
+
+    # Build rules from config
+    rules = []
+    for rule_cfg in getattr(release_config, "rules", []):
+        rules.append(PolicyGateRule(
+            name=rule_cfg.name,
+            description=getattr(rule_cfg, "description", None),
+            max_changed_decisions=getattr(rule_cfg, "max_changed_decisions", None),
+            max_changed_ratio=getattr(rule_cfg, "max_changed_ratio", None),
+            max_failed_replays=getattr(rule_cfg, "max_failed_replays", None),
+            max_new_denies=getattr(rule_cfg, "max_new_denies", None),
+            max_new_approvals=getattr(rule_cfg, "max_new_approvals", None),
+            fail_on_missing_required_context=getattr(rule_cfg, "fail_on_missing_required_context", False),
+        ))
+    evaluator = PolicyGateEvaluator(rules=rules)
+
+    # Get replay runner components from app
+    decision_store = getattr(app, "policy_decision_store", None)
+    policy_engine = getattr(app, "policy_engine", None)
+
+    from agent_app.governance.policy_replay import PolicyReplayRunner
+    from agent_app.governance.policy_replay_context import PolicyReplayContextBuilder
+    from agent_app.runtime.policy_replay_store import create_replay_store
+    from agent_app.runtime.policy_release import PolicyReleaseService
+
+    replay_runner = PolicyReplayRunner(
+        decision_store=decision_store,
+        policy_engine=policy_engine,
+        replay_store=None,
+        context_builder=PolicyReplayContextBuilder(),
+    )
+
+    service = PolicyReleaseService(
+        bundle_store=bundle_store,
+        replay_runner=replay_runner,
+        replay_store=None,
+        gate_evaluator=evaluator,
+        gate_store=gate_store,
+    )
+    app._release_service = service
+    return service
 
 
 if __name__ == "__main__":

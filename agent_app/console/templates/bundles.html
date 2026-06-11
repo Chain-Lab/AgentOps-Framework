@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Policy Bundles</h1>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Policy bundle store is not configured. Bundles will appear here after running <code>agentapp policy bundle create</code>.</p>
+</div>
+{% elif bundles|length == 0 %}
+<div class="empty-state">
+  <p>No policy bundles yet. Run <code>agentapp policy bundle create</code> from the CLI to get started.</p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Bundle ID</th>
+      <th>Name</th>
+      <th>Version</th>
+      <th>Status</th>
+      <th>Config Hash</th>
+      <th>Created</th>
+      <th>Activated</th>
+      <th>Created By</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in bundles %}
+    <tr>
+      <td><a href="{{ base_path }}/bundles/{{ b.bundle_id }}">{{ b.bundle_id }}</a></td>
+      <td>{{ b.name }}</td>
+      <td>{{ b.version }}</td>
+      <td><span class="badge badge-{{ b.status }}">{{ b.status }}</span></td>
+      <td><code>{{ b.config_hash }}</code></td>
+      <td>{{ b.created_at[:19] if b.created_at else '—' }}</td>
+      <td>{{ b.activated_at[:19] if b.activated_at != '—' else '—' }}</td>
+      <td>{{ b.created_by }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/">← Back to Dashboard</a>
+</p>
+{% endblock %}

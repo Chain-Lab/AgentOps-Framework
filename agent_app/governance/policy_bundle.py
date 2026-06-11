@@ -366,3 +366,29 @@ class SQLitePolicyBundleStore:
         """Close the database connection."""
         self._conn.close()
 
+
+def create_bundle_store(
+    store_type: str = "memory",
+    db_path: str | None = None,
+) -> PolicyBundleStore:
+    """Factory function to create a PolicyBundleStore.
+
+    Args:
+        store_type: "memory" or "sqlite".
+        db_path: Path for SQLite store (ignored for memory).
+
+    Returns:
+        A PolicyBundleStore implementation.
+
+    Raises:
+        ValueError: If store_type is unknown.
+    """
+    if store_type == "memory":
+        return InMemoryPolicyBundleStore()
+    if store_type == "sqlite":
+        return SQLitePolicyBundleStore(db_path=db_path or ".agent_app/policy_bundles.db")
+    raise ValueError(
+        f"Unknown bundle store type '{store_type}'. "
+        "Supported: 'memory', 'sqlite'."
+    )
+

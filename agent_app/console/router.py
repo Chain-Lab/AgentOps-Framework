@@ -3,6 +3,8 @@
 Phase 26: Mounted conditionally when ``policy_console.enabled`` is set in
 the governance config.  Reuses Phase 25 store / reporting service — no
 duplicate query logic.
+
+Phase 29: Added read-only pages for policy bundles and gate results.
 """
 
 from __future__ import annotations
@@ -30,6 +32,8 @@ def build_policy_console_router(
     config: Any = None,
     replay_store: PolicyReplayStore | None = None,
     replay_job_store: Any = None,
+    bundle_store: Any = None,
+    gate_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -38,6 +42,8 @@ def build_policy_console_router(
         config: PolicyConsoleConfig with title, base_path, page_size.
         replay_store: Optional policy replay result store.
         replay_job_store: Optional policy replay job store (Phase 28).
+        bundle_store: Optional policy bundle store (Phase 29).
+        gate_store: Optional policy gate result store (Phase 29).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -368,6 +374,126 @@ def build_policy_console_router(
             },
         )
 
+    # Phase 29: policy bundle pages
+    @router.get("/bundles", response_class=HTMLResponse)
+    async def bundles_index(request: Request):
+        """Policy bundles list."""
+        bundles_list: list[dict] = []
+        if bundle_store is not None:
+            bundles = await bundle_store.list(limit=page_size)
+            for b in bundles:
+                bundles_list.append(_bundle_to_row(b))
+        return templates.TemplateResponse(
+            request,
+            "bundles.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "bundles": bundles_list,
+                "store_available": bundle_store is not None,
+            },
+        )
+
+    @router.get("/bundles/{bundle_id}", response_class=HTMLResponse)
+    async def bundle_detail(request: Request, bundle_id: str):
+        """Single bundle detail."""
+        if bundle_store is None:
+            return templates.TemplateResponse(
+                request,
+                "bundle_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "bundle": None,
+                    "error": "Policy bundle store not configured.",
+                },
+            )
+        bundle = await bundle_store.get(bundle_id)
+        if bundle is None:
+            return templates.TemplateResponse(
+                request,
+                "bundle_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "bundle": None,
+                    "error": f"Bundle '{bundle_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "bundle_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "bundle": _bundle_to_detail(bundle),
+                "error": None,
+            },
+        )
+
+    # Phase 29: policy gate pages
+    @router.get("/gates", response_class=HTMLResponse)
+    async def gates_index(request: Request):
+        """Policy gate results list."""
+        gates_list: list[dict] = []
+        if gate_store is not None:
+            results = await gate_store.list(limit=page_size)
+            for g in results:
+                gates_list.append(_gate_to_row(g))
+        return templates.TemplateResponse(
+            request,
+            "gates.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "gates": gates_list,
+                "store_available": gate_store is not None,
+            },
+        )
+
+    @router.get("/gates/{gate_result_id}", response_class=HTMLResponse)
+    async def gate_detail(request: Request, gate_result_id: str):
+        """Single gate result detail."""
+        if gate_store is None:
+            return templates.TemplateResponse(
+                request,
+                "gate_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "gate": None,
+                    "error": "Policy gate store not configured.",
+                },
+            )
+        gate = await gate_store.get(gate_result_id)
+        if gate is None:
+            return templates.TemplateResponse(
+                request,
+                "gate_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "gate": None,
+                    "error": f"Gate result '{gate_result_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "gate_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "gate": _gate_to_detail(gate),
+                "error": None,
+            },
+        )
+
     return router
 
 
@@ -379,6 +505,106 @@ def _get_templates_dir() -> str:
     """Return the templates directory path."""
     import os
     return os.path.join(os.path.dirname(__file__), "templates")
+
+
+def _bundle_to_row(bundle: Any) -> dict:
+    """Convert a PolicyBundle to a table row dict."""
+    created = bundle.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    activated = bundle.activated_at
+    if hasattr(activated, "isoformat"):
+        activated = activated.isoformat()
+    return {
+        "bundle_id": bundle.bundle_id,
+        "name": bundle.name,
+        "version": bundle.version,
+        "status": bundle.status,
+        "config_hash": bundle.config_hash[:12] + "..." if bundle.config_hash else "—",
+        "created_at": created,
+        "activated_at": activated or "—",
+        "created_by": bundle.created_by or "—",
+    }
+
+
+def _bundle_to_detail(bundle: Any) -> dict:
+    """Convert a PolicyBundle to a detail page dict."""
+    created = bundle.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    activated = bundle.activated_at
+    if hasattr(activated, "isoformat"):
+        activated = activated.isoformat()
+    archived = bundle.archived_at
+    if hasattr(archived, "isoformat"):
+        archived = archived.isoformat()
+    return {
+        "bundle_id": bundle.bundle_id,
+        "name": bundle.name,
+        "version": bundle.version,
+        "status": bundle.status,
+        "config_path": bundle.config_path or "—",
+        "config_hash": bundle.config_hash,
+        "description": bundle.description or "—",
+        "created_by": bundle.created_by or "—",
+        "created_at": created,
+        "activated_at": activated,
+        "archived_at": archived,
+        "metadata": bundle.metadata or {},
+    }
+
+
+def _gate_to_row(gate: Any) -> dict:
+    """Convert a PolicyGateResult to a table row dict."""
+    created = gate.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    unchanged = gate.total_decisions - gate.changed_decisions - gate.failed_replays
+    return {
+        "gate_result_id": gate.gate_result_id,
+        "bundle_id": gate.bundle_id,
+        "status": gate.status,
+        "passed": gate.passed,
+        "changed_count": gate.changed_decisions,
+        "unchanged_count": max(0, unchanged),
+        "failed_count": gate.failed_replays,
+        "rule_results": gate.rule_results or [],
+        "created_at": created,
+        "created_by": gate.created_by or "—",
+    }
+
+
+def _gate_to_detail(gate: Any) -> dict:
+    """Convert a PolicyGateResult to a detail page dict."""
+    created = gate.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    rule_results = []
+    for r in (gate.rule_results or []):
+        rule_results.append({
+            "rule_name": r.get("rule_name", "—"),
+            "passed": r.get("passed", False),
+            "status": r.get("status", "unknown"),
+            "actual": r.get("actual"),
+            "threshold": r.get("threshold"),
+            "message": r.get("message", ""),
+        })
+    unchanged = gate.total_decisions - gate.changed_decisions - gate.failed_replays
+    return {
+        "gate_result_id": gate.gate_result_id,
+        "bundle_id": gate.bundle_id,
+        "status": gate.status,
+        "passed": gate.passed,
+        "changed_count": gate.changed_decisions,
+        "unchanged_count": max(0, unchanged),
+        "failed_count": gate.failed_replays,
+        "total_decisions": gate.total_decisions,
+        "changed_ratio": gate.changed_ratio,
+        "rule_results": rule_results,
+        "error": gate.summary.get("error") if gate.summary else None,
+        "created_at": created,
+        "created_by": gate.created_by or "—",
+    }
 
 
 def _trace_to_card(trace: Any) -> dict:

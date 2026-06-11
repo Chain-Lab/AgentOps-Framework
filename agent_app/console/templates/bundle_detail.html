@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Bundle Detail</h1>
+
+{% if error %}
+<div class="error-state">
+  <h2>Error</h2>
+  <p>{{ error }}</p>
+</div>
+{% elif not bundle %}
+<div class="empty-state">
+  <p>Loading bundle...</p>
+</div>
+{% else %}
+<div class="detail-header">
+  <h2>{{ bundle.name }}</h2>
+  <span class="badge badge-{{ bundle.status }}">{{ bundle.status }}</span>
+</div>
+
+<dl class="detail-fields">
+  <dt>Bundle ID</dt>
+  <dd><code>{{ bundle.bundle_id }}</code></dd>
+
+  <dt>Version</dt>
+  <dd>{{ bundle.version }}</dd>
+
+  <dt>Status</dt>
+  <dd><span class="badge badge-{{ bundle.status }}">{{ bundle.status }}</span></dd>
+
+  <dt>Config Path</dt>
+  <dd>{{ bundle.config_path }}</dd>
+
+  <dt>Config Hash</dt>
+  <dd><code>{{ bundle.config_hash }}</code></dd>
+
+  <dt>Description</dt>
+  <dd>{{ bundle.description }}</dd>
+
+  <dt>Created By</dt>
+  <dd>{{ bundle.created_by }}</dd>
+
+  <dt>Created At</dt>
+  <dd>{{ bundle.created_at }}</dd>
+
+  <dt>Activated At</dt>
+  <dd>{{ bundle.activated_at or '—' }}</dd>
+
+  <dt>Archived At</dt>
+  <dd>{{ bundle.archived_at or '—' }}</dd>
+</dl>
+
+{% if bundle.metadata %}
+<div class="detail-section">
+  <h3>Metadata</h3>
+  <pre>{{ bundle.metadata | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/bundles">← Back to Bundles</a>
+</p>
+{% endif %}
+{% endblock %}
