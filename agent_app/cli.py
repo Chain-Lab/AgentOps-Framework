@@ -369,7 +369,23 @@ def main() -> int:
     promo_execute_parser.add_argument("--permissions", action="append", default=[])
     promo_execute_parser.add_argument("--bypass-gate", action="store_true")
     promo_execute_parser.add_argument("--bypass-reason", default=None)
+    promo_execute_parser.add_argument("--environment", default="prod", help="Target environment (Phase 31)")
+    promo_execute_parser.add_argument("--reason", default=None, help="Activation reason (Phase 31)")
     promo_execute_parser.add_argument("--json", action="store_true")
+
+    # Phase 31: policy activation subcommands
+    activation_parser = policy_sub.add_parser("activation", help="Policy activation commands")
+    activation_sub = activation_parser.add_subparsers(dest="activation_command")
+
+    activation_list_parser = activation_sub.add_parser("list", help="List policy activations")
+    activation_list_parser.add_argument("--config", required=True)
+    activation_list_parser.add_argument("--environment", default=None)
+    activation_list_parser.add_argument("--json", action="store_true")
+
+    activation_active_parser = activation_sub.add_parser("active", help="Show active policy bundle for an environment")
+    activation_active_parser.add_argument("--config", required=True)
+    activation_active_parser.add_argument("--environment", default="prod")
+    activation_active_parser.add_argument("--json", action="store_true")
 
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
@@ -570,6 +586,13 @@ def main() -> int:
             return asyncio.run(_cmd_policy_promotion_reject(args))
         if args.promotion_command == "execute":
             return asyncio.run(_cmd_policy_promotion_execute(args))
+
+    # Phase 31: policy activation subcommands
+    if args.command == "policy" and args.policy_command == "activation":
+        if args.activation_command == "list":
+            return asyncio.run(_cmd_policy_activation_list(args))
+        if args.activation_command == "active":
+            return asyncio.run(_cmd_policy_activation_active(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -2580,12 +2603,14 @@ async def _cmd_policy_promotion_execute(args: argparse.Namespace) -> int:
         return 1
     context = _build_context(args.actor_id, args.permissions)
     try:
-        bundle = await service.execute_promotion(
+        result = await service.execute_promotion(
             promotion_id=args.promotion_id,
             executed_by=args.actor_id,
             context=context,
             bypass_gate=args.bypass_gate,
             bypass_reason=args.bypass_reason,
+            environment=args.environment,
+            reason=args.reason,
         )
     except PermissionError as exc:
         print(f"Permission denied: {exc}", file=sys.stderr)
@@ -2599,22 +2624,120 @@ async def _cmd_policy_promotion_execute(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"Error executing promotion: {exc}", file=sys.stderr)
         return 1
+
+    # Handle both PolicyActivation (Phase 31) and PolicyBundle return types
+    activation_id = getattr(result, "activation_id", None)
+    environment = getattr(result, "environment", "prod")
+    activated_by = getattr(result, "activated_by", args.actor_id)
+
     if args.json:
-        print(json.dumps({
+        data = {
+            "bundle_id": result.bundle_id,
+            "status": getattr(result, "status", "ACTIVE"),
+        }
+        if activation_id:
+            data["activation_id"] = activation_id
+            data["environment"] = environment
+            data["activated_by"] = activated_by
+            data["reason"] = getattr(result, "reason", None)
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        if activation_id:
+            print("Promotion executed — bundle activated")
+            print()
+            print(f"Activation ID: {activation_id}")
+            print(f"Environment:   {environment}")
+            print(f"Bundle ID:     {result.bundle_id}")
+            print(f"By:            {activated_by}")
+            reason = getattr(result, "reason", None)
+            if reason:
+                print(f"Reason:        {reason}")
+        else:
+            print("Promotion executed — bundle activated")
+            print()
+            print(f"Bundle ID:    {result.bundle_id}")
+            print(f"Name:         {getattr(result, 'name', 'N/A')}")
+            print(f"Version:      {getattr(result, 'version', 'N/A')}")
+            print(f"Status:       {result.status}")
+            print(f"Activated:    {result.activated_at.isoformat() if getattr(result, 'activated_at', None) else 'N/A'}")
+    return 0
+
+
+async def _cmd_policy_activation_list(args: argparse.Namespace) -> int:
+    """List policy activations, optionally filtered by environment."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    activations = await service.list_activations(environment=args.environment)
+    if not activations:
+        print("No activations found.")
+        return 0
+    if args.json:
+        data = []
+        for act in activations:
+            data.append({
+                "activation_id": act.activation_id,
+                "environment": act.environment,
+                "bundle_id": act.bundle_id,
+                "status": act.status.value if hasattr(act.status, "value") else act.status,
+                "activated_by": act.activated_by,
+                "activated_at": act.activated_at.isoformat() if act.activated_at else None,
+                "reason": act.reason,
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Activation ID':<20} {'Env':<10} {'Bundle ID':<20} {'Status':<12} {'By':<15}")
+        print("-" * 80)
+        for act in activations:
+            status_str = act.status.value if hasattr(act.status, "value") else act.status
+            print(
+                f"{act.activation_id:<20} {act.environment:<10} "
+                f"{act.bundle_id:<20} {status_str:<12} "
+                f"{act.activated_by:<15}"
+            )
+    return 0
+
+
+async def _cmd_policy_activation_active(args: argparse.Namespace) -> int:
+    """Show the active policy bundle for an environment."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    try:
+        bundle = await service.require_active_policy(args.environment)
+    except (KeyError, RuntimeError) as exc:
+        print(f"No active policy: {exc}")
+        return 0
+    if args.json:
+        data = {
             "bundle_id": bundle.bundle_id,
             "name": bundle.name,
             "version": bundle.version,
             "status": bundle.status,
-            "activated_at": bundle.activated_at.isoformat() if bundle.activated_at else None,
-        }, indent=2, default=str))
+            "config_hash": bundle.config_hash[:16] + "...",
+        }
+        if getattr(bundle, "activated_at", None):
+            data["activated_at"] = bundle.activated_at.isoformat()
+        print(json.dumps(data, indent=2, default=str))
     else:
-        print("Promotion executed — bundle activated")
-        print()
-        print(f"Bundle ID:    {bundle.bundle_id}")
-        print(f"Name:         {bundle.name}")
-        print(f"Version:      {bundle.version}")
-        print(f"Status:       {bundle.status}")
-        print(f"Activated:    {bundle.activated_at.isoformat() if bundle.activated_at else 'N/A'}")
+        print(
+            f"Active bundle for '{args.environment}': {bundle.bundle_id} "
+            f"(v{bundle.version}, hash={bundle.config_hash[:12]}...)"
+        )
     return 0
 
 

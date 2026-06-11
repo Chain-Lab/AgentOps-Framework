@@ -468,3 +468,89 @@ class TestPolicyPromotionCLI:
             "--actor-id", "release_manager", "--permissions", "policy.promotion.execute")
         assert rc != 0
         assert "approved" in err or "approved" in out
+
+
+# Phase 31: activation CLI tests
+_BASE_CONFIG_31 = """
+app:
+  name: test
+  environment: dev
+governance:
+  policies:
+    enabled: true
+    default_action: allow
+    rules: []
+  policy_decisions:
+    type: memory
+  policy_release:
+    bundles:
+      type: sqlite
+      path: {bundle_db}
+    gates:
+      type: sqlite
+      path: {gate_db}
+    promotions:
+      type: sqlite
+      path: {promo_db}
+    activations:
+      type: memory
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+"""
+
+
+def _cleanup_dbs_31(bundle_db: str, gate_db: str, promo_db: str):
+    """Remove existing database files for Phase 31 tests."""
+    for p in [bundle_db, gate_db, promo_db]:
+        if os.path.exists(p):
+            os.remove(p)
+
+
+class TestPhase31CLI:
+    """Tests for Phase 31 CLI activation commands."""
+
+    def test_activation_list(self, tmp_path):
+        """activation list command succeeds with empty store."""
+        bundle_db = str(tmp_path / "bundles.db")
+        gate_db = str(tmp_path / "gates.db")
+        promo_db = str(tmp_path / "promos.db")
+        _cleanup_dbs_31(bundle_db, gate_db, promo_db)
+        config = _write_config(tmp_path, _BASE_CONFIG_31.format(
+            bundle_db=bundle_db, gate_db=gate_db, promo_db=promo_db,
+        ))
+        rc, out, err = _run_cli("policy", "activation", "list", "--config", config)
+        assert rc == 0, f"stderr: {err}"
+        assert "No activations" in out or "activation" in out.lower()
+
+    def test_activation_active(self, tmp_path):
+        """activation active command handles no active bundle gracefully."""
+        bundle_db = str(tmp_path / "bundles.db")
+        gate_db = str(tmp_path / "gates.db")
+        promo_db = str(tmp_path / "promos.db")
+        _cleanup_dbs_31(bundle_db, gate_db, promo_db)
+        config = _write_config(tmp_path, _BASE_CONFIG_31.format(
+            bundle_db=bundle_db, gate_db=gate_db, promo_db=promo_db,
+        ))
+        rc, out, err = _run_cli("policy", "activation", "active",
+            "--config", config, "--environment", "prod")
+        assert rc == 0, f"stderr: {err}"
+        assert "No active policy" in out or "Active bundle" in out
+
+    def test_promotion_execute_accepts_environment(self, tmp_path):
+        """promotion execute accepts --environment and --reason options."""
+        bundle_db = str(tmp_path / "bundles.db")
+        gate_db = str(tmp_path / "gates.db")
+        promo_db = str(tmp_path / "promos.db")
+        _cleanup_dbs_31(bundle_db, gate_db, promo_db)
+        config = _write_config(tmp_path, _BASE_CONFIG_31.format(
+            bundle_db=bundle_db, gate_db=gate_db, promo_db=promo_db,
+        ))
+        rc, out, err = _run_cli("policy", "promotion", "execute",
+            "--config", config, "--promotion-id", "pr_x",
+            "--actor-id", "admin", "--permissions", "policy.promotion.execute",
+            "--environment", "prod", "--reason", "Deploy")
+        assert rc != 2
