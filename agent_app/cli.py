@@ -328,6 +328,49 @@ def main() -> int:
         "--json", action="store_true", help="Output as JSON"
     )
 
+    # Phase 30: policy promotion subcommands
+    promotion_parser = policy_sub.add_parser("promotion", help="Policy promotion commands")
+    promo_sub = promotion_parser.add_subparsers(dest="promotion_command")
+
+    promo_request_parser = promo_sub.add_parser("request", help="Request promotion of a policy bundle")
+    promo_request_parser.add_argument("--config", required=True)
+    promo_request_parser.add_argument("--bundle-id", required=True)
+    promo_request_parser.add_argument("--actor-id", required=True)
+    promo_request_parser.add_argument("--permissions", action="append", default=[])
+    promo_request_parser.add_argument("--reason", default=None)
+    promo_request_parser.add_argument("--json", action="store_true")
+
+    promo_list_parser = promo_sub.add_parser("list", help="List promotion requests")
+    promo_list_parser.add_argument("--config", required=True)
+    promo_list_parser.add_argument("--status", default=None)
+    promo_list_parser.add_argument("--limit", type=int, default=20)
+    promo_list_parser.add_argument("--json", action="store_true")
+
+    promo_approve_parser = promo_sub.add_parser("approve", help="Approve a promotion request")
+    promo_approve_parser.add_argument("--config", required=True)
+    promo_approve_parser.add_argument("--promotion-id", required=True)
+    promo_approve_parser.add_argument("--actor-id", required=True)
+    promo_approve_parser.add_argument("--permissions", action="append", default=[])
+    promo_approve_parser.add_argument("--reason", default=None)
+    promo_approve_parser.add_argument("--json", action="store_true")
+
+    promo_reject_parser = promo_sub.add_parser("reject", help="Reject a promotion request")
+    promo_reject_parser.add_argument("--config", required=True)
+    promo_reject_parser.add_argument("--promotion-id", required=True)
+    promo_reject_parser.add_argument("--actor-id", required=True)
+    promo_reject_parser.add_argument("--permissions", action="append", default=[])
+    promo_reject_parser.add_argument("--reason", default=None)
+    promo_reject_parser.add_argument("--json", action="store_true")
+
+    promo_execute_parser = promo_sub.add_parser("execute", help="Execute an approved promotion")
+    promo_execute_parser.add_argument("--config", required=True)
+    promo_execute_parser.add_argument("--promotion-id", required=True)
+    promo_execute_parser.add_argument("--actor-id", required=True)
+    promo_execute_parser.add_argument("--permissions", action="append", default=[])
+    promo_execute_parser.add_argument("--bypass-gate", action="store_true")
+    promo_execute_parser.add_argument("--bypass-reason", default=None)
+    promo_execute_parser.add_argument("--json", action="store_true")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -514,6 +557,19 @@ def main() -> int:
             return asyncio.run(_cmd_policy_gate_run(args))
         if args.gate_command == "list":
             return asyncio.run(_cmd_policy_gate_list(args))
+
+    # Phase 30: policy promotion subcommands
+    if args.command == "policy" and args.policy_command == "promotion":
+        if args.promotion_command == "request":
+            return asyncio.run(_cmd_policy_promotion_request(args))
+        if args.promotion_command == "list":
+            return asyncio.run(_cmd_policy_promotion_list(args))
+        if args.promotion_command == "approve":
+            return asyncio.run(_cmd_policy_promotion_approve(args))
+        if args.promotion_command == "reject":
+            return asyncio.run(_cmd_policy_promotion_reject(args))
+        if args.promotion_command == "execute":
+            return asyncio.run(_cmd_policy_promotion_execute(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -2214,6 +2270,14 @@ def _get_gate_store(app: Any) -> Any:
     return None
 
 
+def _get_promotion_store(app: Any) -> Any:
+    """Get the promotion request store from the app."""
+    service = _get_release_service(app)
+    if service is not None:
+        return getattr(service, "promotion_store", None)
+    return None
+
+
 def _get_release_service(app: Any) -> Any:
     """Get or create the policy release service from the app."""
     release_config = getattr(app, "_release_config", None)
@@ -2297,6 +2361,261 @@ def _get_release_service(app: Any) -> Any:
     )
     app._release_service = service
     return service
+
+
+def _build_context(actor_id: str, permissions: list[str], tenant_id: str = "default") -> RunContext:
+    """Build a RunContext for CLI invocations."""
+    from agent_app.core.context import RunContext
+    return RunContext(
+        run_id=f"cli_{actor_id}",
+        user_id=actor_id,
+        tenant_id=tenant_id,
+        permissions=permissions,
+    )
+
+
+async def _cmd_policy_promotion_request(args: argparse.Namespace) -> int:
+    """Request promotion of a policy bundle."""
+    from agent_app.config.loader import build_app
+    from agent_app.core.context import RunContext
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        req = await service.request_promotion(
+            bundle_id=args.bundle_id, requested_by=args.actor_id,
+            context=context, reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error requesting promotion: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({
+            "promotion_id": req.promotion_id, "bundle_id": req.bundle_id,
+            "status": req.status.value if hasattr(req.status, "value") else req.status,
+            "requested_by": req.requested_by,
+            "reason": req.reason, "created_at": req.created_at.isoformat(),
+        }, indent=2, default=str))
+    else:
+        status_str = req.status.value if hasattr(req.status, "value") else req.status
+        print("Promotion request created")
+        print()
+        print(f"Promotion ID:  {req.promotion_id}")
+        print(f"Bundle ID:     {req.bundle_id}")
+        print(f"Status:        {status_str}")
+        print(f"Requested By:  {req.requested_by}")
+        if req.reason:
+            print(f"Reason:        {req.reason}")
+    return 0
+
+
+async def _cmd_policy_promotion_list(args: argparse.Namespace) -> int:
+    """List promotion requests."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_promotion import PromotionRequestStatus
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    store = _get_promotion_store(app)
+    if store is None:
+        print("Promotion store not configured.", file=sys.stderr)
+        return 1
+    status = None
+    if args.status:
+        try:
+            status = PromotionRequestStatus(args.status)
+        except ValueError:
+            print(f"Invalid status: '{args.status}'. Valid: pending, approved, rejected, executed, cancelled", file=sys.stderr)
+            return 1
+    requests = await store.list(status=status)
+    if not requests:
+        print("No promotion requests found.")
+        return 0
+    if args.json:
+        print(json.dumps([{
+            "promotion_id": r.promotion_id, "bundle_id": r.bundle_id,
+            "status": r.status.value if hasattr(r.status, "value") else r.status,
+            "requested_by": r.requested_by,
+            "resolved_by": r.resolved_by, "executed_by": r.executed_by,
+            "reason": r.reason, "created_at": r.created_at.isoformat(),
+        } for r in requests], indent=2, default=str))
+    else:
+        print(f"{'Promotion ID':<20} {'Bundle ID':<20} {'Status':<12} {'Requested By':<15} {'Created'}")
+        print("-" * 85)
+        for r in requests:
+            status_str = r.status.value if hasattr(r.status, "value") else r.status
+            print(f"{r.promotion_id:<20} {r.bundle_id:<20} {status_str:<12} {r.requested_by:<15} {r.created_at.isoformat()[:19]}")
+    return 0
+
+
+async def _cmd_policy_promotion_approve(args: argparse.Namespace) -> int:
+    """Approve a promotion request."""
+    from agent_app.config.loader import build_app
+    from agent_app.core.context import RunContext
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        req = await service.approve_promotion(
+            promotion_id=args.promotion_id,
+            approved_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error approving promotion: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({
+            "promotion_id": req.promotion_id, "bundle_id": req.bundle_id,
+            "status": req.status.value if hasattr(req.status, "value") else req.status,
+            "resolved_by": req.resolved_by,
+            "approval_reason": req.approval_reason,
+            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
+        }, indent=2, default=str))
+    else:
+        status_str = req.status.value if hasattr(req.status, "value") else req.status
+        print("Promotion approved")
+        print()
+        print(f"Promotion ID:  {req.promotion_id}")
+        print(f"Bundle ID:     {req.bundle_id}")
+        print(f"Status:        {status_str}")
+        print(f"Resolved By:   {req.resolved_by}")
+        if req.approval_reason:
+            print(f"Reason:        {req.approval_reason}")
+    return 0
+
+
+async def _cmd_policy_promotion_reject(args: argparse.Namespace) -> int:
+    """Reject a promotion request."""
+    from agent_app.config.loader import build_app
+    from agent_app.core.context import RunContext
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        req = await service.reject_promotion(
+            promotion_id=args.promotion_id,
+            rejected_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error rejecting promotion: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({
+            "promotion_id": req.promotion_id, "bundle_id": req.bundle_id,
+            "status": req.status.value if hasattr(req.status, "value") else req.status,
+            "resolved_by": req.resolved_by,
+            "rejection_reason": req.rejection_reason,
+            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
+        }, indent=2, default=str))
+    else:
+        status_str = req.status.value if hasattr(req.status, "value") else req.status
+        print("Promotion rejected")
+        print()
+        print(f"Promotion ID:  {req.promotion_id}")
+        print(f"Bundle ID:     {req.bundle_id}")
+        print(f"Status:        {status_str}")
+        print(f"Resolved By:   {req.resolved_by}")
+        if req.rejection_reason:
+            print(f"Reason:        {req.rejection_reason}")
+    return 0
+
+
+async def _cmd_policy_promotion_execute(args: argparse.Namespace) -> int:
+    """Execute an approved promotion."""
+    from agent_app.config.loader import build_app
+    from agent_app.core.context import RunContext
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        bundle = await service.execute_promotion(
+            promotion_id=args.promotion_id,
+            executed_by=args.actor_id,
+            context=context,
+            bypass_gate=args.bypass_gate,
+            bypass_reason=args.bypass_reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error executing promotion: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({
+            "bundle_id": bundle.bundle_id,
+            "name": bundle.name,
+            "version": bundle.version,
+            "status": bundle.status,
+            "activated_at": bundle.activated_at.isoformat() if bundle.activated_at else None,
+        }, indent=2, default=str))
+    else:
+        print("Promotion executed — bundle activated")
+        print()
+        print(f"Bundle ID:    {bundle.bundle_id}")
+        print(f"Name:         {bundle.name}")
+        print(f"Version:      {bundle.version}")
+        print(f"Status:       {bundle.status}")
+        print(f"Activated:    {bundle.activated_at.isoformat() if bundle.activated_at else 'N/A'}")
+    return 0
 
 
 if __name__ == "__main__":

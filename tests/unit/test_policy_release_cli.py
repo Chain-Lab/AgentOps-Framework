@@ -280,3 +280,191 @@ class TestPolicyReleaseCLI:
             "--bundle-id", "pb_nonexistent",
         )
         assert rc != 0
+
+
+# Phase 30: policy promotion CLI tests
+_BASE_CONFIG_30 = """
+app:
+  name: test
+  environment: dev
+governance:
+  policies:
+    enabled: true
+    default_action: allow
+    rules: []
+  policy_decisions:
+    type: memory
+  policy_release:
+    bundles:
+      type: sqlite
+      path: {bundle_db}
+    gates:
+      type: sqlite
+      path: {gate_db}
+    promotions:
+      type: sqlite
+      path: {promo_db}
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+"""
+
+
+def _cleanup_dbs_30(bundle_db: str, gate_db: str, promo_db: str):
+    """Remove existing database files for Phase 30 tests."""
+    for p in [bundle_db, gate_db, promo_db]:
+        if os.path.exists(p):
+            os.remove(p)
+
+
+class TestPolicyPromotionCLI:
+    """Tests for Phase 30 promotion CLI commands."""
+
+    def _write_config(self, tmp_path):
+        bundle_db = str(tmp_path / "bundles.db")
+        gate_db = str(tmp_path / "gates.db")
+        promo_db = str(tmp_path / "promos.db")
+        _cleanup_dbs_30(bundle_db, gate_db, promo_db)
+        config = _write_config(tmp_path, _BASE_CONFIG_30.format(
+            bundle_db=bundle_db, gate_db=gate_db, promo_db=promo_db,
+        ))
+        return config
+
+    def test_promotion_request_success(self, tmp_path):
+        """promotion request command succeeds."""
+        config = self._write_config(tmp_path)
+        # Create bundle first
+        rc, out, err = _run_cli("policy", "bundle", "create",
+            "--config", config, "--name", "promo-test",
+            "--version", "1.0.0", "--config-path", "test.yaml")
+        assert rc == 0, f"stderr: {err}"
+        bundle_id = None
+        for line in out.split("\n"):
+            if line.startswith("Bundle ID:"):
+                bundle_id = line.split(":", 1)[1].strip()
+                break
+        assert bundle_id is not None
+
+        rc, out, err = _run_cli("policy", "promotion", "request",
+            "--config", config, "--bundle-id", bundle_id,
+            "--actor-id", "alice", "--permissions", "policy.promotion.request",
+            "--reason", "Ready for release")
+        assert rc == 0, f"stderr: {err}"
+        assert "Promotion ID:" in out
+        assert "pending" in out
+
+    def test_promotion_request_permission_denied(self, tmp_path):
+        """promotion request fails without proper permission."""
+        config = self._write_config(tmp_path)
+        rc, out, err = _run_cli("policy", "promotion", "request",
+            "--config", config, "--bundle-id", "pb_test",
+            "--actor-id", "alice", "--permissions", "policy.bundle.create",
+            "--reason", "hacking")
+        assert rc != 0
+        assert "Permission denied" in err or "Permission denied" in out
+
+    def test_promotion_list_empty(self, tmp_path):
+        """promotion list shows message when no requests exist."""
+        config = self._write_config(tmp_path)
+        rc, out, err = _run_cli("policy", "promotion", "list", "--config", config)
+        assert rc == 0
+        assert "No promotion requests" in out
+
+    def test_promotion_approve(self, tmp_path):
+        """promotion approve command succeeds."""
+        config = self._write_config(tmp_path)
+        # Create bundle first
+        rc, out, err = _run_cli("policy", "bundle", "create",
+            "--config", config, "--name", "approve-test",
+            "--version", "1.0.0", "--config-path", "test.yaml")
+        assert rc == 0, f"stderr: {err}"
+        bundle_id = None
+        for line in out.split("\n"):
+            if line.startswith("Bundle ID:"):
+                bundle_id = line.split(":", 1)[1].strip()
+                break
+        assert bundle_id is not None
+
+        rc, out, _ = _run_cli("policy", "promotion", "request",
+            "--config", config, "--bundle-id", bundle_id,
+            "--actor-id", "alice", "--permissions", "policy.promotion.request",
+            "--reason", "release")
+        assert rc == 0
+        promo_id = None
+        for line in out.split("\n"):
+            if line.startswith("Promotion ID:"):
+                promo_id = line.split(":", 1)[1].strip()
+                break
+        assert promo_id is not None
+        rc, out, err = _run_cli("policy", "promotion", "approve",
+            "--config", config, "--promotion-id", promo_id,
+            "--actor-id", "reviewer", "--permissions", "policy.promotion.approve",
+            "--reason", "Looks good")
+        assert rc == 0, f"stderr: {err}"
+        assert "approved" in out
+
+    def test_promotion_reject(self, tmp_path):
+        """promotion reject command succeeds."""
+        config = self._write_config(tmp_path)
+        # Create bundle first
+        rc, out, err = _run_cli("policy", "bundle", "create",
+            "--config", config, "--name", "reject-test",
+            "--version", "1.0.0", "--config-path", "test.yaml")
+        assert rc == 0, f"stderr: {err}"
+        bundle_id = None
+        for line in out.split("\n"):
+            if line.startswith("Bundle ID:"):
+                bundle_id = line.split(":", 1)[1].strip()
+                break
+        assert bundle_id is not None
+
+        rc, out, _ = _run_cli("policy", "promotion", "request",
+            "--config", config, "--bundle-id", bundle_id,
+            "--actor-id", "alice", "--permissions", "policy.promotion.request")
+        assert rc == 0, f"stderr: {err}"
+        promo_id = None
+        for line in out.split("\n"):
+            if line.startswith("Promotion ID:"):
+                promo_id = line.split(":", 1)[1].strip()
+                break
+        assert promo_id is not None
+        rc, out, err = _run_cli("policy", "promotion", "reject",
+            "--config", config, "--promotion-id", promo_id,
+            "--actor-id", "reviewer", "--permissions", "policy.promotion.reject",
+            "--reason", "Too risky")
+        assert rc == 0, f"stderr: {err}"
+        assert "rejected" in out
+
+    def test_promotion_execute_pending_fails(self, tmp_path):
+        """promotion execute fails on pending (not approved) request."""
+        config = self._write_config(tmp_path)
+        # Create bundle first
+        rc, out, err = _run_cli("policy", "bundle", "create",
+            "--config", config, "--name", "execute-test",
+            "--version", "1.0.0", "--config-path", "test.yaml")
+        assert rc == 0, f"stderr: {err}"
+        bundle_id = None
+        for line in out.split("\n"):
+            if line.startswith("Bundle ID:"):
+                bundle_id = line.split(":", 1)[1].strip()
+                break
+        assert bundle_id is not None
+
+        rc, out, _ = _run_cli("policy", "promotion", "request",
+            "--config", config, "--bundle-id", bundle_id,
+            "--actor-id", "alice", "--permissions", "policy.promotion.request")
+        assert rc == 0, f"stderr: {err}"
+        promo_id = None
+        for line in out.split("\n"):
+            if line.startswith("Promotion ID:"):
+                promo_id = line.split(":", 1)[1].strip()
+                break
+        assert promo_id is not None
+        rc, out, err = _run_cli("policy", "promotion", "execute",
+            "--config", config, "--promotion-id", promo_id,
+            "--actor-id", "release_manager", "--permissions", "policy.promotion.execute")
+        assert rc != 0
+        assert "approved" in err or "approved" in out

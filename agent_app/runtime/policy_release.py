@@ -497,7 +497,7 @@ class PolicyReleaseService:
         if request.status != PromotionRequestStatus.APPROVED:
             raise ValueError(
                 f"Cannot execute promotion '{promotion_id}': "
-                f"request status is '{request.status.value}', must be approved."
+                f"request status is '{request.status}', must be approved."
             )
 
         # Check latest gate result for the bundle

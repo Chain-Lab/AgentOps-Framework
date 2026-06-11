@@ -147,6 +147,9 @@ class InMemoryPromotionRequestStore:
             raise KeyError(
                 f"Promotion request '{promotion_id}' not found in store."
             )
+        if request.status != PromotionRequestStatus.APPROVED:
+            # No-op: only APPROVED requests can be marked as executed
+            return request
         request.status = PromotionRequestStatus.EXECUTED
         request.executed_by = executed_by
         request.executed_at = datetime.now(timezone.utc)
@@ -197,7 +200,7 @@ class SQLitePromotionRequestStore:
     def _init_db(self) -> None:
         """Create tables if they don't exist."""
         self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS promotion_requests (
+            CREATE TABLE IF NOT EXISTS policy_promotion_requests (
                 promotion_id TEXT PRIMARY KEY,
                 bundle_id TEXT NOT NULL,
                 gate_result_id TEXT,
@@ -215,11 +218,11 @@ class SQLitePromotionRequestStore:
             );
 
             CREATE INDEX IF NOT EXISTS idx_promo_requests_status
-                ON promotion_requests(status);
+                ON policy_promotion_requests(status);
             CREATE INDEX IF NOT EXISTS idx_promo_requests_tenant
-                ON promotion_requests(tenant_id);
+                ON policy_promotion_requests(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_promo_requests_created
-                ON promotion_requests(created_at);
+                ON policy_promotion_requests(created_at);
         """)
         self._conn.commit()
 
@@ -227,7 +230,7 @@ class SQLitePromotionRequestStore:
         """Create a new promotion request (INSERT OR REPLACE)."""
         self._conn.execute(
             """
-            INSERT OR REPLACE INTO promotion_requests
+            INSERT OR REPLACE INTO policy_promotion_requests
                 (promotion_id, bundle_id, gate_result_id, requested_by,
                  tenant_id, status, reason, approval_reason, rejection_reason,
                  created_at, resolved_at, resolved_by, executed_at, executed_by)
@@ -256,7 +259,7 @@ class SQLitePromotionRequestStore:
     async def get(self, promotion_id: str) -> PromotionRequest | None:
         """Retrieve a promotion request by ID."""
         row = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         if row is None:
@@ -271,15 +274,14 @@ class SQLitePromotionRequestStore:
     ) -> PromotionRequest:
         """Approve a pending promotion request."""
         row = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         if row is None:
             raise KeyError(
                 f"Promotion request '{promotion_id}' not found in store."
             )
-        data = dict(row)
-        current_status = PromotionRequestStatus(data["status"])
+        current_status = PromotionRequestStatus(row["status"])
         if current_status != PromotionRequestStatus.PENDING:
             # No-op: already resolved, return current state
             return self._row_to_request(row)
@@ -287,7 +289,7 @@ class SQLitePromotionRequestStore:
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
-            UPDATE promotion_requests
+            UPDATE policy_promotion_requests
             SET status = ?, resolved_by = ?, approval_reason = ?, resolved_at = ?
             WHERE promotion_id = ?
             """,
@@ -302,7 +304,7 @@ class SQLitePromotionRequestStore:
         self._conn.commit()
 
         updated = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         return self._row_to_request(updated)
@@ -315,15 +317,14 @@ class SQLitePromotionRequestStore:
     ) -> PromotionRequest:
         """Reject a pending promotion request."""
         row = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         if row is None:
             raise KeyError(
                 f"Promotion request '{promotion_id}' not found in store."
             )
-        data = dict(row)
-        current_status = PromotionRequestStatus(data["status"])
+        current_status = PromotionRequestStatus(row["status"])
         if current_status != PromotionRequestStatus.PENDING:
             # No-op: already resolved, return current state
             return self._row_to_request(row)
@@ -331,7 +332,7 @@ class SQLitePromotionRequestStore:
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
-            UPDATE promotion_requests
+            UPDATE policy_promotion_requests
             SET status = ?, resolved_by = ?, rejection_reason = ?, resolved_at = ?
             WHERE promotion_id = ?
             """,
@@ -346,7 +347,7 @@ class SQLitePromotionRequestStore:
         self._conn.commit()
 
         updated = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         return self._row_to_request(updated)
@@ -356,11 +357,24 @@ class SQLitePromotionRequestStore:
         promotion_id: str,
         executed_by: str,
     ) -> PromotionRequest:
-        """Mark a promotion request as executed."""
+        """Mark an approved promotion request as executed."""
+        row = self._conn.execute(
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
+            (promotion_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(
+                f"Promotion request '{promotion_id}' not found in store."
+            )
+        current_status = PromotionRequestStatus(row["status"])
+        if current_status != PromotionRequestStatus.APPROVED:
+            # No-op: only APPROVED requests can be marked as executed
+            return self._row_to_request(row)
+
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
-            UPDATE promotion_requests
+            UPDATE policy_promotion_requests
             SET status = ?, executed_by = ?, executed_at = ?
             WHERE promotion_id = ?
             """,
@@ -374,7 +388,7 @@ class SQLitePromotionRequestStore:
         self._conn.commit()
 
         updated = self._conn.execute(
-            "SELECT * FROM promotion_requests WHERE promotion_id = ?",
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
             (promotion_id,),
         ).fetchone()
         if updated is None:
@@ -389,7 +403,7 @@ class SQLitePromotionRequestStore:
         tenant_id: str | None = None,
     ) -> list[PromotionRequest]:
         """List promotion requests, optionally filtered."""
-        query = "SELECT * FROM promotion_requests WHERE 1=1"
+        query = "SELECT * FROM policy_promotion_requests WHERE 1=1"
         params: list = []
 
         if status is not None:
