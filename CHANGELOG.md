@@ -723,6 +723,74 @@ All notable changes to Agent App Framework are documented here.
 - **Recovery admin router security** — optional FastAPI recovery admin router now denies access by default unless an admin authorization dependency is supplied
 - **Recovery admin error handling** — internal exception details are logged server-side and no longer returned in HTTP 500 response bodies
 
+## Phase 23: Governance Policy Engine v1 (0.11.0)
+
+### Added
+
+- **`PolicyAction` StrEnum** — ALLOW, DENY, REQUIRE_APPROVAL, SET_TTL, RATE_LIMIT, AUDIT_ONLY
+- **`PolicyDecision` model** — action, allowed, requires_approval, reason, ttl_seconds, rate_limit, metadata
+- **`PolicyEvaluationContext` model** — run_id, tool_name, risk_level, user_id, tenant_id, roles, permissions, metadata
+- **`PolicyEngine` Protocol** — `evaluate_tool_call()` + `evaluate_approval_resume()` async methods
+- **`DefaultPolicyEngine`** — replicates Phase 22 behavior (missing perms → DENY, high/critical risk → REQUIRE_APPROVAL, else ALLOW)
+- **`ConfigurablePolicyEngine`** — YAML-driven rule matching with 14 condition types (tool_name, tool_name_prefix, risk_level, roles, permissions, etc.)
+- **Policy evaluation in `ToolExecutor`** — runs BEFORE existing governance checks; DENY/REQUIRE_APPROVAL short-circuits execution
+- **Policy evaluation in `ApprovalResumeService`** — runs AFTER existing safety checks
+- **Config schema support** — `PolicyRuleConfig`, `PolicyEngineConfig` in `GovernanceConfig.policies`
+- **Policy audit events** — policy.evaluated, policy.denied, policy.approval_required, policy.audit_only
+- **customer_support policy upgrade** — 3 rules: refund_requires_approval, billing_audit_only, deny_dangerous_tools
+- **13 new unit tests** for policy engine integration in ToolExecutor
+- **7 new unit tests** for policy integration in ApprovalResumeService
+- **1715 total tests passing**
+
+### Backward Compatibility
+
+- Policy engine disabled by default (Phase 22 behavior unchanged)
+- No hard dependency on OpenAI SDK in governance modules
+- All existing 1715 tests pass without modification
+
+## Phase 24: Policy Ops & Diagnostics v1 (0.12.0)
+
+### Added
+
+- **`PolicyValidationResult` / `PolicyValidationIssue`** — validates policy config for duplicate rules, invalid actions, conflicting conditions, type errors, TTL issues, empty rule warnings
+- **`validate_policy_config()`** — standalone validation function accepting PolicyEngineConfig or raw dict
+- **`PolicyDecisionTrace` model** — decision_id, rule_name, action, reason, matched_conditions, context_summary, created_at
+- **`PolicyEngine.explain()` method** — returns explainable trace for any policy decision
+- **`_build_context_summary()`** — safe context extraction excluding sensitive arguments
+- **`PolicySimulationInput` / `PolicySimulationResult`** — structured I/O for offline simulation
+- **`PolicySimulator`** — evaluates policy without side effects (no tool execution, no approval creation, no session writes)
+- **CLI `agentapp policy validate`** — validates config, reports errors/warnings, exit 0 for valid
+- **CLI `agentapp policy simulate`** — offline simulation with action/rule/reason output
+- **CLI `agentapp policy explain`** — detailed decision trace with matched conditions
+- **FastAPI `/policies` GET** — returns policy config summary (no sensitive data)
+- **FastAPI `/policies/validate` POST** — validates current policy config
+- **FastAPI `/policies/simulate` POST** — offline simulation endpoint
+- **FastAPI `/policies/explain` POST** — explain endpoint with matched conditions
+- **FastAPI `/policy-decisions` GET** — queries audit log for policy events
+- **Eval `policy_decisions` assertion** — matches rule_name, action, reason_contains in eval YAML
+- **customer_support policy eval cases** — refund_with_role_requires_approval, refund_without_role_denied_by_policy, policy_audit_only_allows_execution
+- **customer_support `policy_examples.md`** — usage examples for validate/simulate/explain
+
+### Changed
+
+- `PolicyEngine` Protocol — added `explain()` method
+- `DefaultPolicyEngine` — added `explain()` implementation
+- `ConfigurablePolicyEngine` — added `explain()` implementation with matched conditions
+- Eval schema — `EvalExpect.policy_decisions` field added
+- Eval assertions — `_assert_policy_decisions()` function added
+- ToolExecutor audit — policy.evaluated event emitted for all evaluations
+- ApprovalResumeService audit — policy.evaluated event emitted for all evaluations
+
+### Test Coverage
+
+- 22 policy validation tests (valid, duplicate names, invalid actions, conflicting conditions, TTL, warnings)
+- 12 policy explain/trace tests (default engine, configurable engine, context safety)
+- 15 policy simulator tests (allow, deny, require_approval, audit_only, missing role/permission, no side effects)
+- 7 CLI policy tests (validate success/failure, simulate output, explain output)
+- 11 FastAPI policy endpoint tests (all 5 endpoints)
+- 8 eval policy assertion tests (match by rule, action, reason, multiple checks)
+- 4 customer_support policy eval cases
+
 ## 0.7.0
 
 ### Added
@@ -898,3 +966,29 @@ All notable changes to Agent App Framework are documented here.
 - Handoff and orchestrator workflow types are stubs only
 - Eval runner validates framework governance logic, not model quality
 - SQLite stores are basic; no connection pooling or migration system
+
+## Phase 25: Policy Decision Store & Ops Reporting v1 (0.13.0)
+
+### Added
+
+- **`PolicyDecisionStore` Protocol** — structural subtyping with `record`/`get`/`query`/`count` methods
+- **`InMemoryPolicyDecisionStore`** — list-based store with filtering, sorted newest-first, limit/offset pagination
+- **`SQLitePolicyDecisionStore`** — persistent SQLite store with 5 indexes (run_id, tenant_id, rule_name, action, created_at)
+- **`PolicyDecisionTrace` model** — added `tool_name` field for tool-level analytics
+- **`PolicyReport` model** — aggregated statistics (action/rule/tool breakdown + time range)
+- **`PolicyReportingService`** — generate reports, export JSONL and CSV
+- **Config integration** — `PolicyDecisionStoreConfig` in `GovernanceConfig.policy_decisions` (type + path)
+- **ToolExecutor wiring** — records `PolicyDecisionTrace` after every policy evaluation via `explain()`
+- **AppRunner/AgentApp wiring** — `policy_decision_store` parameter threaded through all layers
+- **Enhanced `/policy-decisions` endpoint** — full filtering (run_id, tenant_id, agent_name, tool_name, rule_name, action) + pagination
+- **New `/policy-decisions/{decision_id}` endpoint** — single decision lookup
+- **New `/policy-report` endpoint** — aggregated policy analytics
+- **CLI commands** — `policy decisions`, `policy report`, `policy export` (JSONL/CSV)
+- **customer_support example upgrade** — SQLite policy decision store configured
+- **32 new unit tests** for PolicyDecisionStore + PolicyReportingService
+
+### Architecture Boundaries Maintained
+
+- Core modules have no FastAPI dependency
+- Core modules have no openai-agents dependency
+- SQLite via stdlib `sqlite3` only (no ORM)

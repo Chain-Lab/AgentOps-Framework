@@ -15,14 +15,15 @@ from __future__ import annotations
 import secrets
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
 from agent_app.core.context import RunContext
 from agent_app.core.tool_spec import ToolSpec
 from agent_app.governance.audit import AuditEvent, AuditLogger
-from agent_app.governance.policy import PolicyAction, PolicyEngine, PolicyEvaluationContext
+from agent_app.governance.policy import PolicyAction, PolicyDecisionTrace, PolicyEngine, PolicyEvaluationContext
+from agent_app.governance.policy_decision_store import PolicyDecisionStore
 from agent_app.governance.permission import PermissionChecker
 from agent_app.governance.risk import RiskLevel, requires_tool_approval
 from agent_app.governance.sanitization import sanitize_payload
@@ -100,6 +101,8 @@ class ToolExecutor:
         rate_limiter: Any = None,
         default_ttl_seconds: int | None = None,
         policy_engine: PolicyEngine | None = None,
+        trace_events_callback: Callable[[Any], None] | None = None,
+        policy_decision_store: PolicyDecisionStore | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.approval_store = approval_store
@@ -109,6 +112,8 @@ class ToolExecutor:
         self.rate_limiter = rate_limiter
         self.default_ttl_seconds = default_ttl_seconds
         self.policy_engine = policy_engine
+        self._trace_events_callback = trace_events_callback
+        self._policy_decision_store = policy_decision_store
 
     async def execute(
         self,
@@ -157,7 +162,7 @@ class ToolExecutor:
         if self.policy_engine is not None:
             policy_ctx = PolicyEvaluationContext(
                 run_id=context.run_id,
-                agent_name=getattr(context, "agent_name", None),
+                agent_name=context.agent_name,
                 tool_name=tool_name,
                 risk_level=str(spec.risk_level),
                 user_id=context.user_id,
@@ -186,6 +191,22 @@ class ToolExecutor:
                     "reason": policy_decision.reason,
                 },
             ))
+            # Record policy decision in trace_events for eval assertions
+            await self._record_policy_event(
+                context=context,
+                tool_name=tool_name,
+                action=policy_decision.action.value,
+                rule_name=policy_decision.metadata.get("rule_name"),
+                reason=policy_decision.reason,
+            )
+            # Phase 25: persist policy decision trace to store
+            if self._policy_decision_store is not None:
+                try:
+                    trace = await self.policy_engine.explain(policy_ctx)
+                    trace.decision_id = f"dec_{uuid.uuid4()}"
+                    await self._policy_decision_store.record(trace)
+                except Exception:
+                    pass  # Never let policy store failures block execution
 
             if policy_decision.action == PolicyAction.DENY:
                 error_detail = {
@@ -539,6 +560,33 @@ class ToolExecutor:
             data=data or {},
         )
         await self.trace_collector.record(event)
+
+    async def _record_policy_event(
+        self,
+        context: RunContext,
+        tool_name: str,
+        action: str,
+        rule_name: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record a policy decision RunEvent into AppRunner trace_events."""
+        from agent_app.observability.events import RunEvent
+        event = RunEvent(
+            event_type="policy.evaluated",
+            trace_id=context.trace_id or "",
+            run_id=context.run_id,
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            tool_name=tool_name,
+            data={
+                "action": action,
+                "rule_name": rule_name,
+                "reason": reason,
+            },
+        )
+        await self.trace_collector.record(event)
+        if self._trace_events_callback is not None:
+            self._trace_events_callback(event)
 
 
 def _is_tool_call_approval_marker_valid(

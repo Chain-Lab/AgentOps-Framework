@@ -276,6 +276,19 @@ class PolicyEngineConfig(BaseModel):
         return v
 
 
+class PolicyDecisionStoreConfig(BaseModel):
+    """Policy decision persistence configuration (Phase 25)."""
+
+    type: str = Field(
+        default="memory",
+        description="Store backend: memory | sqlite",
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite database path (required when type=sqlite)",
+    )
+
+
 class LeaseRenewalConfig(BaseModel):
     """Configuration for best-effort background lease renewal (Phase 15.2).
 
@@ -550,6 +563,10 @@ class GovernanceConfig(BaseModel):
     policies: PolicyEngineConfig | None = Field(
         default=None,
         description="Policy engine configuration (Phase 23)",
+    )
+    policy_decisions: PolicyDecisionStoreConfig | None = Field(
+        default=None,
+        description="Policy decision store configuration (Phase 25)",
     )
 
 

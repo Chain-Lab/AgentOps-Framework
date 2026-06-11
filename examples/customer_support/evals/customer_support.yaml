@@ -54,3 +54,45 @@ cases:
           to_agent: technical_support
       routing_decisions:
         - technical_intent
+
+  # Phase 24: Policy-specific eval cases
+  - id: refund_with_role_requires_approval
+    input: "refund order 123"
+    expect:
+      status: interrupted
+      approvals_required:
+        - refund.request
+      policy_decisions:
+        - rule_name: refund_requires_approval
+          action: require_approval
+          reason_contains: Refund
+
+  - id: refund_without_role_denied_by_policy
+    input: "refund order 123"
+    user_id: no_role_user
+    roles: []
+    permissions: []
+    expect:
+      status: failed
+      error_type: policy_denied
+      policy_decisions:
+        - action: deny
+
+  - id: policy_audit_only_allows_execution
+    input: "invoice order 123"
+    expect:
+      status: completed
+      policy_decisions:
+        - rule_name: billing_audit_only
+          action: audit_only
+
+  - id: dangerous_tool_denied_by_policy
+    input: "delete everything"
+    permissions:
+      - admin:delete
+    expect:
+      status: failed
+      error_type: policy_denied
+      policy_decisions:
+        - action: deny
+        - rule_name: deny_dangerous_tools

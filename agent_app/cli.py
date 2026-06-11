@@ -57,6 +57,86 @@ def main() -> int:
     )
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
+    # Phase 24: policy commands
+    policy_parser = subparsers.add_parser("policy", help="Policy commands")
+    policy_sub = policy_parser.add_subparsers(dest="policy_command")
+
+    validate_parser = policy_sub.add_parser("validate", help="Validate policy config")
+    validate_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+
+    simulate_parser = policy_sub.add_parser("simulate", help="Simulate policy decision")
+    simulate_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    simulate_parser.add_argument("--tool", required=True, help="Tool name to simulate")
+    simulate_parser.add_argument("--risk", default="low", help="Risk level (default: low)")
+    simulate_parser.add_argument("--workflow-type", default=None, help="Workflow type")
+    simulate_parser.add_argument("--agent-name", default=None, help="Agent name")
+    simulate_parser.add_argument("--target-agent", default=None, help="Target agent")
+    simulate_parser.add_argument("--user-id", default=None, help="User ID")
+    simulate_parser.add_argument("--tenant-id", default=None, help="Tenant ID")
+    simulate_parser.add_argument("--role", action="append", default=[], help="User role (repeatable)")
+    simulate_parser.add_argument("--permission", action="append", default=[], help="Permission (repeatable)")
+    simulate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    explain_parser = policy_sub.add_parser("explain", help="Explain policy decision")
+    explain_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    explain_parser.add_argument("--tool", required=True, help="Tool name to explain")
+    explain_parser.add_argument("--risk", default="low", help="Risk level (default: low)")
+    explain_parser.add_argument("--workflow-type", default=None, help="Workflow type")
+    explain_parser.add_argument("--agent-name", default=None, help="Agent name")
+    explain_parser.add_argument("--target-agent", default=None, help="Target agent")
+    explain_parser.add_argument("--user-id", default=None, help="User ID")
+    explain_parser.add_argument("--tenant-id", default=None, help="Tenant ID")
+    explain_parser.add_argument("--role", action="append", default=[], help="User role (repeatable)")
+    explain_parser.add_argument("--permission", action="append", default=[], help="Permission (repeatable)")
+    explain_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # Phase 25: policy decisions subcommands
+    decisions_parser = policy_sub.add_parser("decisions", help="Query policy decisions")
+    decisions_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    decisions_parser.add_argument("--run-id", default=None, help="Filter by run ID")
+    decisions_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
+    decisions_parser.add_argument("--agent-name", default=None, help="Filter by agent name")
+    decisions_parser.add_argument("--tool-name", default=None, help="Filter by tool name")
+    decisions_parser.add_argument("--rule-name", default=None, help="Filter by rule name")
+    decisions_parser.add_argument("--action", default=None, help="Filter by action")
+    decisions_parser.add_argument("--limit", type=int, default=20, help="Max results")
+    decisions_parser.add_argument("--offset", type=int, default=0, help="Skip results")
+    decisions_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    report_parser = policy_sub.add_parser("report", help="Policy decision report")
+    report_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    report_parser.add_argument("--run-id", default=None, help="Filter by run ID")
+    report_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
+    report_parser.add_argument("--tool-name", default=None, help="Filter by tool name")
+    report_parser.add_argument("--rule-name", default=None, help="Filter by rule name")
+    report_parser.add_argument("--action", default=None, help="Filter by action")
+    report_parser.add_argument("--limit", type=int, default=1000, help="Max decisions")
+    report_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    export_parser = policy_sub.add_parser("export", help="Export policy decisions")
+    export_parser.add_argument(
+        "--config", required=True, help="Path to agentapp.yaml config"
+    )
+    export_parser.add_argument(
+        "--format", choices=["jsonl", "csv"], default="jsonl", help="Export format"
+    )
+    export_parser.add_argument(
+        "--output", required=True, help="Output file path"
+    )
+    export_parser.add_argument("--run-id", default=None, help="Filter by run ID")
+    export_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
+    export_parser.add_argument("--limit", type=int, default=10000, help="Max records")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -196,6 +276,24 @@ def main() -> int:
 
     if args.command == "trace" and args.trace_command == "show":
         return asyncio.run(_cmd_trace_show(args))
+
+    if args.command == "policy" and args.policy_command == "validate":
+        return asyncio.run(_cmd_policy_validate(args))
+
+    if args.command == "policy" and args.policy_command == "simulate":
+        return asyncio.run(_cmd_policy_simulate(args))
+
+    if args.command == "policy" and args.policy_command == "explain":
+        return asyncio.run(_cmd_policy_explain(args))
+
+    if args.command == "policy" and args.policy_command == "decisions":
+        return asyncio.run(_cmd_policy_decisions(args))
+
+    if args.command == "policy" and args.policy_command == "report":
+        return asyncio.run(_cmd_policy_report(args))
+
+    if args.command == "policy" and args.policy_command == "export":
+        return asyncio.run(_cmd_policy_export(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -902,6 +1000,327 @@ async def _cmd_recovery_recover_admin(args: argparse.Namespace) -> int:
         err = result.error or {}
         print(f"Recovery failed for run '{result.run_id}': {err}", file=sys.stderr)
         return 1
+
+
+# -- Phase 24: Policy commands --
+
+
+async def _cmd_policy_validate(args: argparse.Namespace) -> int:
+    """Validate policy config and report issues."""
+    from agent_app.config.loader import load_config
+    from agent_app.governance.policy_validation import validate_policy_config
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    gov = getattr(config, "governance", None)
+    policy_cfg = getattr(gov, "policies", None) if gov else None
+
+    if policy_cfg is None or not getattr(policy_cfg, "enabled", False):
+        print("Policy engine is not enabled in this config.")
+        return 0
+
+    result = validate_policy_config(policy_cfg)
+
+    if not result.issues:
+        print("Policy config is valid. No issues found.")
+        return 0
+
+    for issue in result.issues:
+        level_tag = "ERROR" if issue.level == "error" else "WARNING"
+        location = f" ({issue.path})" if issue.path else ""
+        rule = f" in rule '{issue.rule_name}'" if issue.rule_name else ""
+        print(f"  [{level_tag}]{location}{rule}: {issue.message}")
+
+    error_count = sum(1 for i in result.issues if i.level == "error")
+    warning_count = sum(1 for i in result.issues if i.level == "warning")
+
+    print()
+    print(f"  {error_count} error(s), {warning_count} warning(s)")
+
+    return 1 if error_count > 0 else 0
+
+
+async def _cmd_policy_simulate(args: argparse.Namespace) -> int:
+    """Simulate a policy decision."""
+    from agent_app.config.loader import load_config
+    from agent_app.governance.policy import ConfigurablePolicyEngine, DefaultPolicyEngine
+    from agent_app.governance.policy_simulator import PolicySimulationInput, PolicySimulator
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    gov = getattr(config, "governance", None)
+    policy_cfg = getattr(gov, "policies", None) if gov else None
+
+    if policy_cfg is None or not getattr(policy_cfg, "enabled", False):
+        print("Policy engine is not enabled. Using default policy.", file=sys.stderr)
+        engine: Any = DefaultPolicyEngine()
+    else:
+        rules = [r.model_dump() if hasattr(r, "model_dump") else r for r in policy_cfg.rules]
+        engine = ConfigurablePolicyEngine(
+            rules=rules,
+            default_action=getattr(policy_cfg, "default_action", "allow"),
+        )
+
+    sim = PolicySimulator(policy_engine=engine)
+    inp = PolicySimulationInput(
+        tool_name=args.tool,
+        risk_level=args.risk,
+        workflow_type=args.workflow_type,
+        agent_name=args.agent_name,
+        target_agent=args.target_agent,
+        user_id=args.user_id,
+        tenant_id=args.tenant_id,
+        roles=list(args.role),
+        permissions=list(args.permission),
+    )
+    result = await sim.simulate(inp)
+
+    if args.json:
+        data = {
+            "tool": args.tool,
+            "action": result.decision.action.value,
+            "allowed": result.decision.allowed,
+            "requires_approval": result.decision.requires_approval,
+            "reason": result.decision.reason,
+            "rule_name": result.decision.metadata.get("rule_name"),
+            "ttl_seconds": result.decision.ttl_seconds,
+        }
+        print(json.dumps(data, indent=2))
+    else:
+        print(f"Policy simulation for tool '{args.tool}':")
+        print(f"  Action:     {result.decision.action.value}")
+        print(f"  Allowed:    {result.decision.allowed}")
+        print(f"  Rule:       {result.decision.metadata.get('rule_name', 'default')}")
+        if result.decision.reason:
+            print(f"  Reason:     {result.decision.reason}")
+        if result.decision.ttl_seconds:
+            print(f"  TTL:        {result.decision.ttl_seconds}s")
+        if result.decision.requires_approval:
+            print("  → Requires human approval")
+
+    return 0
+
+
+async def _cmd_policy_explain(args: argparse.Namespace) -> int:
+    """Explain a policy decision with matched rule and conditions."""
+    from agent_app.config.loader import load_config
+    from agent_app.governance.policy import ConfigurablePolicyEngine, DefaultPolicyEngine
+    from agent_app.governance.policy_simulator import PolicySimulationInput, PolicySimulator
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    gov = getattr(config, "governance", None)
+    policy_cfg = getattr(gov, "policies", None) if gov else None
+
+    if policy_cfg is None or not getattr(policy_cfg, "enabled", False):
+        print("Policy engine is not enabled. Using default policy.", file=sys.stderr)
+        engine: Any = DefaultPolicyEngine()
+    else:
+        rules = [r.model_dump() if hasattr(r, "model_dump") else r for r in policy_cfg.rules]
+        engine = ConfigurablePolicyEngine(
+            rules=rules,
+            default_action=getattr(policy_cfg, "default_action", "allow"),
+        )
+
+    sim = PolicySimulator(policy_engine=engine)
+    inp = PolicySimulationInput(
+        tool_name=args.tool,
+        risk_level=args.risk,
+        workflow_type=args.workflow_type,
+        agent_name=args.agent_name,
+        target_agent=args.target_agent,
+        user_id=args.user_id,
+        tenant_id=args.tenant_id,
+        roles=list(args.role),
+        permissions=list(args.permission),
+    )
+    result = await sim.explain(inp)
+    trace = result.trace
+
+    if trace is None:
+        print("No trace available.")
+        return 1
+
+    if args.json:
+        data = {
+            "decision_id": trace.decision_id,
+            "action": trace.action.value,
+            "rule_name": trace.rule_name,
+            "reason": trace.reason,
+            "matched_conditions": trace.matched_conditions,
+            "context_summary": trace.context_summary,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Policy explain for tool '{args.tool}':")
+        print(f"  Decision ID:  {trace.decision_id}")
+        print(f"  Action:       {trace.action.value}")
+        print(f"  Rule:         {trace.rule_name or '(default)'}")
+        if trace.reason:
+            print(f"  Reason:       {trace.reason}")
+        if trace.matched_conditions:
+            print(f"  Matched:      {trace.matched_conditions}")
+        if trace.context_summary:
+            print(f"  Context:      {trace.context_summary}")
+
+    return 0
+
+
+async def _cmd_policy_decisions(args: argparse.Namespace) -> int:
+    """Query policy decisions from the store."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "policy_decision_store", None)
+    if store is None:
+        print("Policy decision store not configured.", file=sys.stderr)
+        return 1
+
+    traces = await store.query(
+        run_id=args.run_id,
+        tenant_id=args.tenant_id,
+        agent_name=args.agent_name,
+        tool_name=args.tool_name,
+        rule_name=args.rule_name,
+        action=args.action,
+        limit=args.limit,
+        offset=args.offset,
+    )
+
+    if not traces:
+        print("No policy decisions found.")
+        return 0
+
+    if args.json:
+        data = []
+        for t in traces:
+            data.append({
+                "decision_id": t.decision_id,
+                "run_id": t.run_id,
+                "rule_name": t.rule_name,
+                "action": t.action.value,
+                "reason": t.reason,
+                "tool_name": t.tool_name,
+                "created_at": t.created_at.isoformat(),
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        for t in traces:
+            print(f"[{t.action.value}] {t.decision_id}")
+            print(f"  Tool:     {t.tool_name or '(unknown)'}")
+            print(f"  Rule:     {t.rule_name or '(default)'}")
+            print(f"  Run:      {t.run_id or '(none)'}")
+            if t.reason:
+                print(f"  Reason:   {t.reason}")
+            print(f"  Created:  {t.created_at.isoformat()}")
+            print()
+
+    return 0
+
+
+async def _cmd_policy_report(args: argparse.Namespace) -> int:
+    """Generate a policy decision report."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_decision_store import PolicyReportingService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "policy_decision_store", None)
+    if store is None:
+        print("Policy decision store not configured.", file=sys.stderr)
+        return 1
+
+    service = PolicyReportingService(store)
+    report = await service.generate_report(
+        run_id=args.run_id,
+        tenant_id=args.tenant_id,
+        tool_name=args.tool_name,
+        rule_name=args.rule_name,
+        action=args.action,
+        limit=args.limit,
+    )
+
+    if args.json:
+        print(json.dumps(report.model_dump(mode="json"), indent=2, default=str))
+    else:
+        print("Policy Decision Report")
+        print("=" * 40)
+        print(f"Total decisions: {report.total_decisions}")
+        print()
+        print("By action:")
+        for action, count in sorted(report.action_breakdown.items()):
+            print(f"  {action:20s} {count}")
+        print()
+        print("By rule:")
+        for rule, count in sorted(report.rule_breakdown.items()):
+            print(f"  {rule:30s} {count}")
+        print()
+        print("By tool:")
+        for tool, count in sorted(report.tool_breakdown.items()):
+            print(f"  {tool:30s} {count}")
+        tr = report.time_range
+        if tr.get("start") and tr.get("end"):
+            print()
+            print(f"Time range: {tr['start'].isoformat()} - {tr['end'].isoformat()}")
+
+    return 0
+
+
+async def _cmd_policy_export(args: argparse.Namespace) -> int:
+    """Export policy decisions to a file."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_decision_store import PolicyReportingService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "policy_decision_store", None)
+    if store is None:
+        print("Policy decision store not configured.", file=sys.stderr)
+        return 1
+
+    service = PolicyReportingService(store)
+    if args.format == "jsonl":
+        count = await service.export_jsonl(
+            file_path=args.output,
+            run_id=args.run_id,
+            tenant_id=args.tenant_id,
+            limit=args.limit,
+        )
+    else:
+        count = await service.export_csv(
+            file_path=args.output,
+            run_id=args.run_id,
+            tenant_id=args.tenant_id,
+            limit=args.limit,
+        )
+
+    print(f"Exported {count} policy decisions to {args.output}")
+    return 0
 
 
 if __name__ == "__main__":

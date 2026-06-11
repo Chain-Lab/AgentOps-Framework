@@ -103,7 +103,7 @@ class EvalRunner:
         workflow = case.workflow or defaults.workflow
         user_id = case.user_id or defaults.user_id
         tenant_id = case.tenant_id or defaults.tenant_id
-        permissions = case.permissions or list(defaults.permissions)
+        permissions = case.permissions if case.permissions is not None else (list(defaults.permissions) if defaults.permissions is not None else [])
 
         if case.expect.approve_and_resume:
             # First run: expect interrupted

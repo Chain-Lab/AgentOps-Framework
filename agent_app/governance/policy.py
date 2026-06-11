@@ -3,8 +3,11 @@
 Phase 23: Replaces scattered governance checks with a single policy
 evaluation step that produces auditable decisions.
 
+Phase 24: Added explain/trace support for policy decisions.
+
 Architecture:
   - PolicyAction / PolicyDecision / PolicyEvaluationContext: data models
+  - PolicyDecisionTrace: explainable decision trace (Phase 24)
   - PolicyEngine: Protocol for engine implementations
   - DefaultPolicyEngine: Replicates Phase 22 default behavior
   - ConfigurablePolicyEngine: Loads rules from YAML config
@@ -13,6 +16,7 @@ Architecture:
 from __future__ import annotations
 
 import fnmatch
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -94,6 +98,59 @@ class PolicyEvaluationContext(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 24: Decision trace for explainability
+# ---------------------------------------------------------------------------
+
+class PolicyDecisionTrace(BaseModel):
+    """Explainable trace of a policy evaluation decision.
+
+    Attributes:
+        decision_id: Unique trace identifier.
+        run_id: Associated run ID if available.
+        rule_name: Name of the matched rule (None if using default).
+        action: The policy action taken.
+        reason: Human-readable explanation.
+        matched_conditions: Conditions from the rule that matched.
+        context_summary: Safe summary of the evaluation context
+            (no raw arguments or sensitive data).
+        created_at: When the trace was generated.
+    """
+
+    decision_id: str = Field(..., description="Unique trace identifier")
+    run_id: str | None = Field(default=None, description="Associated run ID")
+    rule_name: str | None = Field(default=None, description="Matched rule name")
+    action: PolicyAction = Field(..., description="Policy action taken")
+    reason: str | None = Field(default=None, description="Explanation")
+    tool_name: str | None = Field(default=None, description="Tool that was evaluated")
+    matched_conditions: dict[str, Any] = Field(
+        default_factory=dict, description="Conditions that matched"
+    )
+    context_summary: dict[str, Any] = Field(
+        default_factory=dict, description="Safe context summary"
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Trace generation timestamp",
+    )
+
+
+def _build_context_summary(ctx: PolicyEvaluationContext) -> dict[str, Any]:
+    """Build a safe context summary that excludes sensitive data.
+
+    Only includes high-level fields — never raw arguments or full metadata.
+    """
+    summary: dict[str, Any] = {}
+    for field in ("tool_name", "risk_level", "workflow_name", "workflow_type",
+                  "agent_name", "target_agent", "tenant_id", "user_id"):
+        val = getattr(ctx, field, None)
+        if val is not None:
+            summary[field] = val
+    if ctx.roles:
+        summary["roles"] = list(ctx.roles)
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Policy engine protocol
 # ---------------------------------------------------------------------------
 
@@ -112,6 +169,13 @@ class PolicyEngine(Protocol):
         context: PolicyEvaluationContext,
     ) -> PolicyDecision:
         """Evaluate whether an approval resume should be allowed."""
+        ...
+
+    async def explain(
+        self,
+        context: PolicyEvaluationContext,
+    ) -> PolicyDecisionTrace:
+        """Return an explainable trace of the policy decision."""
         ...
 
 
@@ -177,6 +241,34 @@ class DefaultPolicyEngine:
         return PolicyDecision(
             action=PolicyAction.ALLOW,
             reason="Default policy: resume allowed",
+        )
+
+    async def explain(
+        self,
+        context: PolicyEvaluationContext,
+    ) -> PolicyDecisionTrace:
+        """Explain the policy decision with a full trace."""
+        decision = await self.evaluate_tool_call(context)
+        rule_name = None  # Default engine has no named rules
+        matched_conditions: dict[str, Any] = {}
+
+        # Describe what caused the decision
+        if decision.action == PolicyAction.DENY:
+            reason = decision.reason or "Denied by default policy"
+        elif decision.action == PolicyAction.REQUIRE_APPROVAL:
+            reason = decision.reason or "Requires approval per default policy"
+        else:
+            reason = decision.reason or "Allowed by default policy"
+
+        return PolicyDecisionTrace(
+            decision_id=f"dec_{context.run_id or 'unknown'}",
+            run_id=context.run_id,
+            rule_name=rule_name,
+            action=decision.action,
+            reason=reason,
+            tool_name=context.tool_name,
+            matched_conditions=matched_conditions,
+            context_summary=_build_context_summary(context),
         )
 
 
@@ -294,6 +386,18 @@ class ConfigurablePolicyEngine:
         self,
         context: PolicyEvaluationContext,
     ) -> PolicyDecision:
+        # Check required permissions from tool metadata (before rule matching)
+        required_perms: list[str] = list(context.metadata.get("required_permissions", []))
+        if required_perms:
+            missing = [p for p in required_perms if p not in context.permissions]
+            if missing:
+                return PolicyDecision(
+                    action=PolicyAction.DENY,
+                    allowed=False,
+                    reason=f"Missing permissions: {', '.join(missing)}",
+                    metadata={"missing_permissions": missing},
+                )
+
         for rule in self._rules:
             if self._matches(rule["when"], context):
                 then = rule["then"]
@@ -333,6 +437,50 @@ class ConfigurablePolicyEngine:
         return PolicyDecision(
             action=PolicyAction(self.default_action),
             reason="No matching resume policy rule; using default",
+        )
+
+    async def explain(
+        self,
+        context: PolicyEvaluationContext,
+    ) -> PolicyDecisionTrace:
+        """Explain the policy decision with matched rule and conditions."""
+        matched_conditions: dict[str, Any] = {}
+        rule_name: str | None = None
+        reason: str | None = None
+
+        for rule in self._rules:
+            if self._matches(rule["when"], context):
+                then = rule["then"]
+                action = PolicyAction(then["action"])
+                rule_name = rule["name"]
+                matched_conditions = dict(rule["when"])
+                reason = then.get("reason")
+                break
+
+        if rule_name is None:
+            action = PolicyAction(self.default_action)
+            reason = reason or "No matching rule; using default action"
+        else:
+            # Re-derive action from matched rule's then block
+            # (we already have it from the loop but need to look it up)
+            for rule in self._rules:
+                if rule["name"] == rule_name:
+                    then = rule["then"]
+                    action = PolicyAction(then["action"])
+                    reason = reason or then.get("reason")
+                    break
+            else:
+                action = PolicyAction(self.default_action)
+
+        return PolicyDecisionTrace(
+            decision_id=f"dec_{context.run_id or 'unknown'}",
+            run_id=context.run_id,
+            rule_name=rule_name,
+            action=action,
+            reason=reason,
+            tool_name=context.tool_name,
+            matched_conditions=matched_conditions,
+            context_summary=_build_context_summary(context),
         )
 
     def _matches(self, conditions: dict, ctx: PolicyEvaluationContext) -> bool:

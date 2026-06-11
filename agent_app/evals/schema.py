@@ -14,7 +14,7 @@ class EvalDefaults(BaseModel):
     workflow: str | None = Field(default=None)
     user_id: str = Field(default="eval_user")
     tenant_id: str = Field(default="eval_tenant")
-    permissions: list[str] = Field(default_factory=list)
+    permissions: list[str] | None = Field(default=None)
 
 
 class EvalExpect(BaseModel):
@@ -38,6 +38,10 @@ class EvalExpect(BaseModel):
     trace_events: list[str] = Field(
         default_factory=list, description="Expected trace event types"
     )
+    policy_decisions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Expected policy decisions (Phase 24)",
+    )
 
 
 class EvalCase(BaseModel):
@@ -49,7 +53,7 @@ class EvalCase(BaseModel):
     workflow: str | None = Field(default=None, description="Override default workflow")
     user_id: str | None = Field(default=None)
     tenant_id: str | None = Field(default=None)
-    permissions: list[str] = Field(default_factory=list)
+    permissions: list[str] | None = Field(default=None)
     expect: EvalExpect = Field(..., description="Expected outcomes")
 
 

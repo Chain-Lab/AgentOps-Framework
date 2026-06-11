@@ -39,3 +39,5 @@ class RunContext(BaseModel):
     )
     # Phase 12: observability trace identifier
     trace_id: str | None = Field(default=None, description="Observability trace ID")
+    # Phase 24: agent name for policy evaluation
+    agent_name: str | None = Field(default=None, description="Executing agent name")

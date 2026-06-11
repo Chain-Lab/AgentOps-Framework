@@ -89,6 +89,40 @@ class TraceSummary(BaseModel):
     status: str | None = None
 
 
+# -- Phase 24: Policy diagnostics models --
+class PolicySimulateRequest(BaseModel):
+    tool_name: str
+    risk_level: str = "low"
+    workflow_type: str | None = None
+    agent_name: str | None = None
+    target_agent: str | None = None
+    user_id: str | None = None
+    tenant_id: str | None = None
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PolicyExplainRequest(BaseModel):
+    tool_name: str
+    risk_level: str = "low"
+    workflow_type: str | None = None
+    agent_name: str | None = None
+    target_agent: str | None = None
+    user_id: str | None = None
+    tenant_id: str | None = None
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PolicyDecisionSummary(BaseModel):
+    decision_id: str
+    action: str
+    rule_name: str | None = None
+    reason: str | None = None
+    tool_name: str | None = None
+    created_at: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -454,6 +488,258 @@ def create_fastapi_app(agent_app: AgentApp) -> FastAPI:
                 for e in events
             ],
         }
+
+    # -- Phase 24: Policy diagnostics endpoints --
+    # Policy engine is looked up dynamically per-request
+
+    @api.get("/policies")
+    async def get_policies() -> dict:
+        """Return policy configuration summary (no sensitive data)."""
+        from agent_app.governance.policy import ConfigurablePolicyEngine, DefaultPolicyEngine
+        policy_engine = getattr(agent_app, "policy_engine", None)
+
+        gov = getattr(getattr(agent_app, "_config", None), "governance", None)
+        policy_cfg = getattr(gov, "policies", None) if gov else None
+
+        if policy_cfg is None or not getattr(policy_cfg, "enabled", False):
+            return {"enabled": False, "rules": []}
+
+        rules_summary = []
+        for rule in policy_cfg.rules:
+            rules_summary.append({
+                "name": rule.name,
+                "when": dict(rule.when) if hasattr(rule, "when") else {},
+                "then_action": rule.then.get("action") if hasattr(rule, "then") else None,
+            })
+
+        return {
+            "enabled": True,
+            "default_action": getattr(policy_cfg, "default_action", "allow"),
+            "rule_count": len(rules_summary),
+            "rules": rules_summary,
+        }
+
+    @api.post("/policies/validate")
+    async def validate_policy() -> dict:
+        """Validate the current policy configuration."""
+        from agent_app.governance.policy_validation import validate_policy_config
+
+        gov = getattr(getattr(agent_app, "_config", None), "governance", None)
+        policy_cfg = getattr(gov, "policies", None) if gov else None
+
+        if policy_cfg is None:
+            return {"valid": True, "issues": [], "message": "No policy config."}
+
+        result = validate_policy_config(policy_cfg)
+        return {
+            "valid": result.valid,
+            "issues": [
+                {
+                    "level": i.level,
+                    "rule_name": i.rule_name,
+                    "message": i.message,
+                    "path": i.path,
+                }
+                for i in result.issues
+            ],
+        }
+
+    def _get_policy_engine(agent_app: Any):
+        """Get the policy engine, building from config if needed."""
+        from agent_app.governance.policy import ConfigurablePolicyEngine, DefaultPolicyEngine
+        engine = getattr(agent_app, "policy_engine", None)
+        if engine is not None:
+            return engine
+        # Build from config if available
+        gov = getattr(getattr(agent_app, "_config", None), "governance", None)
+        policy_cfg = getattr(gov, "policies", None) if gov else None
+        if policy_cfg is not None and getattr(policy_cfg, "enabled", False):
+            rules = [r.model_dump() if hasattr(r, "model_dump") else r for r in policy_cfg.rules]
+            return ConfigurablePolicyEngine(
+                rules=rules,
+                default_action=getattr(policy_cfg, "default_action", "allow"),
+            )
+        return DefaultPolicyEngine()
+
+    @api.post("/policies/simulate")
+    async def simulate_policy(req: PolicySimulateRequest) -> dict:
+        """Simulate a policy decision without executing the tool."""
+        from agent_app.governance.policy_simulator import PolicySimulationInput, PolicySimulator
+
+        engine = _get_policy_engine(agent_app)
+        sim = PolicySimulator(policy_engine=engine)
+        inp = PolicySimulationInput(
+            tool_name=req.tool_name,
+            risk_level=req.risk_level,
+            workflow_type=req.workflow_type,
+            agent_name=req.agent_name,
+            target_agent=req.target_agent,
+            user_id=req.user_id,
+            tenant_id=req.tenant_id,
+            roles=list(req.roles),
+            permissions=list(req.permissions),
+        )
+        result = await sim.simulate(inp)
+        return {
+            "tool": req.tool_name,
+            "action": result.decision.action.value,
+            "allowed": result.decision.allowed,
+            "requires_approval": result.decision.requires_approval,
+            "reason": result.decision.reason,
+            "rule_name": result.decision.metadata.get("rule_name"),
+            "ttl_seconds": result.decision.ttl_seconds,
+        }
+
+    @api.post("/policies/explain")
+    async def explain_policy(req: PolicyExplainRequest) -> dict:
+        """Explain a policy decision with matched rule and conditions."""
+        from agent_app.governance.policy_simulator import PolicySimulationInput, PolicySimulator
+
+        engine = _get_policy_engine(agent_app)
+        sim = PolicySimulator(policy_engine=engine)
+        inp = PolicySimulationInput(
+            tool_name=req.tool_name,
+            risk_level=req.risk_level,
+            workflow_type=req.workflow_type,
+            agent_name=req.agent_name,
+            target_agent=req.target_agent,
+            user_id=req.user_id,
+            tenant_id=req.tenant_id,
+            roles=list(req.roles),
+            permissions=list(req.permissions),
+        )
+        result = await sim.explain(inp)
+        trace = result.trace
+        if trace is None:
+            return {"error": "No trace available"}
+        return {
+            "decision_id": trace.decision_id,
+            "action": trace.action.value,
+            "rule_name": trace.rule_name,
+            "reason": trace.reason,
+            "matched_conditions": trace.matched_conditions,
+            "context_summary": trace.context_summary,
+            "created_at": trace.created_at.isoformat() if trace.created_at else None,
+        }
+
+    @api.get("/policy-decisions")
+    async def list_policy_decisions(
+        run_id: str | None = None,
+        tenant_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
+        rule_name: str | None = None,
+        action: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List policy decisions with filtering and pagination.
+
+        Uses PolicyDecisionStore when available, falls back to audit log.
+        """
+        store = getattr(agent_app, "policy_decision_store", None)
+        if store is not None:
+            traces = await store.query(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                rule_name=rule_name,
+                action=action,
+                limit=limit,
+                offset=offset,
+            )
+            return [
+                {
+                    "decision_id": t.decision_id,
+                    "run_id": t.run_id,
+                    "rule_name": t.rule_name,
+                    "action": t.action.value,
+                    "reason": t.reason,
+                    "tool_name": t.tool_name,
+                    "matched_conditions": t.matched_conditions,
+                    "context_summary": t.context_summary,
+                    "created_at": t.created_at.isoformat(),
+                }
+                for t in traces
+            ]
+
+        # Fallback: read from audit log
+        audit_logger = getattr(agent_app, "audit_logger", None)
+        if audit_logger is None:
+            return []
+        policy_event_types = {
+            "policy.evaluated", "policy.allowed", "policy.denied",
+            "policy.approval_required", "policy.audit_only", "policy.simulated",
+        }
+        events = audit_logger.list_events(
+            run_id=run_id,
+            tenant_id=tenant_id,
+        )
+        results = []
+        for ev in events:
+            if ev.event_type in policy_event_types:
+                results.append({
+                    "event_id": ev.event_id,
+                    "event_type": ev.event_type,
+                    "run_id": ev.run_id,
+                    "tenant_id": ev.tenant_id,
+                    "tool_name": ev.tool_name,
+                    "created_at": ev.created_at.isoformat() if ev.created_at else None,
+                    "data": ev.data,
+                })
+            if len(results) >= limit:
+                break
+        return results[offset:offset + limit]
+
+    @api.get("/policy-decisions/{decision_id}")
+    async def get_policy_decision(decision_id: str) -> dict:
+        """Get a single policy decision by ID."""
+        store = getattr(agent_app, "policy_decision_store", None)
+        if store is None:
+            return {"error": "Policy decision store not configured."}
+        try:
+            trace = await store.get(decision_id)
+        except KeyError:
+            return {"error": f"Decision '{decision_id}' not found."}
+        return {
+            "decision_id": trace.decision_id,
+            "run_id": trace.run_id,
+            "rule_name": trace.rule_name,
+            "action": trace.action.value,
+            "reason": trace.reason,
+            "tool_name": trace.tool_name,
+            "matched_conditions": trace.matched_conditions,
+            "context_summary": trace.context_summary,
+            "created_at": trace.created_at.isoformat(),
+        }
+
+    @api.get("/policy-report")
+    async def get_policy_report(
+        run_id: str | None = None,
+        tenant_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
+        rule_name: str | None = None,
+        action: str | None = None,
+        limit: int = 1000,
+    ) -> dict:
+        """Generate an aggregated policy decision report."""
+        from agent_app.governance.policy_decision_store import PolicyReportingService
+        store = getattr(agent_app, "policy_decision_store", None)
+        if store is None:
+            return {"error": "Policy decision store not configured."}
+        service = PolicyReportingService(store)
+        report = await service.generate_report(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            rule_name=rule_name,
+            action=action,
+            limit=limit,
+        )
+        return report.model_dump(mode="json")
 
     return api
 

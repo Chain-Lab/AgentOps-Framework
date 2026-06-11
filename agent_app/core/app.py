@@ -58,6 +58,7 @@ class AgentApp:
         dag_lease_backend: Any = None,
         audit_logger: Any = None,
         policy_engine: Any = None,
+        policy_decision_store: Any = None,
     ) -> None:
         from agent_app.registry.agent_registry import AgentRegistry
         from agent_app.registry.tool_registry import ToolRegistry
@@ -91,6 +92,10 @@ class AgentApp:
         self._dag_lease_backend = dag_lease_backend
         # Phase 16.5: Audit logger for recovery events
         self._audit_logger = audit_logger
+        # Phase 23: Policy engine for governance
+        self.policy_engine = policy_engine
+        # Phase 25: Policy decision store for persistence
+        self.policy_decision_store = policy_decision_store
         # Phase 17: Recovery config for auto-recovery policy
         self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
@@ -1270,4 +1275,6 @@ class AgentApp:
                 dag_snapshot_config=getattr(self, "_dag_snapshot_config", None),
                 dag_compensation_config=getattr(self, "_dag_compensation_config", None),
                 dag_lease_config=getattr(self, "_dag_lease_config", None),
+                policy_engine=getattr(self, "policy_engine", None),
+                policy_decision_store=getattr(self, "policy_decision_store", None),
             )

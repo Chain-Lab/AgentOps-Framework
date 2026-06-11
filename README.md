@@ -11,6 +11,8 @@ business logic and LLM agent runtimes. It gives you:
 
 - **Declarative configuration** — define agents, tools, and workflows in YAML or Python
 - **Tool governance** — risk levels, permissions, human approval gates, audit logging
+- **Policy engine** — configurable YAML-driven policy rules with explainable decision traces
+- **Policy decision store** — persistent, queryable policy decision storage with reporting and export (JSONL/CSV)
 - **Session management** — in-memory or SQLite-backed conversation history
 - **Streaming events** — real-time token delta, tool call, and run lifecycle events
 - **Eval runner** — YAML-defined regression suites with assertions for status, output, approvals, routing

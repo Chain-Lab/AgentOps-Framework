@@ -458,4 +458,5 @@ class TestPolicyPlusToolSpec:
             context=ctx,
         )
         assert result.status == ToolExecutionStatus.FAILED.value
-        assert result.error["type"] == "permission_denied"
+        # Policy engine now handles permission checks — error type is policy_denied
+        assert result.error["type"] == "policy_denied"

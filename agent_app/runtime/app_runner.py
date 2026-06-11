@@ -41,6 +41,8 @@ class AppRunner:
         lease_renewal_config: Optional lease renewal configuration (Phase 15.2).
         dag_snapshot_config: Optional DAG snapshot config (Phase 16.0).
         dag_compensation_config: Optional compensation persistence config (Phase 16.1).
+        dag_lease_config: Optional DAG lease backend config (Phase 16.2).
+        policy_engine: Optional policy engine for governance decisions (Phase 23).
     """
 
     def __init__(
@@ -58,6 +60,8 @@ class AppRunner:
         dag_snapshot_config: Any = None,
         dag_compensation_config: Any = None,
         dag_lease_config: Any = None,
+        policy_engine: Any = None,
+        policy_decision_store: Any = None,
     ) -> None:
         from agent_app.governance.audit import InMemoryAuditLogger
         from agent_app.governance.permission import DefaultPermissionChecker
@@ -79,6 +83,10 @@ class AppRunner:
         # Phase 16.2: DAG lease backend config
         self._dag_lease_config = dag_lease_config
 
+        # Phase 12: observability
+        self.trace_collector = trace_collector
+        self._trace_events: list[Any] = []
+
         # Governance layer
         self._tool_executor = ToolExecutor(
             tool_registry=tool_registry,
@@ -86,11 +94,11 @@ class AppRunner:
             permission_checker=DefaultPermissionChecker(),
             audit_logger=InMemoryAuditLogger(),
             trace_collector=trace_collector,
+            trace_events_callback=self._trace_events.append,
+            policy_engine=policy_engine,
+            policy_decision_store=policy_decision_store,
         )
         self._audit_logger = self._tool_executor.audit_logger
-        # Phase 12: observability
-        self.trace_collector = trace_collector
-        self._trace_events: list[Any] = []
 
         # Phase 14.1: WorkflowExecutor for DAG resume support
         from agent_app.runtime.workflow_executor import WorkflowExecutor
@@ -204,6 +212,7 @@ class AppRunner:
             permissions=permissions or [],
             trace_id=trace_id,
             metadata=merged_meta,
+            agent_name=entry_agent_name,
         )
 
         # -- Simulate tool call (governance pipeline) --

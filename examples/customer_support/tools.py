@@ -62,6 +62,43 @@ async def request_refund(**kwargs) -> dict:
 
 
 @tool(
+    name="billing.query",
+    description="Query billing and invoice details by order ID.",
+    risk_level="low",
+    permissions=["billing:read"],
+)
+async def query_billing(**kwargs) -> dict:
+    """Query billing information for an order (simulated).
+
+    Args:
+        order_id: The order identifier.
+    """
+    order_id = kwargs.get("order_id", kwargs.get("id", "unknown"))
+    return {
+        "order_id": order_id,
+        "invoice_id": f"inv_{order_id}",
+        "amount": 199.0,
+        "status": "paid",
+        "due_date": "2024-12-31",
+    }
+
+
+@tool(
+    name="dangerous.delete",
+    description="SIMULATED: Delete all data (blocked by policy — for demo only).",
+    risk_level="critical",
+    permissions=["admin:delete"],
+)
+async def dangerous_delete(**kwargs) -> dict:
+    """Simulated dangerous tool — never actually executes.
+
+    This tool is registered to demonstrate policy engine blocking
+    of dangerous tool prefixes. It always returns an error.
+    """
+    return {"error": "This tool is blocked by policy and cannot execute."}
+
+
+@tool(
     name="customer.lookup",
     description="Look up customer details by customer ID or email.",
     risk_level="low",

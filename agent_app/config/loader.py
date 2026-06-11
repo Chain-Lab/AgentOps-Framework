@@ -222,6 +222,30 @@ def build_app(
             audit_logger=audit_logger,
         )
 
+    # -- Governance: policy engine (Phase 23) --
+    policy_engine: Any = None
+    if gov and getattr(gov, "policies", None) and gov.policies.enabled:
+        from agent_app.governance.policy import ConfigurablePolicyEngine
+        rule_dicts = [r.model_dump() for r in gov.policies.rules]
+        policy_engine = ConfigurablePolicyEngine(
+            rules=rule_dicts,
+            default_action=gov.policies.default_action,
+        )
+
+    # -- Phase 25: Policy decision store --
+    policy_decision_store: Any = None
+    if gov and getattr(gov, "policy_decisions", None):
+        from agent_app.governance.policy_decision_store import (
+            InMemoryPolicyDecisionStore,
+            SQLitePolicyDecisionStore,
+        )
+        store_cfg = gov.policy_decisions
+        if store_cfg.type == "sqlite":
+            db_path = store_cfg.path or ".agent_app/policy_decisions.db"
+            policy_decision_store = SQLitePolicyDecisionStore(db_path)
+        else:
+            policy_decision_store = InMemoryPolicyDecisionStore()
+
     # -- Merge tools from global default registry (registered via @tool) --
     default_tr = get_default_registry()
     for name in default_tr.list():
@@ -339,6 +363,8 @@ def build_app(
         dag_lease_config=getattr(runtime_cfg, "dag_lease_config", None),
         dag_lease_backend=dag_lease_backend,
         audit_logger=audit_logger,
+        policy_engine=policy_engine,
+        policy_decision_store=policy_decision_store,
     )
     # Phase 17: Store recovery config for auto-recovery policy
     app._recovery_config = getattr(runtime_cfg, "recovery_config", None)

@@ -46,6 +46,8 @@ def run_assertions(case: Any, result: AppRunResult) -> list[str]:
         _assert_workflow_steps(result, expect.workflow_steps, errors)
     if expect.trace_events:
         _assert_trace_events(result, expect.trace_events, errors)
+    if expect.policy_decisions:
+        _assert_policy_decisions(result, expect.policy_decisions, errors)
 
     return errors
 
@@ -201,4 +203,59 @@ def _assert_trace_events(
             errors.append(
                 f"Expected trace event '{expected}', but it was not recorded. "
                 f"Recorded events: {available}"
+            )
+
+
+def _assert_policy_decisions(
+    result: AppRunResult, expected_decisions: list[dict[str, Any]], errors: list[str]
+) -> None:
+    """Check that policy decisions match expectations.
+
+    Collects policy decision info from trace event data fields.
+    Policy decisions are stored in data.action / data.rule_name of
+    trace events emitted by the policy engine.
+    """
+    # Collect all events that have policy decision data
+    policy_data_events: list[dict[str, Any]] = []
+    trace_events = getattr(result, "trace_events", None) or []
+    for ev in trace_events:
+        data = getattr(ev, "data", None) or {}
+        # An event has policy data if it has 'action' field that is a policy action
+        if isinstance(data, dict) and "action" in data:
+            policy_data_events.append(data)
+
+    for expected in expected_decisions:
+        rule_name = expected.get("rule_name")
+        action = expected.get("action")
+        reason_contains = expected.get("reason_contains")
+
+        matched = False
+        for pdata in policy_data_events:
+            evt_action = pdata.get("action")
+            evt_rule = pdata.get("rule_name")
+
+            if rule_name and evt_rule != rule_name:
+                continue
+            if action and evt_action != action:
+                continue
+            if reason_contains and reason_contains not in (pdata.get("reason") or ""):
+                continue
+            matched = True
+            break
+
+        if not matched:
+            available = ", ".join(
+                f"{pe.get('action', '?')}(rule={pe.get('rule_name', '?')})"
+                for pe in policy_data_events
+            ) or "(none)"
+            desc = []
+            if rule_name:
+                desc.append(f"rule_name={rule_name}")
+            if action:
+                desc.append(f"action={action}")
+            if reason_contains:
+                desc.append(f"reason_contains={reason_contains}")
+            errors.append(
+                f"Expected policy decision with {', '.join(desc)}, "
+                f"but it was not found. Recorded: {available}"
             )

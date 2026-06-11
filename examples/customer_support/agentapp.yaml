@@ -30,7 +30,7 @@ governance:
       # Audit billing queries for compliance
       - name: billing_audit_only
         when:
-          tool_name: billing.query
+          agent_name: billing
         then:
           action: audit_only
           reason: Billing queries are audit-only per compliance policy
@@ -41,12 +41,17 @@ governance:
         then:
           action: deny
           reason: Dangerous tools are blocked by policy
+  policy_decisions:
+    type: sqlite
+    path: .agent_app/policy_decisions.db
 
 agents:
   triage:
     description: Entry point — routes users to the right specialist
     model: gpt-4o
     instructions: ./prompts/triage.md
+    tools:
+      - dangerous.delete
 
   refund:
     description: Handles refund requests
@@ -62,6 +67,7 @@ agents:
     instructions: ./prompts/billing.md
     tools:
       - order.query
+      - billing.query
 
   technical_support:
     description: Handles technical issues and errors
