@@ -18,6 +18,8 @@
       <a href="/policy-console/bundles" class="{% if '/bundles' in request.url.path %}active{% endif %}">Bundles</a>
       <a href="/policy-console/gates" class="{% if '/gates' in request.url.path %}active{% endif %}">Gates</a>
       <a href="/policy-console/promotions" class="{% if '/promotions' in request.url.path %}active{% endif %}">Promotions</a>
+      <a href="/policy-console/activations" class="{% if '/activations' in request.url.path and '/detail' not in request.url.path %}active{% endif %}">Activations</a>
+      <a href="/policy-console/environments" class="{% if '/environments' in request.url.path %}active{% endif %}">Environments</a>
     </nav>
   </header>
   <main class="console-main">

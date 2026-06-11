@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>{% if environments %}Environments Overview{% else %}Policy Activations{% endif %}</h2>
+{% if store_available %}
+  {% if environments %}
+    <table class="data-table">
+      <thead><tr><th>Environment</th><th>Bundle</th><th>Status</th><th>Activated By</th></tr></thead>
+      <tbody>
+        {% for env, a in environments.items() %}
+        <tr><td>{{ env }}</td><td>{{ a.bundle_id }}</td><td><span class="badge badge-{{ a.status }}">{{ a.status }}</span></td><td>{{ a.activated_by }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top: 1rem;"><a href="{{ base_path }}/activations">View all activations</a></p>
+  {% elif activations %}
+    <table class="data-table">
+      <thead><tr><th>ID</th><th>Environment</th><th>Bundle</th><th>Status</th><th>Activated By</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for a in activations %}
+        <tr><td><a href="{{ base_path }}/activations/{{ a.activation_id }}">{{ a.activation_id }}</a></td><td>{{ a.environment }}</td><td>{{ a.bundle_id }}</td><td><span class="badge badge-{{ a.status }}">{{ a.status }}</span></td><td>{{ a.activated_by }}</td><td>{{ a.created_at }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top: 1rem;"><a href="{{ base_path }}/environments">View by environment</a></p>
+  {% else %}
+    <div class="empty-state">
+      <p>No policy activations found. Activations will appear here after running <code>agentapp policy release execute</code>.</p>
+    </div>
+  {% endif %}
+{% else %}
+  <div class="empty-state">
+    <p>Activation store not configured.</p>
+  </div>
+{% endif %}
+
+<p style="margin-top: 1rem;">
+  <a href="{{ base_path }}/">← Back to Dashboard</a>
+</p>
+{% endblock %}

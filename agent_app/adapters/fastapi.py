@@ -779,6 +779,8 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 30: promotion store and release service
         promotion_store=_get_promotion_store(agent_app),
         release_service=getattr(agent_app, "_release_service", None),
+        # Phase 31: activation store
+        activation_store=getattr(agent_app, "_activation_store", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Activation: {{ activation.activation_id if activation else 'Unknown' }}</h2>
+{% if error %}
+  <div class="empty-state">
+    <p class="error">{{ error }}</p>
+  </div>
+{% elif activation %}
+  <table class="data-table">
+    <tr><td><strong>Activation ID</strong></td><td>{{ activation.activation_id }}</td></tr>
+    <tr><td><strong>Environment</strong></td><td>{{ activation.environment }}</td></tr>
+    <tr><td><strong>Bundle ID</strong></td><td>{{ activation.bundle_id }}</td></tr>
+    <tr><td><strong>Config Hash</strong></td><td><code>{{ activation.config_hash }}</code></td></tr>
+    <tr><td><strong>Status</strong></td><td><span class="badge badge-{{ activation.status }}">{{ activation.status }}</span></td></tr>
+    <tr><td><strong>Activated By</strong></td><td>{{ activation.activated_by }}</td></tr>
+    <tr><td><strong>Promotion ID</strong></td><td>{{ activation.promotion_id }}</td></tr>
+    <tr><td><strong>Reason</strong></td><td>{{ activation.reason }}</td></tr>
+    <tr><td><strong>Created</strong></td><td>{{ activation.created_at }}</td></tr>
+    <tr><td><strong>Superseded</strong></td><td>{{ activation.superseded_at }}</td></tr>
+    <tr><td><strong>Superseded By</strong></td><td>{{ activation.superseded_by_activation_id }}</td></tr>
+  </table>
+  <p style="margin-top: 1rem;"><a href="{{ base_path }}/activations">← Back to activations</a></p>
+{% endif %}
+{% endblock %}

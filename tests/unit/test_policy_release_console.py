@@ -693,3 +693,107 @@ class TestPromotionConsoleRouter:
         # Should return 200 with error message, not 500
         assert resp.status_code == 200
         assert "Traceback" not in resp.text
+
+
+class TestActivationConsoleRouter:
+    """Tests for Phase 31 console activation pages."""
+
+    def _make_app(self):
+        """Create a minimal FastAPI app for console testing."""
+        from agent_app import AgentApp
+        from agent_app.governance.approval import InMemoryApprovalStore
+        from agent_app.governance.audit import InMemoryAuditLogger
+        from agent_app.registry.agent_registry import AgentRegistry
+        from agent_app.registry.tool_registry import ToolRegistry
+        from agent_app.registry.workflow_registry import WorkflowRegistry
+        from agent_app.adapters.fastapi import create_fastapi_app
+
+        ar = AgentRegistry()
+        tr = ToolRegistry()
+        wr = WorkflowRegistry()
+        app = AgentApp(
+            registry=type("B", (), {"agent_registry": ar, "tool_registry": tr, "workflow_registry": wr})()
+        )
+        app.agent_registry = ar
+        app.tool_registry = tr
+        app.workflow_registry = wr
+        app.approval_store = InMemoryApprovalStore()
+        app.audit_logger = InMemoryAuditLogger()
+        return create_fastapi_app(app)
+
+    def _get_client(self, api):
+        from starlette.testclient import TestClient
+        return TestClient(api)
+
+    async def test_activations_page_returns_200(self):
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.policy_activation_store import InMemoryPolicyActivationStore
+
+        store = InMemoryPolicyActivationStore()
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None, promotion_store=None,
+            activation_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/activations")
+        assert resp.status_code == 200
+
+    async def test_activations_page_lists_results(self):
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.policy_activation_store import InMemoryPolicyActivationStore
+        from agent_app.governance.policy_activation import PolicyActivation
+
+        store = InMemoryPolicyActivationStore()
+        await store.activate(PolicyActivation(
+            activation_id="pa_test123", environment="prod",
+            bundle_id="pb_001", config_hash="h123", activated_by="admin",
+        ))
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None, promotion_store=None,
+            activation_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/activations")
+        assert resp.status_code == 200
+        assert "pa_test123" in resp.text
+
+    async def test_activations_detail_returns_200(self):
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+        from agent_app.runtime.policy_activation_store import InMemoryPolicyActivationStore
+        from agent_app.governance.policy_activation import PolicyActivation
+
+        store = InMemoryPolicyActivationStore()
+        await store.activate(PolicyActivation(
+            activation_id="pa_detail", environment="prod",
+            bundle_id="pb_001", config_hash="h123", activated_by="admin",
+        ))
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None, promotion_store=None,
+            activation_store=store,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/activations/pa_detail")
+        assert resp.status_code == 200
+        assert "pa_detail" in resp.text
+
+    async def test_environments_page_returns_200(self):
+        api = self._make_app()
+        from agent_app.console.router import build_policy_console_router
+
+        router = build_policy_console_router(
+            store=None, config=PolicyConsoleConfig(enabled=True),
+            bundle_store=None, gate_store=None, promotion_store=None,
+        )
+        api.include_router(router, prefix="/policy-console", tags=["Policy Console"])
+        client = self._get_client(api)
+        resp = client.get("/policy-console/environments")
+        assert resp.status_code == 200

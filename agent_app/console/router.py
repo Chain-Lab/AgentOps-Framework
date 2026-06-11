@@ -24,6 +24,7 @@ from agent_app.governance.policy_decision_store import (
     PolicyDecisionStore,
     PolicyReportingService,
 )
+from agent_app.governance.policy_activation import PolicyActivationStatus
 from agent_app.runtime.policy_replay_store import PolicyReplayStore
 
 
@@ -36,6 +37,7 @@ def build_policy_console_router(
     gate_store: Any = None,
     promotion_store: Any = None,
     release_service: Any = None,
+    activation_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -48,6 +50,7 @@ def build_policy_console_router(
         gate_store: Optional policy gate result store (Phase 29).
         promotion_store: Optional promotion request store (Phase 30).
         release_service: Optional policy release service (Phase 30).
+        activation_store: Optional policy activation store (Phase 31).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -740,6 +743,88 @@ def build_policy_console_router(
             },
         )
 
+    # Phase 31: policy activation pages
+    @router.get("/activations", response_class=HTMLResponse)
+    async def activations_index(request: Request):
+        """Policy activations list."""
+        activations_list: list[dict] = []
+        if activation_store is not None:
+            acts = await activation_store.list()
+            for a in acts:
+                activations_list.append(_activation_to_row(a))
+        return templates.TemplateResponse(
+            request,
+            "policy_activations.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "activations": activations_list,
+                "environments": {},
+                "store_available": activation_store is not None,
+            },
+        )
+
+    @router.get("/activations/{activation_id}", response_class=HTMLResponse)
+    async def activation_detail(request: Request, activation_id: str):
+        """Single activation detail."""
+        if activation_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_activation_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "activation": None,
+                    "error": "Activation store not configured.",
+                },
+            )
+        act = await activation_store.get(activation_id)
+        if act is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_activation_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "activation": None,
+                    "error": f"Activation '{activation_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "policy_activation_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "activation": _activation_to_detail(act),
+                "error": None,
+            },
+        )
+
+    @router.get("/environments", response_class=HTMLResponse)
+    async def environments_page(request: Request):
+        """Environment overview showing active policy per environment."""
+        env_data: dict[str, dict] = {}
+        if activation_store is not None:
+            acts = await activation_store.list()
+            for a in acts:
+                if a.status == PolicyActivationStatus.ACTIVE:
+                    env_data[a.environment] = _activation_to_row(a)
+        return templates.TemplateResponse(
+            request,
+            "policy_activations.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "activations": [],
+                "environments": env_data,
+                "store_available": activation_store is not None,
+            },
+        )
+
     return router
 
 
@@ -799,6 +884,50 @@ def _promotion_to_detail(req: Any) -> dict:
         "executed_by": req.executed_by or "—",
         "executed_at": executed,
         "created_at": created,
+    }
+
+
+# Phase 31: policy activation helpers
+def _activation_to_row(act: Any) -> dict:
+    """Convert PolicyActivation to a table row dict."""
+    created = act.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    superseded = act.superseded_at
+    if hasattr(superseded, "isoformat"):
+        superseded = superseded.isoformat() if superseded else "—"
+    return {
+        "activation_id": act.activation_id,
+        "environment": act.environment,
+        "bundle_id": act.bundle_id,
+        "status": act.status,
+        "activated_by": act.activated_by,
+        "promotion_id": act.promotion_id or "—",
+        "created_at": created,
+        "superseded_at": superseded,
+    }
+
+
+def _activation_to_detail(act: Any) -> dict:
+    """Convert PolicyActivation to a detail page dict."""
+    created = act.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    superseded = act.superseded_at
+    if hasattr(superseded, "isoformat"):
+        superseded = superseded.isoformat() if superseded else "—"
+    return {
+        "activation_id": act.activation_id,
+        "environment": act.environment,
+        "bundle_id": act.bundle_id,
+        "config_hash": act.config_hash,
+        "promotion_id": act.promotion_id or "—",
+        "status": act.status,
+        "activated_by": act.activated_by,
+        "reason": act.reason or "—",
+        "created_at": created,
+        "superseded_at": superseded,
+        "superseded_by_activation_id": act.superseded_by_activation_id or "—",
     }
 
 
