@@ -512,3 +512,24 @@ class TestPolicyReleaseServiceRBAC:
         assert "policy.promotion.requested" in event_types
         assert "policy.promotion.approved" in event_types
         assert "policy.promotion.executed" in event_types
+
+
+def test_phase30_policy_release_config_schema():
+    """PolicyReleaseConfig supports Phase 30 promotion store + RBAC fields."""
+    from agent_app.config.schema import (
+        PolicyReleaseConfig,
+        PolicyReleaseStoreConfig,
+    )
+
+    cfg = PolicyReleaseConfig(
+        bundles=PolicyReleaseStoreConfig(type="sqlite", path="bundles.db"),
+        gates=PolicyReleaseStoreConfig(type="sqlite", path="gates.db"),
+        promotions=PolicyReleaseStoreConfig(type="sqlite", path="promos.db"),
+        rules=[],
+        require_promotion_approval=True,
+        allow_gate_bypass=False,
+    )
+    assert cfg.promotions.type == "sqlite"
+    assert cfg.promotions.path == "promos.db"
+    assert cfg.require_promotion_approval is True
+    assert cfg.allow_gate_bypass is False

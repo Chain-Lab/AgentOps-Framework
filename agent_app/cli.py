@@ -2244,6 +2244,17 @@ def _get_release_service(app: Any) -> Any:
         db_path=gate_db_path,
     )
 
+    # -- Phase 30: Promotion store --
+    promotion_store = None
+    if getattr(release_config, "promotions", None):
+        promo_type = getattr(release_config.promotions, "type", "memory")
+        promo_path = getattr(release_config.promotions, "path", None)
+        from agent_app.runtime.promotion_store import create_promotion_store
+        promotion_store = create_promotion_store(
+            store_type=promo_type,
+            db_path=promo_path,
+        )
+
     # Build rules from config
     rules = []
     for rule_cfg in getattr(release_config, "rules", []):
@@ -2281,6 +2292,8 @@ def _get_release_service(app: Any) -> Any:
         replay_store=None,
         gate_evaluator=evaluator,
         gate_store=gate_store,
+        promotion_store=promotion_store,
+        allow_gate_bypass=getattr(release_config, "allow_gate_bypass", False),
     )
     app._release_service = service
     return service

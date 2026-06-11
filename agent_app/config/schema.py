@@ -361,7 +361,7 @@ class PolicyReleaseStoreConfig(BaseModel):
 
 
 class PolicyReleaseConfig(BaseModel):
-    """Policy release gate configuration (Phase 29)."""
+    """Policy release gate configuration (Phase 29, extended Phase 30)."""
 
     bundles: PolicyReleaseStoreConfig = Field(
         default_factory=PolicyReleaseStoreConfig,
@@ -371,9 +371,21 @@ class PolicyReleaseConfig(BaseModel):
         default_factory=PolicyReleaseStoreConfig,
         description="Policy gate result store configuration",
     )
+    promotions: PolicyReleaseStoreConfig = Field(
+        default_factory=PolicyReleaseStoreConfig,
+        description="Policy promotion request store configuration (Phase 30)",
+    )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,
         description="Release gate rules",
+    )
+    require_promotion_approval: bool = Field(
+        default=True,
+        description="Require approval workflow before executing promotion (Phase 30)",
+    )
+    allow_gate_bypass: bool = Field(
+        default=False,
+        description="Allow bypassing failed gate with explicit permission and reason (Phase 30)",
     )
 
 
