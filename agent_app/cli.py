@@ -2444,7 +2444,7 @@ async def _cmd_policy_promotion_list(args: argparse.Namespace) -> int:
             return 1
     requests = await store.list(status=status)
     if not requests:
-        print("No promotion requests found.")
+        print("No promotion requests.")
         return 0
     if args.json:
         print(json.dumps([{

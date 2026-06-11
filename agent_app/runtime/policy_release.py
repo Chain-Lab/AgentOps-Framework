@@ -19,7 +19,7 @@ from agent_app.governance.policy_promotion import PromotionRequest, PromotionReq
 from agent_app.governance.audit import AuditEvent
 
 
-class PolicyReleasePermissionError(Exception):
+class PolicyReleasePermissionError(PermissionError):
     """Raised when a policy release permission check fails."""
 
     pass
