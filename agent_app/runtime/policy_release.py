@@ -54,7 +54,6 @@ class PolicyReleaseService:
         permission_checker: Any = None,
         audit_logger: Any = None,
         allow_gate_bypass: bool = False,
-        require_promotion_approval: bool = True,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -69,7 +68,6 @@ class PolicyReleaseService:
         )
         self._audit_logger = audit_logger
         self._allow_gate_bypass = allow_gate_bypass
-        self._require_promotion_approval = require_promotion_approval
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -542,7 +540,7 @@ class PolicyReleaseService:
                 raise ValueError(
                     f"Cannot execute promotion '{promotion_id}': "
                     f"latest gate for bundle '{request.bundle_id}' failed. "
-                    f"Set bypass_gate=True with allow_gate_bypass config to override."
+                    f"Gate bypass is not enabled in config (allow_gate_bypass=false)."
                 )
 
         # Activate the bundle
