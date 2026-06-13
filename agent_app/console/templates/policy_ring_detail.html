@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+{% if ring %}
+<h2>Ring: {{ ring.name }} ({{ ring.environment }})</h2>
+<p>Status: <strong>{{ ring.status }}</strong></p>
+<p>Default: {{ "Yes" if ring.is_default else "No" }}</p>
+
+{% if active_assignment %}
+<h3>Active Assignment</h3>
+<p>Activation: {{ active_assignment.activation_id }}</p>
+<p>Bundle: {{ active_assignment.bundle_id }}</p>
+<p>Assigned by: {{ active_assignment.assigned_by }}</p>
+{% else %}
+<p>No active assignment.</p>
+{% endif %}
+
+{% if ring.status == "enabled" %}
+<h3>Assign Activation</h3>
+<form method="POST" action="/policy-console/rings/{{ ring.environment }}/{{ ring.name }}/assign">
+  <input name="activation_id" placeholder="Activation ID" required>
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.ring.assign">
+  <button type="submit">Assign</button>
+</form>
+
+<h3>Promote to Another Ring</h3>
+<form method="POST" action="/policy-console/rings/{{ ring.environment }}/{{ ring.name }}/promote">
+  <input name="to_ring" placeholder="Target ring (e.g. stable)" required>
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.ring.promote">
+  <button type="submit">Promote</button>
+</form>
+
+<h3>Disable Ring</h3>
+<form method="POST" action="/policy-console/rings/{{ ring.environment }}/{{ ring.name }}/disable">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.ring.disable">
+  <button type="submit">Disable Ring</button>
+</form>
+{% else %}
+<h3>Enable Ring</h3>
+<form method="POST" action="/policy-console/rings/{{ ring.environment }}/{{ ring.name }}/enable">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.ring.enable">
+  <button type="submit">Enable Ring</button>
+</form>
+{% endif %}
+
+{% if assignments %}
+<h3>Assignment History</h3>
+<table>
+  <tr><th>ID</th><th>Activation</th><th>Bundle</th><th>Status</th><th>By</th></tr>
+  {% for a in assignments[:20] %}
+  <tr>
+    <td>{{ a.assignment_id }}</td>
+    <td>{{ a.activation_id }}</td>
+    <td>{{ a.bundle_id }}</td>
+    <td>{{ a.status }}</td>
+    <td>{{ a.assigned_by }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% else %}
+<h2>Ring not found</h2>
+<p>Ring store not configured or ring does not exist.</p>
+{% endif %}
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+{% endblock %}

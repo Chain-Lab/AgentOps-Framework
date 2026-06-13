@@ -783,6 +783,9 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         activation_store=getattr(agent_app, "_activation_store", None),
         # Phase 32: environment store
         environment_store=getattr(agent_app, "_environment_store", None),
+        # Phase 33: ring stores
+        ring_store=getattr(agent_app, "_ring_store", None),
+        ring_assignment_store=getattr(agent_app, "_ring_assignment_store", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

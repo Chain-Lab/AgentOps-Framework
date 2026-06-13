@@ -39,6 +39,8 @@ def build_policy_console_router(
     release_service: Any = None,
     activation_store: Any = None,
     environment_store: Any = None,
+    ring_store: Any = None,
+    ring_assignment_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -53,6 +55,8 @@ def build_policy_console_router(
         release_service: Optional policy release service (Phase 30).
         activation_store: Optional policy activation store (Phase 31).
         environment_store: Optional policy environment store (Phase 32).
+        ring_store: Optional release ring store (Phase 33).
+        ring_assignment_store: Optional ring activation assignment store (Phase 33).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -1109,6 +1113,415 @@ def build_policy_console_router(
                 "activations": activations_list,
                 "message": message,
                 "store_available": environment_store is not None,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 33 Task 9: Ring management pages and routes
+    # -----------------------------------------------------------------------
+
+    def _ring_to_row(ring: Any) -> dict:
+        """Convert a ReleaseRing to a template row dict."""
+        return {
+            "ring_id": ring.ring_id,
+            "environment": ring.environment,
+            "name": ring.name,
+            "description": ring.description,
+            "status": ring.status.value if hasattr(ring.status, "value") else str(ring.status),
+            "is_default": ring.is_default,
+            "created_at": ring.created_at.isoformat() if hasattr(ring.created_at, "isoformat") else str(ring.created_at),
+            "updated_at": ring.updated_at.isoformat() if hasattr(ring.updated_at, "isoformat") else str(ring.updated_at),
+        }
+
+    def _assignment_to_row(a: Any) -> dict:
+        """Convert a RingActivationAssignment to a template row dict."""
+        return {
+            "assignment_id": a.assignment_id,
+            "environment": a.environment,
+            "ring_name": a.ring_name,
+            "activation_id": a.activation_id,
+            "bundle_id": a.bundle_id,
+            "config_hash": a.config_hash,
+            "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+            "assigned_by": a.assigned_by,
+            "reason": a.reason or "—",
+            "created_at": a.created_at.isoformat() if hasattr(a.created_at, "isoformat") else str(a.created_at),
+        }
+
+    @router.get("/rings", response_class=HTMLResponse)
+    async def rings_list(request: Request):
+        """Ring list page showing all rings."""
+        rings: list[dict] = []
+        if ring_store is not None:
+            all_rings = await ring_store.list()
+            # Attach active assignment bundle_id for display
+            for r in all_rings:
+                row = _ring_to_row(r)
+                if ring_assignment_store is not None:
+                    active = await ring_assignment_store.get_active(r.environment, r.name)
+                    row["active_bundle_id"] = active.bundle_id if active else None
+                else:
+                    row["active_bundle_id"] = None
+                rings.append(row)
+        return templates.TemplateResponse(
+            request,
+            "policy_rings.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rings": rings,
+                "message": None,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.get("/rings/{environment}/{ring_name}", response_class=HTMLResponse)
+    async def ring_detail(request: Request, environment: str, ring_name: str):
+        """Ring detail page with status, assignment info, and action forms."""
+        ring = None
+        active_assignment = None
+        assignments: list[dict] = []
+
+        if ring_store is not None:
+            ring = await ring_store.get_by_name(environment, ring_name)
+
+        if ring_assignment_store is not None:
+            active = await ring_assignment_store.get_active(environment, ring_name)
+            if active is not None:
+                active_assignment = _assignment_to_row(active)
+            all_assigns = await ring_assignment_store.list(environment=environment, ring_name=ring_name)
+            for a in all_assigns[:20]:
+                assignments.append(_assignment_to_row(a))
+
+        ring_dict = None
+        if ring is not None:
+            ring_dict = _ring_to_row(ring)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_ring_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "ring": ring_dict,
+                "active_assignment": active_assignment,
+                "assignments": assignments,
+                "message": None,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.post("/rings", response_class=HTMLResponse)
+    async def create_ring(request: Request):
+        """Create a new release ring."""
+        message = None
+        rings: list[dict] = []
+
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                environment = form.get("environment", "")
+                name = form.get("name", "")
+                actor_id = form.get("actor_id", "")
+                description = form.get("description") or None
+                is_default = form.get("is_default") == "on"
+                if not environment or not name or not actor_id:
+                    message = "environment, name, and actor_id are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.create_ring(
+                        environment=environment,
+                        name=name,
+                        created_by=actor_id,
+                        context=context,
+                        description=description,
+                        is_default=is_default,
+                    )
+                    message = f"Ring '{name}' created in environment '{environment}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render the ring list page
+        if ring_store is not None:
+            all_rings = await ring_store.list()
+            for r in all_rings:
+                row = _ring_to_row(r)
+                if ring_assignment_store is not None:
+                    active = await ring_assignment_store.get_active(r.environment, r.name)
+                    row["active_bundle_id"] = active.bundle_id if active else None
+                else:
+                    row["active_bundle_id"] = None
+                rings.append(row)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rings.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rings": rings,
+                "message": message,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.post("/rings/{environment}/{ring_name}/assign", response_class=HTMLResponse)
+    async def assign_activation_to_ring(request: Request, environment: str, ring_name: str):
+        """Assign an activation to a ring."""
+        message = None
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                activation_id = form.get("activation_id", "")
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not activation_id or not actor_id:
+                    message = "activation_id and actor_id are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.assign_activation_to_ring(
+                        environment=environment,
+                        ring_name=ring_name,
+                        activation_id=activation_id,
+                        assigned_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Activation '{activation_id}' assigned to ring '{ring_name}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        ring = None
+        active_assignment = None
+        assignments: list[dict] = []
+        if ring_store is not None:
+            ring = await ring_store.get_by_name(environment, ring_name)
+        if ring_assignment_store is not None:
+            active = await ring_assignment_store.get_active(environment, ring_name)
+            if active is not None:
+                active_assignment = _assignment_to_row(active)
+            all_assigns = await ring_assignment_store.list(environment=environment, ring_name=ring_name)
+            for a in all_assigns[:20]:
+                assignments.append(_assignment_to_row(a))
+        ring_dict = _ring_to_row(ring) if ring is not None else None
+        return templates.TemplateResponse(
+            request,
+            "policy_ring_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "ring": ring_dict,
+                "active_assignment": active_assignment,
+                "assignments": assignments,
+                "message": message,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.post("/rings/{environment}/{ring_name}/promote", response_class=HTMLResponse)
+    async def promote_ring(request: Request, environment: str, ring_name: str):
+        """Promote a ring's activation to another ring."""
+        message = None
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                to_ring = form.get("to_ring", "")
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not to_ring or not actor_id:
+                    message = "to_ring and actor_id are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.promote_canary_to_stable(
+                        environment=environment,
+                        canary_ring=ring_name,
+                        stable_ring=to_ring,
+                        promoted_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Promoted from ring '{ring_name}' to ring '{to_ring}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        ring = None
+        active_assignment = None
+        assignments: list[dict] = []
+        if ring_store is not None:
+            ring = await ring_store.get_by_name(environment, ring_name)
+        if ring_assignment_store is not None:
+            active = await ring_assignment_store.get_active(environment, ring_name)
+            if active is not None:
+                active_assignment = _assignment_to_row(active)
+            all_assigns = await ring_assignment_store.list(environment=environment, ring_name=ring_name)
+            for a in all_assigns[:20]:
+                assignments.append(_assignment_to_row(a))
+        ring_dict = _ring_to_row(ring) if ring is not None else None
+        return templates.TemplateResponse(
+            request,
+            "policy_ring_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "ring": ring_dict,
+                "active_assignment": active_assignment,
+                "assignments": assignments,
+                "message": message,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.post("/rings/{environment}/{ring_name}/disable", response_class=HTMLResponse)
+    async def disable_ring_route(request: Request, environment: str, ring_name: str):
+        """Disable a release ring."""
+        message = None
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.disable_ring(
+                        environment=environment,
+                        ring_name=ring_name,
+                        disabled_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Ring '{ring_name}' disabled."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        ring = None
+        active_assignment = None
+        assignments: list[dict] = []
+        if ring_store is not None:
+            ring = await ring_store.get_by_name(environment, ring_name)
+        if ring_assignment_store is not None:
+            active = await ring_assignment_store.get_active(environment, ring_name)
+            if active is not None:
+                active_assignment = _assignment_to_row(active)
+            all_assigns = await ring_assignment_store.list(environment=environment, ring_name=ring_name)
+            for a in all_assigns[:20]:
+                assignments.append(_assignment_to_row(a))
+        ring_dict = _ring_to_row(ring) if ring is not None else None
+        return templates.TemplateResponse(
+            request,
+            "policy_ring_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "ring": ring_dict,
+                "active_assignment": active_assignment,
+                "assignments": assignments,
+                "message": message,
+                "store_available": ring_store is not None,
+            },
+        )
+
+    @router.post("/rings/{environment}/{ring_name}/enable", response_class=HTMLResponse)
+    async def enable_ring_route(request: Request, environment: str, ring_name: str):
+        """Re-enable a disabled release ring."""
+        message = None
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.enable_ring(
+                        environment=environment,
+                        ring_name=ring_name,
+                        enabled_by=actor_id,
+                        context=context,
+                    )
+                    message = f"Ring '{ring_name}' enabled."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        ring = None
+        active_assignment = None
+        assignments: list[dict] = []
+        if ring_store is not None:
+            ring = await ring_store.get_by_name(environment, ring_name)
+        if ring_assignment_store is not None:
+            active = await ring_assignment_store.get_active(environment, ring_name)
+            if active is not None:
+                active_assignment = _assignment_to_row(active)
+            all_assigns = await ring_assignment_store.list(environment=environment, ring_name=ring_name)
+            for a in all_assigns[:20]:
+                assignments.append(_assignment_to_row(a))
+        ring_dict = _ring_to_row(ring) if ring is not None else None
+        return templates.TemplateResponse(
+            request,
+            "policy_ring_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "ring": ring_dict,
+                "active_assignment": active_assignment,
+                "assignments": assignments,
+                "message": message,
+                "store_available": ring_store is not None,
             },
         )
 

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Release Rings</h2>
+{% if rings %}
+<table>
+  <tr><th>Environment</th><th>Name</th><th>Status</th><th>Default</th><th>Active Assignment</th></tr>
+  {% for r in rings %}
+  <tr>
+    <td>{{ r.environment }}</td>
+    <td><a href="/policy-console/rings/{{ r.environment }}/{{ r.name }}">{{ r.name }}</a></td>
+    <td>{{ r.status }}</td>
+    <td>{{ "✓" if r.is_default else "" }}</td>
+    <td>{{ r.active_bundle_id or "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No rings configured.</p>
+{% endif %}
+
+<h3>Create Ring</h3>
+<form method="POST" action="/policy-console/rings">
+  <input name="environment" placeholder="Environment" required>
+  <input name="name" placeholder="Ring name" required>
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="description" placeholder="Description">
+  <input name="permissions" value="policy.ring.create">
+  <label><input type="checkbox" name="is_default"> Default ring</label>
+  <button type="submit">Create</button>
+</form>
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+{% endblock %}
