@@ -27,3 +27,5 @@ class PolicyActivation(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp")
     superseded_at: datetime | None = Field(default=None, description="Supersession timestamp")
     superseded_by_activation_id: str | None = Field(default=None, description="Activation that superseded this one")
+    rollback_of_activation_id: str | None = Field(default=None, description="Activation being rolled back (the one that was active)")
+    rollback_target_activation_id: str | None = Field(default=None, description="Activation being rolled back to (the target)")
