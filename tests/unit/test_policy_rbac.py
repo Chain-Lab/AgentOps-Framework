@@ -151,3 +151,55 @@ class TestPhase33RingPermissions:
         checker = PolicyReleasePermissionChecker()
         ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
         assert await checker.check(PolicyReleasePermission.RING_CREATE, ctx) is False
+
+
+class TestPhase34Permissions:
+    """Phase 34 — RBAC reload, events, and routing permissions."""
+
+    def test_phase34_permissions_exist(self):
+        """All 4 new permissions have correct string values."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.RELOAD_REQUEST == "policy.reload.request"
+        assert PolicyReleasePermission.RELOAD_VIEW == "policy.reload.view"
+        assert PolicyReleasePermission.EVENT_VIEW == "policy.event.view"
+        assert PolicyReleasePermission.ROUTING_SIMULATE == "policy.routing.simulate"
+
+    @pytest.mark.asyncio
+    async def test_reload_view_default_allowed(self):
+        """RELOAD_VIEW is in the default-allowed set."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.RELOAD_VIEW, ctx) is True
+
+    @pytest.mark.asyncio
+    async def test_event_view_default_allowed(self):
+        """EVENT_VIEW is in the default-allowed set."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.EVENT_VIEW, ctx) is True
+
+    @pytest.mark.asyncio
+    async def test_reload_request_requires_context(self):
+        """RELOAD_REQUEST is NOT in default-allowed set, requires explicit permission."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.RELOAD_REQUEST, ctx) is False
+        ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.reload.request"])
+        assert await checker.check(PolicyReleasePermission.RELOAD_REQUEST, ctx_with_perm) is True
+
+    @pytest.mark.asyncio
+    async def test_routing_simulate_requires_context(self):
+        """ROUTING_SIMULATE is NOT in default-allowed set, requires explicit permission."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ROUTING_SIMULATE, ctx) is False
+        ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.routing.simulate"])
+        assert await checker.check(PolicyReleasePermission.ROUTING_SIMULATE, ctx_with_perm) is True

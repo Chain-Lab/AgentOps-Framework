@@ -28,6 +28,10 @@ class PolicyReleasePermission(StrEnum):
         RING_DISABLE: Disable a release ring.
         RING_ENABLE: Enable a release ring.
         RING_VIEW: View release ring state.
+        RELOAD_REQUEST: Request a policy reload (requires explicit permission).
+        RELOAD_VIEW: View policy reload status (default-allowed).
+        EVENT_VIEW: View policy change events (default-allowed).
+        ROUTING_SIMULATE: Simulate policy routing decisions (requires explicit permission).
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -47,6 +51,10 @@ class PolicyReleasePermission(StrEnum):
     RING_DISABLE = "policy.ring.disable"
     RING_ENABLE = "policy.ring.enable"
     RING_VIEW = "policy.ring.view"
+    RELOAD_REQUEST = "policy.reload.request"
+    RELOAD_VIEW = "policy.reload.view"
+    EVENT_VIEW = "policy.event.view"
+    ROUTING_SIMULATE = "policy.routing.simulate"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -54,6 +62,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.GATE_RUN,
     PolicyReleasePermission.ENVIRONMENT_VIEW,
     PolicyReleasePermission.RING_VIEW,
+    PolicyReleasePermission.RELOAD_VIEW,
+    PolicyReleasePermission.EVENT_VIEW,
 }
 
 
