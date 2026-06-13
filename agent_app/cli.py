@@ -387,6 +387,41 @@ def main() -> int:
     activation_active_parser.add_argument("--environment", default="prod")
     activation_active_parser.add_argument("--json", action="store_true")
 
+    # Phase 32: activation rollback subcommand
+    activation_rollback_parser = activation_sub.add_parser("rollback", help="Roll back an environment to a previous activation")
+    activation_rollback_parser.add_argument("--config", required=True)
+    activation_rollback_parser.add_argument("--environment", dest="env_name", required=True, help="Environment to roll back")
+    activation_rollback_parser.add_argument("--actor-id", required=True, help="Who is rolling back")
+    activation_rollback_parser.add_argument("--reason", default=None, help="Rollback reason")
+    activation_rollback_parser.add_argument("--target-activation-id", default=None, help="Specific activation to roll back to")
+    activation_rollback_parser.add_argument("--permissions", action="append", default=[])
+    activation_rollback_parser.add_argument("--json", action="store_true")
+
+    # Phase 32: policy environment subcommands
+    environment_parser = policy_sub.add_parser("environment", help="Policy environment management (Phase 32)")
+    environment_sub = environment_parser.add_subparsers(dest="environment_command")
+
+    env_list_parser = environment_sub.add_parser("list", help="List policy environment states")
+    env_list_parser.add_argument("--config", required=True, help="Config file path")
+    env_list_parser.add_argument("--permissions", action="append", default=[])
+    env_list_parser.add_argument("--json", action="store_true")
+
+    env_disable_parser = environment_sub.add_parser("disable", help="Disable a policy environment")
+    env_disable_parser.add_argument("--config", required=True)
+    env_disable_parser.add_argument("--environment", dest="env_name", required=True, help="Environment to disable")
+    env_disable_parser.add_argument("--actor-id", required=True, help="Who is disabling")
+    env_disable_parser.add_argument("--reason", required=True, help="Reason for disabling (required)")
+    env_disable_parser.add_argument("--permissions", action="append", default=[])
+    env_disable_parser.add_argument("--json", action="store_true")
+
+    env_enable_parser = environment_sub.add_parser("enable", help="Re-enable a disabled policy environment")
+    env_enable_parser.add_argument("--config", required=True)
+    env_enable_parser.add_argument("--environment", dest="env_name", required=True, help="Environment to enable")
+    env_enable_parser.add_argument("--actor-id", required=True, help="Who is enabling")
+    env_enable_parser.add_argument("--reason", default=None, help="Reason for enabling")
+    env_enable_parser.add_argument("--permissions", action="append", default=[])
+    env_enable_parser.add_argument("--json", action="store_true")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -593,6 +628,17 @@ def main() -> int:
             return asyncio.run(_cmd_policy_activation_list(args))
         if args.activation_command == "active":
             return asyncio.run(_cmd_policy_activation_active(args))
+        if args.activation_command == "rollback":
+            return asyncio.run(_cmd_policy_activation_rollback(args))
+
+    # Phase 32: policy environment subcommands
+    if args.command == "policy" and args.policy_command == "environment":
+        if args.environment_command == "list":
+            return asyncio.run(_cmd_policy_environment_list(args))
+        if args.environment_command == "disable":
+            return asyncio.run(_cmd_policy_environment_disable(args))
+        if args.environment_command == "enable":
+            return asyncio.run(_cmd_policy_environment_enable(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -2342,6 +2388,37 @@ def _get_release_service(app: Any) -> Any:
             db_path=promo_path,
         )
 
+    # -- Phase 31: Activation store --
+    activation_store = None
+    if getattr(release_config, "activations", None):
+        act_type = getattr(release_config.activations, "type", "memory")
+        act_path = getattr(release_config.activations, "path", None)
+        from agent_app.runtime.policy_activation_store import create_policy_activation_store
+        activation_store = create_policy_activation_store(
+            store_type=act_type,
+            db_path=act_path,
+        )
+
+    # -- Phase 31: Policy resolver --
+    policy_resolver = None
+    if activation_store is not None:
+        from agent_app.runtime.policy_resolver import ActivePolicyResolver
+        policy_resolver = ActivePolicyResolver(
+            activation_store=activation_store,
+            bundle_store=None,  # will be set after bundle_store creation
+        )
+
+    # -- Phase 32: Environment store --
+    environment_store = None
+    if getattr(release_config, "environments", None):
+        env_type = getattr(release_config.environments, "type", "memory")
+        env_path = getattr(release_config.environments, "path", None)
+        from agent_app.runtime.policy_environment_store import create_policy_environment_store
+        environment_store = create_policy_environment_store(
+            store_type=env_type,
+            db_path=env_path,
+        )
+
     # Build rules from config
     rules = []
     for rule_cfg in getattr(release_config, "rules", []):
@@ -2381,7 +2458,13 @@ def _get_release_service(app: Any) -> Any:
         gate_store=gate_store,
         promotion_store=promotion_store,
         allow_gate_bypass=getattr(release_config, "allow_gate_bypass", False),
+        activation_store=activation_store,
+        policy_resolver=policy_resolver,
+        environment_store=environment_store,
     )
+    # Wire bundle_store into resolver now that it exists
+    if policy_resolver is not None:
+        policy_resolver._bundle_store = bundle_store
     app._release_service = service
     return service
 
@@ -2738,6 +2821,255 @@ async def _cmd_policy_activation_active(args: argparse.Namespace) -> int:
             f"Active bundle for '{args.environment}': {bundle.bundle_id} "
             f"(v{bundle.version}, hash={bundle.config_hash[:12]}...)"
         )
+    return 0
+
+
+# -- Phase 32: Policy environment CLI commands --
+
+
+async def _cmd_policy_environment_list(args: argparse.Namespace) -> int:
+    """List policy environment states."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context("cli_viewer", args.permissions)
+    try:
+        await service._check_permission(PolicyReleasePermission.ENVIRONMENT_VIEW, context)
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+
+    env_store = service.environment_store
+    if env_store is None:
+        # No store configured; show default state for known environments
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No environment states configured.")
+        return 0
+
+    states = await env_store.list()
+
+    if not states:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No environment states found. All environments default to enabled.")
+        return 0
+
+    if args.json:
+        data = []
+        for s in states:
+            entry = {
+                "environment": s.environment,
+                "status": s.status.value if hasattr(s.status, "value") else s.status,
+                "disabled_reason": s.disabled_reason,
+                "disabled_by": s.disabled_by,
+                "disabled_at": s.disabled_at.isoformat() if s.disabled_at else None,
+                "enabled_by": s.enabled_by,
+                "enabled_at": s.enabled_at.isoformat() if s.enabled_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            }
+            data.append(entry)
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Environment':<15} {'Status':<12} {'Disabled Reason':<25} {'Disabled By':<15}")
+        print("-" * 70)
+        for s in states:
+            status_str = s.status.value if hasattr(s.status, "value") else s.status
+            reason = s.disabled_reason or ""
+            disabled_by = s.disabled_by or ""
+            print(f"{s.environment:<15} {status_str:<12} {reason:<25} {disabled_by:<15}")
+    return 0
+
+
+async def _cmd_policy_environment_disable(args: argparse.Namespace) -> int:
+    """Disable a policy environment."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        await service._check_permission(PolicyReleasePermission.ENVIRONMENT_DISABLE, context)
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+
+    env_store = service.environment_store
+    if env_store is None:
+        print("Environment store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        state = await env_store.disable(
+            environment=args.env_name,
+            disabled_by=args.actor_id,
+            reason=args.reason,
+        )
+    except Exception as exc:
+        print(f"Error disabling environment: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "environment": state.environment,
+            "status": state.status.value if hasattr(state.status, "value") else state.status,
+            "disabled_reason": state.disabled_reason,
+            "disabled_by": state.disabled_by,
+            "disabled_at": state.disabled_at.isoformat() if state.disabled_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Environment '{state.environment}' disabled")
+        print(f"  Reason:    {state.disabled_reason}")
+        print(f"  Disabled by: {state.disabled_by}")
+        if state.disabled_at:
+            print(f"  At:        {state.disabled_at.isoformat()}")
+    return 0
+
+
+async def _cmd_policy_environment_enable(args: argparse.Namespace) -> int:
+    """Re-enable a disabled policy environment."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        await service._check_permission(PolicyReleasePermission.ENVIRONMENT_ENABLE, context)
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+
+    env_store = service.environment_store
+    if env_store is None:
+        print("Environment store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        state = await env_store.enable(
+            environment=args.env_name,
+            enabled_by=args.actor_id,
+            reason=args.reason,
+        )
+    except Exception as exc:
+        print(f"Error enabling environment: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "environment": state.environment,
+            "status": state.status.value if hasattr(state.status, "value") else state.status,
+            "enabled_by": state.enabled_by,
+            "enabled_at": state.enabled_at.isoformat() if state.enabled_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Environment '{state.environment}' enabled")
+        print(f"  Enabled by: {state.enabled_by}")
+        if state.enabled_at:
+            print(f"  At:         {state.enabled_at.isoformat()}")
+        if args.reason:
+            print(f"  Reason:     {args.reason}")
+    return 0
+
+
+# -- Phase 32: Activation rollback CLI command --
+
+
+async def _cmd_policy_activation_rollback(args: argparse.Namespace) -> int:
+    """Roll back an environment to a previous activation."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        result = await service.rollback_environment(
+            environment=args.env_name,
+            rolled_back_by=args.actor_id,
+            context=context,
+            target_activation_id=args.target_activation_id,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error rolling back activation: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "activation_id": result.activation_id,
+            "environment": result.environment,
+            "bundle_id": result.bundle_id,
+            "status": result.status.value if hasattr(result.status, "value") else result.status,
+            "rolled_back_by": args.actor_id,
+            "reason": args.reason,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Activation rollback complete")
+        print()
+        print(f"Activation ID:  {result.activation_id}")
+        print(f"Environment:    {result.environment}")
+        print(f"Bundle ID:      {result.bundle_id}")
+        status_str = result.status.value if hasattr(result.status, "value") else result.status
+        print(f"Status:         {status_str}")
+        print(f"Rolled back by: {args.actor_id}")
+        if args.reason:
+            print(f"Reason:         {args.reason}")
     return 0
 
 

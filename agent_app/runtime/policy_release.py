@@ -725,10 +725,11 @@ class PolicyReleaseService:
         )
 
         # Clear resolver cache for the environment
-        if self._policy_resolver is not None and hasattr(
-            self._policy_resolver, "clear_cache"
-        ):
-            self._policy_resolver.clear_cache(environment)
+        if self._policy_resolver is not None:
+            if hasattr(self._policy_resolver, "refresh"):
+                self._policy_resolver.refresh(environment)
+            elif hasattr(self._policy_resolver, "clear_cache"):
+                self._policy_resolver.clear_cache()
 
         await self._write_audit(
             "policy.activation.rollback_completed",
@@ -780,10 +781,11 @@ class PolicyReleaseService:
         )
 
         # Clear resolver cache for the environment
-        if self._policy_resolver is not None and hasattr(
-            self._policy_resolver, "clear_cache"
-        ):
-            self._policy_resolver.clear_cache(environment)
+        if self._policy_resolver is not None:
+            if hasattr(self._policy_resolver, "refresh"):
+                self._policy_resolver.refresh(environment)
+            elif hasattr(self._policy_resolver, "clear_cache"):
+                self._policy_resolver.clear_cache()
 
         await self._write_audit(
             "policy.environment.disabled",
@@ -827,10 +829,11 @@ class PolicyReleaseService:
         )
 
         # Clear resolver cache for the environment
-        if self._policy_resolver is not None and hasattr(
-            self._policy_resolver, "clear_cache"
-        ):
-            self._policy_resolver.clear_cache(environment)
+        if self._policy_resolver is not None:
+            if hasattr(self._policy_resolver, "refresh"):
+                self._policy_resolver.refresh(environment)
+            elif hasattr(self._policy_resolver, "clear_cache"):
+                self._policy_resolver.clear_cache()
 
         await self._write_audit(
             "policy.environment.enabled",
