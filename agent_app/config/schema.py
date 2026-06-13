@@ -376,6 +376,10 @@ class PolicyReleaseRuntimeConfig(BaseModel):
         ge=0,
         description="In-process cache TTL (0 = no cache)",
     )
+    ring: str | None = Field(
+        default=None,
+        description="Default ring for runtime resolution (Phase 33)",
+    )
 
 
 class PolicyReleaseConfig(BaseModel):
@@ -400,6 +404,14 @@ class PolicyReleaseConfig(BaseModel):
     environments: PolicyReleaseStoreConfig | None = Field(
         default=None,
         description="Environment state store config (Phase 32)",
+    )
+    rings: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Release ring store config (Phase 33)",
+    )
+    ring_assignments: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Ring assignment store config (Phase 33)",
     )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,

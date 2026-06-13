@@ -456,6 +456,36 @@ def build_app(
                 from agent_app.runtime.policy_environment_store import InMemoryPolicyEnvironmentStore
                 environment_store = InMemoryPolicyEnvironmentStore()
 
+        # Phase 33: ring store
+        ring_store = None
+        if getattr(release_config, "rings", None):
+            ring_cfg = release_config.rings
+            if ring_cfg.type == "sqlite":
+                from agent_app.runtime.policy_ring_store import SQLiteReleaseRingStore
+                ring_store = SQLiteReleaseRingStore(db_path=ring_cfg.path or ".agent_app/policy_rings.db")
+            else:
+                from agent_app.runtime.policy_ring_store import InMemoryReleaseRingStore
+                ring_store = InMemoryReleaseRingStore()
+
+        # Phase 33: ring assignment store
+        ring_assignment_store = None
+        if getattr(release_config, "ring_assignments", None):
+            ra_cfg = release_config.ring_assignments
+            if ra_cfg.type == "sqlite":
+                from agent_app.runtime.policy_ring_assignment_store import SQLiteRingActivationAssignmentStore
+                ring_assignment_store = SQLiteRingActivationAssignmentStore(db_path=ra_cfg.path or ".agent_app/policy_ring_assignments.db")
+            else:
+                from agent_app.runtime.policy_ring_assignment_store import InMemoryRingActivationAssignmentStore
+                ring_assignment_store = InMemoryRingActivationAssignmentStore()
+
+        # Phase 33: ring router
+        ring_router = None
+        if ring_store is not None:
+            from agent_app.runtime.policy_ring_router import PolicyRingRouter
+            runtime_cfg = getattr(release_config, "runtime", None)
+            default_ring = getattr(runtime_cfg, "ring", None) or "stable"
+            ring_router = PolicyRingRouter(ring_store=ring_store, default_ring=default_ring)
+
         # Phase 31: policy resolver
         policy_resolver = None
         if activation_store is not None:
@@ -472,6 +502,13 @@ def build_app(
         if policy_resolver is not None and environment_store is not None:
             policy_resolver._environment_store = environment_store
 
+        # Update resolver with ring stores
+        if policy_resolver is not None:
+            if ring_assignment_store is not None:
+                policy_resolver._ring_assignment_store = ring_assignment_store
+            if ring_store is not None:
+                policy_resolver._ring_store = ring_store
+
         release_service = PolicyReleaseService(
             bundle_store=bundle_store,
             replay_runner=replay_runner,
@@ -483,10 +520,19 @@ def build_app(
             activation_store=activation_store,
             policy_resolver=policy_resolver,
             environment_store=environment_store,
+            ring_store=ring_store,
+            ring_assignment_store=ring_assignment_store,
+            ring_router=ring_router,
         )
         app._release_service = release_service
         if environment_store is not None:
             app._environment_store = environment_store
+        if ring_store is not None:
+            app._ring_store = ring_store
+        if ring_assignment_store is not None:
+            app._ring_assignment_store = ring_assignment_store
+        if ring_router is not None:
+            app._ring_router = ring_router
     app._release_config = release_config
     return app
 
