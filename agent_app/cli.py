@@ -491,6 +491,45 @@ def main() -> int:
     canary_eval_parser.add_argument("--suite", dest="suite_path", required=True, help="Path to eval suite YAML")
     canary_eval_parser.add_argument("--json", action="store_true")
 
+    # Phase 34: policy reload subcommands
+    reload_parser = policy_sub.add_parser("reload", help="Policy reload management (Phase 34)")
+    reload_sub = reload_parser.add_subparsers(dest="reload_command")
+
+    reload_request_parser = reload_sub.add_parser("request", help="Request a policy reload")
+    reload_request_parser.add_argument("--config", required=True, help="Config file path")
+    reload_request_parser.add_argument("--environment", default=None, help="Environment to reload")
+    reload_request_parser.add_argument("--ring", dest="ring_name", default=None, help="Ring to reload")
+    reload_request_parser.add_argument("--actor-id", required=True, help="Who is requesting the reload")
+    reload_request_parser.add_argument("--reason", default=None, help="Reason for the reload")
+    reload_request_parser.add_argument("--json", action="store_true")
+
+    reload_status_parser = reload_sub.add_parser("status", help="Show policy cache status")
+    reload_status_parser.add_argument("--config", required=True, help="Config file path")
+    reload_status_parser.add_argument("--json", action="store_true")
+
+    # Phase 34: policy events subcommands
+    events_parser = policy_sub.add_parser("events", help="Policy change events (Phase 34)")
+    events_sub = events_parser.add_subparsers(dest="events_command")
+
+    events_list_parser = events_sub.add_parser("list", help="List policy change events")
+    events_list_parser.add_argument("--config", required=True, help="Config file path")
+    events_list_parser.add_argument("--environment", default=None, help="Filter by environment")
+    events_list_parser.add_argument("--ring", dest="ring_name", default=None, help="Filter by ring")
+    events_list_parser.add_argument("--limit", type=int, default=20, help="Max events to show")
+    events_list_parser.add_argument("--json", action="store_true")
+
+    # Phase 34: policy routing subcommands
+    routing_parser = policy_sub.add_parser("routing", help="Policy routing simulation (Phase 34)")
+    routing_sub = routing_parser.add_subparsers(dest="routing_command")
+
+    routing_simulate_parser = routing_sub.add_parser("simulate", help="Simulate policy routing")
+    routing_simulate_parser.add_argument("--config", required=True, help="Config file path")
+    routing_simulate_parser.add_argument("--environment", required=True, help="Target environment")
+    routing_simulate_parser.add_argument("--actor-id", required=True, help="Actor ID for routing context")
+    routing_simulate_parser.add_argument("--tenant-id", default="default", help="Tenant ID for routing context")
+    routing_simulate_parser.add_argument("--permissions", action="append", default=[])
+    routing_simulate_parser.add_argument("--json", action="store_true")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -728,6 +767,23 @@ def main() -> int:
     if args.command == "policy" and args.policy_command == "canary":
         if args.canary_command == "eval":
             return asyncio.run(_cmd_policy_canary_eval(args))
+
+    # Phase 34: policy reload subcommands
+    if args.command == "policy" and args.policy_command == "reload":
+        if args.reload_command == "request":
+            return asyncio.run(_cmd_policy_reload_request(args))
+        if args.reload_command == "status":
+            return asyncio.run(_cmd_policy_reload_status(args))
+
+    # Phase 34: policy events subcommands
+    if args.command == "policy" and args.policy_command == "events":
+        if args.events_command == "list":
+            return asyncio.run(_cmd_policy_events_list(args))
+
+    # Phase 34: policy routing subcommands
+    if args.command == "policy" and args.policy_command == "routing":
+        if args.routing_command == "simulate":
+            return asyncio.run(_cmd_policy_routing_simulate(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -3627,6 +3683,206 @@ async def _cmd_policy_canary_eval(args: argparse.Namespace) -> int:
 
     passed = result.passed if hasattr(result, "passed") else False
     return 0 if passed else 1
+
+
+# -- Phase 34: Reload, events, and routing CLI commands --
+
+
+async def _cmd_policy_reload_request(args: argparse.Namespace) -> int:
+    """Request a policy reload for an environment/ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    reload_manager = getattr(app, "_reload_manager", None)
+    if reload_manager is None:
+        print("Policy reload manager not configured. Enable change_events in policy_release config.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await reload_manager.request_reload(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            requested_by=args.actor_id,
+            reason=args.reason,
+        )
+    except Exception as exc:
+        print(f"Error requesting reload: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = []
+        for r in results:
+            entry = {
+                "environment": r.target.environment if r.target else None,
+                "ring_name": r.target.ring_name if r.target else None,
+                "refreshed": r.refreshed,
+                "error": r.error,
+                "refreshed_at": r.refreshed_at.isoformat() if r.refreshed_at else None,
+                "event_id": getattr(r, "event_id", None),
+            }
+            data.append(entry)
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Policy reload requested")
+        print()
+        for i, r in enumerate(results):
+            env = r.target.environment if r.target else "(all)"
+            ring = r.target.ring_name if r.target else "(all)"
+            status = "OK" if r.refreshed else "FAILED"
+            print(f"  [{status}] environment={env} ring={ring}")
+            if r.error:
+                print(f"         error: {r.error}")
+            if getattr(r, "event_id", None):
+                print(f"         event_id: {r.event_id}")
+    return 0
+
+
+async def _cmd_policy_reload_status(args: argparse.Namespace) -> int:
+    """Show policy cache status."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    resolver = getattr(service, "policy_resolver", None)
+    if resolver is None:
+        print("Policy resolver not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        status = resolver.cache_status()
+    except Exception as exc:
+        print(f"Error getting cache status: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(status, indent=2, default=str))
+    else:
+        print("Policy Cache Status")
+        print("=" * 40)
+        print(f"  Cached entries: {status.get('entries', 0)}")
+        print(f"  TTL:            {status.get('ttl', 0)}s")
+        keys = status.get("keys", [])
+        if keys:
+            print(f"  Keys:           {', '.join(keys)}")
+        else:
+            print("  Keys:           (none)")
+    return 0
+
+
+async def _cmd_policy_events_list(args: argparse.Namespace) -> int:
+    """List policy change events."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    event_store = getattr(app, "_event_store", None)
+    if event_store is None:
+        print("Policy event store not configured. Enable change_events in policy_release config.", file=sys.stderr)
+        return 1
+
+    try:
+        events = await event_store.list(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing events: {exc}", file=sys.stderr)
+        return 1
+
+    if not events:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No policy change events found.")
+        return 0
+
+    if args.json:
+        data = []
+        for e in events:
+            entry = {
+                "event_id": e.event_id,
+                "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                "environment": e.environment,
+                "ring_name": e.ring_name,
+                "actor_id": e.actor_id,
+                "reason": e.reason,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            data.append(entry)
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Event ID':<20} {'Type':<25} {'Env':<10} {'Ring':<12} {'Actor':<15} {'Created'}")
+        print("-" * 100)
+        for e in events:
+            etype = e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type)
+            ts = e.created_at.isoformat()[:19] if e.created_at else "?"
+            print(
+                f"{e.event_id:<20} {etype:<25} "
+                f"{(e.environment or '—'):<10} {(e.ring_name or '—'):<12} "
+                f"{(e.actor_id or '—'):<15} {ts}"
+            )
+    return 0
+
+
+async def _cmd_policy_routing_simulate(args: argparse.Namespace) -> int:
+    """Simulate policy routing for a given context."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    ring_router = getattr(app, "_ring_router", None)
+    if ring_router is None:
+        print("Policy ring router not configured. Enable rings and routing in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions, tenant_id=args.tenant_id)
+
+    try:
+        result = await ring_router.simulate_routing(args.environment, context)
+    except Exception as exc:
+        print(f"Error simulating routing: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print("Routing Simulation Result")
+        print("=" * 40)
+        print(f"  Environment:      {result.get('environment', '?')}")
+        print(f"  Selected Ring:    {result.get('selected_ring', '?')}")
+        print(f"  Routing Mode:     {result.get('routing_mode', '?')}")
+        if result.get("hash_key"):
+            print(f"  Hash Key:         {result['hash_key']}")
+        if result.get("bucket") is not None:
+            print(f"  Bucket:           {result['bucket']}")
+        if result.get("canary_percentage") is not None:
+            print(f"  Canary %:         {result['canary_percentage']}")
+        if result.get("reason"):
+            print(f"  Reason:           {result['reason']}")
+    return 0
 
 
 if __name__ == "__main__":
