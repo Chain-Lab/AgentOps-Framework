@@ -324,3 +324,202 @@ passed via form data (`permissions` field, comma-separated).
 - No promotion request expiry/TTL
 - Console pages don't show bundle details inline (link to bundle page)
 - No bulk approval/reject operations
+
+---
+
+# Phase 31: Policy Runtime Activation, Environment Isolation, and Hot Reload Baseline
+
+## Overview
+
+**Phase 31** transforms policy promotion from a persisted governance workflow into an actual runtime policy activation mechanism. It adds:
+
+1. **Policy Environments** — Named environments (dev, staging, prod, custom) for environment-specific policy deployment
+2. **PolicyActivation Model** — Records environment-specific bundle activation with lifecycle (ACTIVE → SUPERSEDED → ROLLED_BACK)
+3. **PolicyActivationStore** — Protocol + InMemory + SQLite persistence for activation records
+4. **ActivePolicyResolver** — Resolves active bundle for environment with config hash verification and TTL-aware caching
+5. **Environment-Aware Promotion Execution** — `execute_promotion()` now accepts `environment` and `reason` parameters
+6. **Request-Scoped Policy Environment** — `RunContext.policy_environment` for per-request environment targeting
+7. **Runtime Config** — `PolicyReleaseRuntimeConfig` with environment, require_active_policy, cache_ttl_seconds
+8. **CLI Commands** — `agentapp policy activation list/active`
+9. **Console Pages** — `/activations`, `/activations/{id}`, `/environments`
+10. **Audit Events** — policy.activation.created, superseded, rollback_marked
+
+## PolicyActivation Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `activation_id` | `str` | Unique ID (`pa_` prefix) |
+| `bundle_id` | `str` | Reference to the activated bundle |
+| `environment` | `str` | Target environment (dev, staging, prod, custom) |
+| `status` | `PolicyActivationStatus` | `ACTIVE`, `SUPERSEDED`, or `ROLLED_BACK` |
+| `config_hash` | `str` | SHA-256 hash of the bundle config at activation time |
+| `activated_by` | `str` | Who activated the bundle |
+| `reason` | `str \| None` | Why this activation was created |
+| `created_at` | `datetime` | Activation timestamp |
+| `superseded_at` | `datetime \| None` | When superseded by a newer activation |
+| `rolled_back_at` | `datetime \| None` | When rolled back |
+
+**Activation lifecycle:**
+- **ACTIVE** — Currently serving as the active policy for its environment
+- **SUPERSEDED** — Replaced by a newer activation for the same environment
+- **ROLLED_BACK** — Manually rolled back (environment returns to previous ACTIVE)
+
+Only one ACTIVE activation per environment at any time. Promoting a new bundle
+to an environment automatically supersedes the current ACTIVE activation.
+
+## PolicyActivationStore
+
+Protocol + InMemory + SQLite persistence, following the same pattern as
+`PolicyBundleStore` and `PolicyGateStore`:
+
+| Store | Protocol Methods | Persistence |
+|-------|-----------------|-------------|
+| `PolicyActivationStore` | `create()`, `get()`, `list()`, `get_active(environment)`, `supersede()`, `mark_rolled_back()` | InMemory / SQLite |
+
+**Key behavior:**
+- `create()` validates that no other ACTIVE activation exists for the same environment
+- `get_active(environment)` returns the current ACTIVE activation for a given environment
+- `supersede(activation_id)` transitions an activation to SUPERSEDED
+- `mark_rolled_back(activation_id)` transitions to ROLLED_BACK
+
+## ActivePolicyResolver
+
+Runtime component that resolves the active bundle for a given environment:
+
+### `resolve_active_bundle(environment) → PolicyBundle | None`
+Returns the active bundle for the environment, or None if no activation exists.
+Uses TTL-aware cache to avoid repeated store lookups.
+
+### `require_active_bundle(environment) → PolicyBundle`
+Like `resolve_active_bundle()` but raises `ValueError` when no active bundle exists
+or when `require_active_policy=True` is configured.
+
+### `refresh(environment) → None`
+Invalidates the cache entry for a specific environment.
+
+### `clear_cache() → None`
+Clears the entire resolver cache.
+
+**Cache behavior:**
+- TTL configured via `cache_ttl_seconds` (default: 300 seconds)
+- `_CacheEntry` stores bundle + timestamp; stale entries are re-fetched from store
+- Config hash verification: the activation's `config_hash` must match the bundle's
+  current `config_hash`; mismatches raise `ValueError` (detects config drift)
+
+## Config Schema
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod          # default environment for promotions
+      require_active_policy: false # raise if no active bundle at runtime
+      cache_ttl_seconds: 300     # resolver cache TTL
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config sections:
+- `activations` — Optional activation store config (default: `None`, backward compatible)
+- `runtime` — `PolicyReleaseRuntimeConfig` with `environment`, `require_active_policy`, `cache_ttl_seconds`
+
+## CLI Commands
+
+```bash
+# List all activations
+agentapp policy activation list --config <path> [--environment <env>] [--status <status>]
+
+# Show the currently active activation for an environment
+agentapp policy activation active --config <path> --environment <env>
+```
+
+## Console Pages
+
+| Route | Template | Description |
+|-------|----------|-------------|
+| `GET /activations` | `policy_activations.html` | List all activations with environment and status filters |
+| `GET /activations/{id}` | `policy_activation_detail.html` | Full activation detail including bundle hash, timestamps, reason |
+| `GET /environments` | `policy_activations.html` (mode=environments) | Overview of all environments with their current ACTIVE activation |
+
+The activations page supports a dual-mode view: full list or environment overview.
+
+## RunContext Extensions
+
+Two new fields on `RunContext`:
+
+- `policy_environment: str | None` — The environment this run targets. Set by the
+  caller or defaults to the runtime config environment.
+- `resolved_policy_bundle: PolicyBundle | None` — The bundle resolved by
+  `ActivePolicyResolver` for the run's environment. Attached during `AppRunner.run()`
+  before agent/tool execution.
+
+## AppRunner Integration
+
+`AppRunner` gains a `policy_resolver` parameter. During `run()`:
+
+1. If `policy_resolver` is configured, calls `_resolve_active_policy(context)` before
+   executing the agent/tool/workflow
+2. `_resolve_active_policy()` checks `context.policy_environment`, resolves the active
+   bundle via `policy_resolver.require_active_bundle()`, and attaches it to
+   `context.resolved_policy_bundle`
+3. Downstream `ToolExecutor` and governance components can inspect
+   `context.resolved_policy_bundle` for environment-aware decisions
+
+## Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.activation.created` | New activation created during promotion |
+| `policy.activation.superseded` | Existing activation superseded by newer promotion |
+| `policy.activation.rollback_marked` | Activation manually marked as rolled back |
+
+## Design Decisions
+
+1. **Separate activation store** — Activations are lifecycle records distinct from
+   bundles. A bundle can be activated multiple times across environments; activations
+   track which environment got which version and when.
+
+2. **Environment isolation via unique constraint** — The store enforces one ACTIVE
+   activation per environment at the database level, preventing accidental dual-activation.
+
+3. **Config hash verification at resolve time** — Detects config drift between the
+   activation record and the actual bundle. If a bundle's config is modified after
+   activation, the resolver raises `ValueError` rather than silently serving stale policy.
+
+4. **TTL-aware caching** — Resolver caches bundle lookups to avoid repeated store
+   queries during high-throughput runs. TTL defaults to 300 seconds; configurable.
+
+5. **Backward-compatible optional stores** — `activations` store config defaults to
+   `None`. Existing Phase 29/30 configs without an `activations` section continue to
+   work; promotion execution simply skips activation record creation.
+
+6. **require_active_policy defaults to False** — Opt-in enforcement. When disabled,
+   runs proceed normally even if no bundle is active for the environment.
+
+7. **StrEnum for activation status** — `PolicyActivationStatus` uses `str` enum for
+   JSON serialization compatibility, consistent with other status enums in the codebase.
+
+## Current Limitations
+
+- No activation rollback that re-activates a previous bundle (ROLLED_BACK is a
+  lifecycle marker; re-activation requires a new promotion)
+- No activation expiry/TTL (activations persist until superseded or rolled back)
+- No multi-environment bulk promotion (promote one environment at a time)
+- Console pages are read-only (activations created via promotion execution)
+- No activation diff view (future: show config changes between superseding activations)

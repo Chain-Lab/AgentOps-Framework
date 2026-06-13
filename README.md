@@ -1243,3 +1243,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.16 — Persistent policy replay, background jobs, context reconstruction with SQLite stores ✅ (Phase 28)
 - v0.17 — Policy release gates & versioned policy bundles with lifecycle management ✅ (Phase 29)
 - v0.18 — Policy promotion approval, RBAC, and console write governance ✅ (Phase 30)
+- v0.19 — Policy runtime activation, environment isolation, and hot reload baseline ✅ (Phase 31)

@@ -2,6 +2,29 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## Phase 31: Policy Runtime Activation, Environment Isolation, and Hot Reload Baseline (0.19.0)
+
+### Added
+
+- **PolicyActivation model** — Environment-specific activation records with ACTIVE → SUPERSEDED → ROLLED_BACK lifecycle
+- **PolicyActivationStore** — Protocol + InMemory + SQLite persistence for activation records
+- **ActivePolicyResolver** — Runtime bundle resolution with config hash verification and TTL-aware caching
+- **Environment isolation** — Only one ACTIVE activation per environment at any time
+- **Config hash verification** — Activation config_hash must match bundle config_hash at resolve time
+- **Environment-aware promotion** — execute_promotion() accepts environment parameter
+- **Runtime config** — PolicyReleaseRuntimeConfig with environment, require_active_policy, cache_ttl_seconds
+- **CLI activation commands** — `agentapp policy activation list` and `agentapp policy activation active`
+- **Console activation pages** — /activations, /activations/{id}, /environments
+- **RunContext.policy_environment** — Request-scoped environment targeting
+- **RunContext.resolved_policy_bundle** — Resolved bundle attached to run context
+- **AppRunner policy resolver integration** — _resolve_active_policy() method wires resolver into run lifecycle
+- **38+ tests** — Model, store, resolver, service, config, CLI, console, context, app runner tests
+
+### Changed
+
+- PolicyReleaseService.execute_promotion() now creates PolicyActivation records when activation_store is configured
+- PolicyReleaseService gains get_active_policy(), require_active_policy(), list_activations() methods
+
 ## Phase 30: Policy Promotion Approval, RBAC, and Console Write Governance (0.18.0)
 
 ### Added
