@@ -360,6 +360,32 @@ class PolicyReleaseStoreConfig(BaseModel):
     )
 
 
+class PolicyChangeEventsConfig(BaseModel):
+    """Configuration for policy change event store (Phase 34)."""
+
+    type: str = Field(
+        default="memory",
+        description="Store backend: memory | sqlite",
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite database path (required when type=sqlite)",
+    )
+    strict: bool = Field(
+        default=False,
+        description="Raise on event emission failure instead of logging",
+    )
+
+
+class PolicyReloadConfig(BaseModel):
+    """Configuration for policy reload manager (Phase 34)."""
+
+    auto_refresh: bool = Field(
+        default=True,
+        description="Automatically refresh resolver on policy changes",
+    )
+
+
 class PolicyReleaseRuntimeConfig(BaseModel):
     """Runtime policy activation configuration (Phase 31)."""
 
@@ -379,6 +405,10 @@ class PolicyReleaseRuntimeConfig(BaseModel):
     ring: str | None = Field(
         default=None,
         description="Default ring for runtime resolution (Phase 33)",
+    )
+    routing: Any | None = Field(
+        default=None,
+        description="RingRoutingConfig dict, resolved at load time (Phase 34)",
     )
 
 
@@ -412,6 +442,14 @@ class PolicyReleaseConfig(BaseModel):
     ring_assignments: PolicyReleaseStoreConfig | None = Field(
         default=None,
         description="Ring assignment store config (Phase 33)",
+    )
+    change_events: PolicyChangeEventsConfig | None = Field(
+        default=None,
+        description="Policy change event store config (Phase 34)",
+    )
+    reload: PolicyReloadConfig | None = Field(
+        default=None,
+        description="Policy reload manager config (Phase 34)",
     )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,

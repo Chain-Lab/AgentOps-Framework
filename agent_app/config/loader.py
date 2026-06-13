@@ -478,19 +478,31 @@ def build_app(
                 from agent_app.runtime.policy_ring_assignment_store import InMemoryRingActivationAssignmentStore
                 ring_assignment_store = InMemoryRingActivationAssignmentStore()
 
-        # Phase 33: ring router
+        # Phase 34: Ring routing config
+        routing_config = None
+        runtime_cfg = getattr(release_config, "runtime", None)
+        if runtime_cfg is not None and hasattr(runtime_cfg, "routing") and runtime_cfg.routing is not None:
+            from agent_app.runtime.policy_ring_router import RingRoutingConfig
+            if isinstance(runtime_cfg.routing, dict):
+                routing_config = RingRoutingConfig(**runtime_cfg.routing)
+            elif isinstance(runtime_cfg.routing, RingRoutingConfig):
+                routing_config = runtime_cfg.routing
+
+        # Phase 33: ring router (extended Phase 34 with routing_config)
         ring_router = None
         if ring_store is not None:
             from agent_app.runtime.policy_ring_router import PolicyRingRouter
-            runtime_cfg = getattr(release_config, "runtime", None)
             default_ring = getattr(runtime_cfg, "ring", None) or "stable"
-            ring_router = PolicyRingRouter(ring_store=ring_store, default_ring=default_ring)
+            ring_router = PolicyRingRouter(
+                ring_store=ring_store,
+                default_ring=default_ring,
+                routing_config=routing_config,
+            )
 
         # Phase 31: policy resolver
         policy_resolver = None
         if activation_store is not None:
             from agent_app.runtime.policy_resolver import ActivePolicyResolver
-            runtime_cfg = getattr(release_config, "runtime", None)
             cache_ttl = getattr(runtime_cfg, "cache_ttl_seconds", 5) if runtime_cfg else 5
             policy_resolver = ActivePolicyResolver(
                 bundle_store=bundle_store,
@@ -509,6 +521,25 @@ def build_app(
             if ring_store is not None:
                 policy_resolver._ring_store = ring_store
 
+        # Phase 34: Policy change event store
+        event_store = None
+        if release_config is not None and getattr(release_config, "change_events", None) is not None:
+            from agent_app.runtime.policy_change_event_store import create_policy_change_event_store
+            ce_cfg = release_config.change_events
+            event_store = create_policy_change_event_store(
+                store_type=ce_cfg.type,
+                db_path=ce_cfg.path,
+            )
+
+        # Phase 34: Policy reload manager
+        reload_manager = None
+        if event_store is not None and policy_resolver is not None:
+            from agent_app.runtime.policy_reload import PolicyReloadManager
+            reload_manager = PolicyReloadManager(
+                resolver=policy_resolver,
+                event_store=event_store,
+            )
+
         release_service = PolicyReleaseService(
             bundle_store=bundle_store,
             replay_runner=replay_runner,
@@ -523,6 +554,9 @@ def build_app(
             ring_store=ring_store,
             ring_assignment_store=ring_assignment_store,
             ring_router=ring_router,
+            event_store=event_store,
+            reload_manager=reload_manager,
+            strict=(release_config.change_events.strict if release_config.change_events else False),
         )
         app._release_service = release_service
         if environment_store is not None:
@@ -533,6 +567,11 @@ def build_app(
             app._ring_assignment_store = ring_assignment_store
         if ring_router is not None:
             app._ring_router = ring_router
+        # Phase 34: Attach event_store and reload_manager for console/CLI access
+        if event_store is not None:
+            app._event_store = event_store
+        if reload_manager is not None:
+            app._reload_manager = reload_manager
     app._release_config = release_config
     return app
 
