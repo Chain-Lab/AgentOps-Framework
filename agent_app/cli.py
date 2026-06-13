@@ -422,6 +422,75 @@ def main() -> int:
     env_enable_parser.add_argument("--permissions", action="append", default=[])
     env_enable_parser.add_argument("--json", action="store_true")
 
+    # Phase 33: policy ring subcommands
+    ring_parser = policy_sub.add_parser("ring", help="Release ring management (Phase 33)")
+    ring_sub = ring_parser.add_subparsers(dest="ring_command")
+
+    ring_list_parser = ring_sub.add_parser("list", help="List release rings for an environment")
+    ring_list_parser.add_argument("--config", required=True, help="Config file path")
+    ring_list_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_list_parser.add_argument("--permissions", action="append", default=[])
+    ring_list_parser.add_argument("--json", action="store_true")
+
+    ring_create_parser = ring_sub.add_parser("create", help="Create a release ring")
+    ring_create_parser.add_argument("--config", required=True, help="Config file path")
+    ring_create_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_create_parser.add_argument("--name", required=True, help="Ring name")
+    ring_create_parser.add_argument("--actor-id", required=True, help="Who is creating")
+    ring_create_parser.add_argument("--description", default=None, help="Ring description")
+    ring_create_parser.add_argument("--is-default", action="store_true", default=False, help="Set as default ring")
+    ring_create_parser.add_argument("--permissions", action="append", default=[])
+    ring_create_parser.add_argument("--json", action="store_true")
+
+    ring_assign_parser = ring_sub.add_parser("assign", help="Assign an activation to a ring")
+    ring_assign_parser.add_argument("--config", required=True, help="Config file path")
+    ring_assign_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_assign_parser.add_argument("--ring", dest="ring_name", required=True, help="Ring name")
+    ring_assign_parser.add_argument("--activation-id", required=True, help="Activation ID to assign")
+    ring_assign_parser.add_argument("--actor-id", required=True, help="Who is assigning")
+    ring_assign_parser.add_argument("--reason", default=None, help="Reason for assignment")
+    ring_assign_parser.add_argument("--permissions", action="append", default=[])
+    ring_assign_parser.add_argument("--json", action="store_true")
+
+    ring_promote_parser = ring_sub.add_parser("promote", help="Promote canary ring activation to stable ring")
+    ring_promote_parser.add_argument("--config", required=True, help="Config file path")
+    ring_promote_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_promote_parser.add_argument("--from-ring", dest="from_ring", required=True, help="Source canary ring name")
+    ring_promote_parser.add_argument("--to-ring", dest="to_ring", required=True, help="Target stable ring name")
+    ring_promote_parser.add_argument("--actor-id", required=True, help="Who is promoting")
+    ring_promote_parser.add_argument("--reason", default=None, help="Reason for promotion")
+    ring_promote_parser.add_argument("--permissions", action="append", default=[])
+    ring_promote_parser.add_argument("--json", action="store_true")
+
+    ring_disable_parser = ring_sub.add_parser("disable", help="Disable a release ring")
+    ring_disable_parser.add_argument("--config", required=True, help="Config file path")
+    ring_disable_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_disable_parser.add_argument("--ring", dest="ring_name", required=True, help="Ring name")
+    ring_disable_parser.add_argument("--actor-id", required=True, help="Who is disabling")
+    ring_disable_parser.add_argument("--reason", default=None, help="Reason for disabling")
+    ring_disable_parser.add_argument("--permissions", action="append", default=[])
+    ring_disable_parser.add_argument("--json", action="store_true")
+
+    ring_enable_parser = ring_sub.add_parser("enable", help="Enable a disabled release ring")
+    ring_enable_parser.add_argument("--config", required=True, help="Config file path")
+    ring_enable_parser.add_argument("--environment", required=True, help="Environment name")
+    ring_enable_parser.add_argument("--ring", dest="ring_name", required=True, help="Ring name")
+    ring_enable_parser.add_argument("--actor-id", required=True, help="Who is enabling")
+    ring_enable_parser.add_argument("--permissions", action="append", default=[])
+    ring_enable_parser.add_argument("--json", action="store_true")
+
+    # Phase 33: policy canary subcommands
+    canary_parser = policy_sub.add_parser("canary", help="Canary evaluation (Phase 33)")
+    canary_sub = canary_parser.add_subparsers(dest="canary_command")
+
+    canary_eval_parser = canary_sub.add_parser("eval", help="Run canary evaluation against an activation")
+    canary_eval_parser.add_argument("--config", required=True, help="Config file path")
+    canary_eval_parser.add_argument("--environment", required=True, help="Environment name")
+    canary_eval_parser.add_argument("--ring", dest="ring_name", required=True, help="Ring name")
+    canary_eval_parser.add_argument("--activation-id", required=True, help="Activation ID to evaluate")
+    canary_eval_parser.add_argument("--suite", dest="suite_path", required=True, help="Path to eval suite YAML")
+    canary_eval_parser.add_argument("--json", action="store_true")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -639,6 +708,26 @@ def main() -> int:
             return asyncio.run(_cmd_policy_environment_disable(args))
         if args.environment_command == "enable":
             return asyncio.run(_cmd_policy_environment_enable(args))
+
+    # Phase 33: policy ring subcommands
+    if args.command == "policy" and args.policy_command == "ring":
+        if args.ring_command == "list":
+            return asyncio.run(_cmd_policy_ring_list(args))
+        if args.ring_command == "create":
+            return asyncio.run(_cmd_policy_ring_create(args))
+        if args.ring_command == "assign":
+            return asyncio.run(_cmd_policy_ring_assign(args))
+        if args.ring_command == "promote":
+            return asyncio.run(_cmd_policy_ring_promote(args))
+        if args.ring_command == "disable":
+            return asyncio.run(_cmd_policy_ring_disable(args))
+        if args.ring_command == "enable":
+            return asyncio.run(_cmd_policy_ring_enable(args))
+
+    # Phase 33: policy canary subcommands
+    if args.command == "policy" and args.policy_command == "canary":
+        if args.canary_command == "eval":
+            return asyncio.run(_cmd_policy_canary_eval(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -2419,6 +2508,28 @@ def _get_release_service(app: Any) -> Any:
             db_path=env_path,
         )
 
+    # -- Phase 33: Ring store --
+    ring_store = None
+    if getattr(release_config, "rings", None):
+        ring_type = getattr(release_config.rings, "type", "memory")
+        ring_path = getattr(release_config.rings, "path", None)
+        from agent_app.runtime.policy_ring_store import create_release_ring_store
+        ring_store = create_release_ring_store(
+            store_type=ring_type,
+            db_path=ring_path,
+        )
+
+    # -- Phase 33: Ring assignment store --
+    ring_assignment_store = None
+    if getattr(release_config, "ring_assignments", None):
+        ra_type = getattr(release_config.ring_assignments, "type", "memory")
+        ra_path = getattr(release_config.ring_assignments, "path", None)
+        from agent_app.runtime.policy_ring_assignment_store import create_ring_assignment_store
+        ring_assignment_store = create_ring_assignment_store(
+            store_type=ra_type,
+            db_path=ra_path,
+        )
+
     # Build rules from config
     rules = []
     for rule_cfg in getattr(release_config, "rules", []):
@@ -2461,6 +2572,8 @@ def _get_release_service(app: Any) -> Any:
         activation_store=activation_store,
         policy_resolver=policy_resolver,
         environment_store=environment_store,
+        ring_store=ring_store,
+        ring_assignment_store=ring_assignment_store,
     )
     # Wire bundle_store into resolver now that it exists
     if policy_resolver is not None:
@@ -3071,6 +3184,449 @@ async def _cmd_policy_activation_rollback(args: argparse.Namespace) -> int:
         if args.reason:
             print(f"Reason:         {args.reason}")
     return 0
+
+
+# -- Phase 33: Ring management CLI commands --
+
+
+async def _cmd_policy_ring_list(args: argparse.Namespace) -> int:
+    """List release rings for an environment."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context("cli_viewer", args.permissions)
+    try:
+        await service._check_permission(PolicyReleasePermission.RING_VIEW, context)
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+
+    ring_store = service.ring_store
+    if ring_store is None:
+        print("Ring store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        rings = await ring_store.list(environment=args.environment)
+    except Exception as exc:
+        print(f"Error listing rings: {exc}", file=sys.stderr)
+        return 1
+
+    if not rings:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No release rings found.")
+        return 0
+
+    if args.json:
+        data = []
+        for r in rings:
+            entry = {
+                "ring_id": r.ring_id,
+                "name": r.name,
+                "environment": r.environment,
+                "status": r.status.value if hasattr(r.status, "value") else r.status,
+                "is_default": r.is_default,
+                "description": r.description,
+            }
+            data.append(entry)
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Ring ID':<20} {'Name':<15} {'Status':<12} {'Default':<10}")
+        print("-" * 60)
+        for r in rings:
+            status_str = r.status.value if hasattr(r.status, "value") else r.status
+            default_str = "yes" if r.is_default else "no"
+            print(f"{r.ring_id:<20} {r.name:<15} {status_str:<12} {default_str:<10}")
+    return 0
+
+
+async def _cmd_policy_ring_create(args: argparse.Namespace) -> int:
+    """Create a release ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        ring = await service.create_ring(
+            environment=args.environment,
+            name=args.name,
+            created_by=args.actor_id,
+            context=context,
+            description=args.description,
+            is_default=args.is_default,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error creating ring: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "ring_id": ring.ring_id,
+            "name": ring.name,
+            "environment": ring.environment,
+            "status": ring.status.value if hasattr(ring.status, "value") else ring.status,
+            "is_default": ring.is_default,
+            "description": ring.description,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Ring '{ring.name}' created")
+        print()
+        print(f"Ring ID:     {ring.ring_id}")
+        print(f"Name:        {ring.name}")
+        print(f"Environment: {ring.environment}")
+        status_str = ring.status.value if hasattr(ring.status, "value") else ring.status
+        print(f"Status:      {status_str}")
+        if ring.is_default:
+            print("Default:     yes")
+        if ring.description:
+            print(f"Description: {ring.description}")
+    return 0
+
+
+async def _cmd_policy_ring_assign(args: argparse.Namespace) -> int:
+    """Assign an activation to a ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        assignment = await service.assign_activation_to_ring(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            activation_id=args.activation_id,
+            assigned_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error assigning activation to ring: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "assignment_id": assignment.assignment_id,
+            "environment": assignment.environment,
+            "ring_name": assignment.ring_name,
+            "activation_id": assignment.activation_id,
+            "status": assignment.status.value if hasattr(assignment.status, "value") else assignment.status,
+            "assigned_by": assignment.assigned_by,
+            "reason": assignment.reason,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Activation assigned to ring '{assignment.ring_name}'")
+        print()
+        print(f"Assignment ID: {assignment.assignment_id}")
+        print(f"Ring:          {assignment.ring_name}")
+        print(f"Activation ID: {assignment.activation_id}")
+        status_str = assignment.status.value if hasattr(assignment.status, "value") else assignment.status
+        print(f"Status:        {status_str}")
+        print(f"Assigned by:   {assignment.assigned_by}")
+        if assignment.reason:
+            print(f"Reason:        {assignment.reason}")
+    return 0
+
+
+async def _cmd_policy_ring_promote(args: argparse.Namespace) -> int:
+    """Promote canary ring's activation to stable ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        assignment = await service.promote_canary_to_stable(
+            environment=args.environment,
+            canary_ring=args.from_ring,
+            stable_ring=args.to_ring,
+            promoted_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error promoting canary to stable: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "assignment_id": assignment.assignment_id,
+            "environment": assignment.environment,
+            "ring_name": assignment.ring_name,
+            "activation_id": assignment.activation_id,
+            "status": assignment.status.value if hasattr(assignment.status, "value") else assignment.status,
+            "assigned_by": assignment.assigned_by,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Promoted activation from '{args.from_ring}' to '{args.to_ring}'")
+        print()
+        print(f"Assignment ID: {assignment.assignment_id}")
+        print(f"Target Ring:   {assignment.ring_name}")
+        print(f"Activation ID: {assignment.activation_id}")
+        status_str = assignment.status.value if hasattr(assignment.status, "value") else assignment.status
+        print(f"Status:        {status_str}")
+        print(f"Promoted by:   {assignment.assigned_by}")
+    return 0
+
+
+async def _cmd_policy_ring_disable(args: argparse.Namespace) -> int:
+    """Disable a release ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        ring = await service.disable_ring(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            disabled_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error disabling ring: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "ring_id": ring.ring_id,
+            "name": ring.name,
+            "environment": ring.environment,
+            "status": ring.status.value if hasattr(ring.status, "value") else ring.status,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Ring '{ring.name}' disabled")
+        print(f"  Environment: {ring.environment}")
+        status_str = ring.status.value if hasattr(ring.status, "value") else ring.status
+        print(f"  Status:      {status_str}")
+        if args.reason:
+            print(f"  Reason:      {args.reason}")
+    return 0
+
+
+async def _cmd_policy_ring_enable(args: argparse.Namespace) -> int:
+    """Enable a disabled release ring."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+    try:
+        ring = await service.enable_ring(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            enabled_by=args.actor_id,
+            context=context,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error enabling ring: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "ring_id": ring.ring_id,
+            "name": ring.name,
+            "environment": ring.environment,
+            "status": ring.status.value if hasattr(ring.status, "value") else ring.status,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"Ring '{ring.name}' enabled")
+        print(f"  Environment: {ring.environment}")
+        status_str = ring.status.value if hasattr(ring.status, "value") else ring.status
+        print(f"  Status:      {status_str}")
+    return 0
+
+
+# -- Phase 33: Canary eval CLI command --
+
+
+async def _cmd_policy_canary_eval(args: argparse.Namespace) -> int:
+    """Run canary evaluation against an activation."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_release_service(app)
+    if service is None:
+        print("Policy release not configured.", file=sys.stderr)
+        return 1
+
+    ring_store = service.ring_store
+    if ring_store is None:
+        print("Ring store not configured.", file=sys.stderr)
+        return 1
+
+    # Verify the ring exists
+    try:
+        ring = await ring_store.get_by_name(environment=args.environment, name=args.ring_name)
+    except Exception as exc:
+        print(f"Error looking up ring: {exc}", file=sys.stderr)
+        return 1
+
+    if ring is None:
+        print(f"Ring '{args.ring_name}' not found in environment '{args.environment}'.", file=sys.stderr)
+        return 1
+
+    # Try to load and run the canary eval runner
+    try:
+        from agent_app.evals.canary import CanaryEvalRunner, CanaryEvalResult
+    except ImportError:
+        print("CanaryEvalRunner not available (agent_app.evals.canary not implemented).", file=sys.stderr)
+        return 1
+
+    try:
+        runner = CanaryEvalRunner(
+            ring_store=ring_store,
+            ring_assignment_store=service.ring_assignment_store,
+        )
+        result = await runner.run_eval(
+            environment=args.environment,
+            ring_name=args.ring_name,
+            activation_id=args.activation_id,
+            suite_path=args.suite_path,
+        )
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running canary eval: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "ring": args.ring_name,
+            "environment": args.environment,
+            "activation_id": args.activation_id,
+            "passed": result.passed if hasattr(result, "passed") else False,
+            "total": result.total if hasattr(result, "total") else 0,
+            "passed_count": result.passed_count if hasattr(result, "passed_count") else 0,
+            "failed_count": result.failed_count if hasattr(result, "failed_count") else 0,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        passed = result.passed if hasattr(result, "passed") else False
+        status = "PASSED" if passed else "FAILED"
+        print(f"Canary eval {status}")
+        print()
+        print(f"Ring:         {args.ring_name}")
+        print(f"Environment:  {args.environment}")
+        print(f"Activation:   {args.activation_id}")
+        if hasattr(result, "total"):
+            print(f"Total:        {result.total}")
+        if hasattr(result, "passed_count"):
+            print(f"Passed:       {result.passed_count}")
+        if hasattr(result, "failed_count"):
+            print(f"Failed:       {result.failed_count}")
+
+    passed = result.passed if hasattr(result, "passed") else False
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

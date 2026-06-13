@@ -59,6 +59,7 @@ class PolicyReleaseService:
         environment_store: Any = None,
         ring_store: Any = None,
         ring_assignment_store: Any = None,
+        ring_router: Any = None,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -78,6 +79,7 @@ class PolicyReleaseService:
         self._environment_store = environment_store
         self._ring_store = ring_store
         self._ring_assignment_store = ring_assignment_store
+        self._ring_router = ring_router
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
