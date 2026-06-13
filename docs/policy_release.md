@@ -1273,3 +1273,412 @@ passed via form data (`permissions` field, comma-separated).
 7. **No cross-environment promotion** — Promotion operates within a single
    environment. Promoting a canary ring from staging to prod requires separate
    operations in each environment.
+
+---
+
+# Phase 34: Runtime Reload Hooks, Cache Invalidation, and Deterministic Canary Routing
+
+## Overview
+
+**Phase 34** adds runtime reload notifications, structured change events, resolver
+cache introspection, and deterministic canary percentage routing to the Phase 33
+policy release system. It provides:
+
+1. **Policy Change Events** — Structured event model with 12 event types, append-only event store
+2. **PolicyReloadManager** — Runtime reload notifications with hook management
+3. **Resolver Cache Status** — Introspection and targeted invalidation for resolver cache
+4. **Deterministic Canary Percentage Routing** — SHA-256 hash-based routing with configurable canary percentage
+5. **AppRunner Ring Router Integration** — Policy metadata in AppRunResult
+6. **Config Schema** — PolicyChangeEventsConfig, PolicyReloadConfig, RingRoutingConfig
+7. **CLI Commands** — reload request/status, events list, routing simulate
+8. **Console Pages** — Events, reload, routing simulator
+9. **RBAC Permissions** — RELOAD_REQUEST, RELOAD_VIEW, EVENT_VIEW, ROUTING_SIMULATE
+
+## Policy Change Events
+
+### PolicyChangeEventType Enum
+
+12 event types covering all policy lifecycle changes:
+
+| Event Type | Description |
+|-----------|-------------|
+| `BUNDLE_CREATED` | New bundle created (DRAFT) |
+| `BUNDLE_ACTIVATED` | Bundle promoted to ACTIVE |
+| `BUNDLE_ARCHIVED` | Bundle archived (superseded) |
+| `BUNDLE_ROLLED_BACK` | Bundle rolled back |
+| `GATE_PASSED` | Gate evaluation passed |
+| `GATE_FAILED` | Gate evaluation failed |
+| `PROMOTION_REQUESTED` | Promotion request created |
+| `PROMOTION_APPROVED` | Promotion request approved |
+| `PROMOTION_REJECTED` | Promotion request rejected |
+| `PROMOTION_EXECUTED` | Promotion executed, bundle activated |
+| `ACTIVATION_CHANGED` | Environment activation changed (created, superseded, or rolled back) |
+| `MANUAL_RELOAD_REQUESTED` | Manual reload requested via reload manager |
+
+### PolicyChangeEvent Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | `str` | Unique ID (`pce_` prefix) |
+| `event_type` | `PolicyChangeEventType` | Event type from the enum above |
+| `environment` | `str \| None` | Target environment (if applicable) |
+| `ring_name` | `str \| None` | Target ring name (if applicable) |
+| `bundle_id` | `str \| None` | Affected bundle ID |
+| `actor_id` | `str \| None` | Who triggered the change |
+| `reason` | `str \| None` | Why the change was made |
+| `metadata` | `dict[str, Any]` | Arbitrary event metadata |
+| `created_at` | `datetime` | Event timestamp (UTC) |
+
+### PolicyChangeEventStore
+
+Append-only event store following the Protocol + InMemory + SQLite pattern:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `append()` | `append(event: PolicyChangeEvent) -> PolicyChangeEvent` | Append a new event |
+| `get()` | `get(event_id: str) -> PolicyChangeEvent \| None` | Get by event ID |
+| `list()` | `list(environment=None, event_type=None, limit=100) -> list[PolicyChangeEvent]` | List with optional filters |
+| `count()` | `count(environment=None) -> int` | Count events, optionally filtered by environment |
+
+**Factory:** `create_policy_change_event_store(store_type, db_path)` supports `"memory"` and `"sqlite"` types.
+
+**Append-only guarantee:** Events can only be appended, never modified or deleted. This
+ensures a complete audit trail for compliance and debugging.
+
+### Event Emission from PolicyReleaseService
+
+PolicyReleaseService emits change events after each state change. 11 event types
+are emitted automatically:
+
+| State Change | Event Type Emitted |
+|-------------|-------------------|
+| Bundle created | `BUNDLE_CREATED` |
+| Bundle activated (promoted) | `BUNDLE_ACTIVATED` |
+| Bundle archived | `BUNDLE_ARCHIVED` |
+| Bundle rolled back | `BUNDLE_ROLLED_BACK` |
+| Gate passed | `GATE_PASSED` |
+| Gate failed | `GATE_FAILED` |
+| Promotion requested | `PROMOTION_REQUESTED` |
+| Promotion approved | `PROMOTION_APPROVED` |
+| Promotion rejected | `PROMOTION_REJECTED` |
+| Promotion executed | `PROMOTION_EXECUTED` |
+| Activation changed | `ACTIVATION_CHANGED` |
+
+**Non-strict mode (default):** Event emission failures are logged but do not corrupt
+the main state transition. If the event store is unavailable, the policy operation
+still succeeds.
+
+**Strict mode:** Event emission failures are propagated as exceptions. Use this when
+event auditability is more important than availability.
+
+## Reload Manager and Hooks
+
+### PolicyReloadManager
+
+Runtime component for coordinating reload notifications and hook execution.
+
+#### `request_reload(environment, actor_id, reason) -> ReloadResult`
+
+1. Creates a `MANUAL_RELOAD_REQUESTED` change event
+2. Calls `refresh_resolver()` to invalidate cached policy
+3. Calls all registered hooks in sequence
+4. Returns `ReloadResult` with per-hook outcomes
+
+#### `refresh_resolver(environment, ring_name) -> None`
+
+Clears resolver cache for the specified environment/ring (or all if not specified).
+
+#### `register_hook(name, hook_fn) -> None`
+
+Registers a hook function to be called during reload. Multiple hooks are called
+in sequence. Hook failures are captured in `ReloadResult` per-hook, not raised
+as exceptions.
+
+### Hook Protocol
+
+```python
+async def hook_fn(environment: str, reason: str | None) -> None:
+    """Called during reload. Raise to report failure."""
+    ...
+```
+
+Hooks are called with the target environment and the reload reason. If a hook
+raises an exception, it is captured in the `ReloadResult.hook_results` list
+with `success=False` and the error message. Other hooks continue executing.
+
+### ReloadResult Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `environment` | `str` | Target environment |
+| `cache_cleared` | `bool` | Whether resolver cache was cleared |
+| `hooks_called` | `int` | Number of hooks invoked |
+| `hook_results` | `list[HookResult]` | Per-hook outcomes |
+| `event_id` | `str \| None` | Change event ID for the reload request |
+| `error` | `str \| None` | Overall error message if reload failed |
+
+### HookResult Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hook_name` | `str` | Name of the hook |
+| `success` | `bool` | Whether the hook succeeded |
+| `error` | `str \| None` | Error message if the hook failed |
+
+## Resolver Cache Status
+
+ActivePolicyResolver gains introspection methods for cache visibility:
+
+### `cache_status() -> CacheStatus`
+
+Returns current cache state:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entries` | `int` | Number of cached entries |
+| `keys` | `list[str]` | Human-readable cache keys |
+| `ttl_seconds` | `float \| None` | Configured TTL (None if caching disabled) |
+
+### `refresh(environment=None, ring_name=None) -> None`
+
+Clears cache entries. With no arguments, clears all entries. With `environment`,
+clears entries for that environment (both plain and ring-scoped). With
+`environment` and `ring_name`, clears only ring-scoped entries for that
+environment+ring combination.
+
+### `clear_cache(environment=None, ring_name=None) -> None`
+
+Synchronous cache clearing with the same behavior as `refresh()`.
+
+**Disabled environment/ring behavior:** When an environment or ring is disabled,
+the resolver does not serve stale cache. Cache entries for disabled targets
+are removed immediately on state change.
+
+## Deterministic Canary Percentage Routing
+
+### RingRoutingConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `False` | Enable percentage-based routing |
+| `canary_percentage` | `int` | `0` | Percentage of traffic routed to canary (0-100) |
+| `canary_ring` | `str` | `"canary"` | Name of the canary ring |
+| `stable_ring` | `str` | `"stable"` | Name of the stable ring |
+| `hash_key` | `str` | `"actor_id"` | Key to hash for routing: `actor_id`, `user_id`, or `tenant_id` |
+
+### Resolution Order
+
+1. **Explicit context override** — `context.policy_ring` takes priority if set
+2. **Deterministic routing** — If `RingRoutingConfig.enabled`:
+   - Compute SHA-256 hash of `environment:hash_key_value`
+   - Convert first 8 hex chars to integer (0-4294967295)
+   - Normalize to 0-100 percentage: `(hash_int / 4294967295) * 100`
+   - If percentage < `canary_percentage`, route to `canary_ring`; else route to `stable_ring`
+3. **Store default ring** — If ring store configured, look up the ring with `is_default=True`
+4. **Configured fallback** — Fall back to `default_ring` parameter (default: `"stable"`)
+
+### `simulate_routing(environment, actor_id, user_id, tenant_id) -> RoutingSimulationResult`
+
+Returns full routing info for debugging without side effects:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `environment` | `str` | Target environment |
+| `actor_id` | `str \| None` | Actor ID used for hashing |
+| `user_id` | `str \| None` | User ID used for hashing |
+| `tenant_id` | `str \| None` | Tenant ID used for hashing |
+| `hash_value` | `str` | SHA-256 hex digest of the hash input |
+| `hash_percentage` | `float` | Derived percentage (0-100) |
+| `routed_ring` | `str` | Which ring the request routes to |
+| `canary_percentage` | `int` | Configured canary percentage |
+| `canary_ring` | `str` | Canary ring name |
+| `stable_ring` | `str` | Stable ring name |
+
+**Deterministic guarantee:** The same `environment:key` pair always routes to
+the same ring, even across process restarts. This is achieved by using SHA-256
+hashing rather than random assignment.
+
+## Runtime Metadata
+
+AppRunner records policy metadata in `AppRunResult.metadata`:
+
+| Key | Source | Description |
+|-----|--------|-------------|
+| `policy_environment` | `RunContext.policy_environment` | Environment used for resolution |
+| `policy_ring` | Resolved ring name | Ring the request routed to |
+| `policy_bundle_id` | `PolicyBundle.bundle_id` | ID of the resolved bundle |
+| `policy_config_hash` | `PolicyBundle.config_hash` | SHA-256 hash of the bundle config |
+
+This metadata is available for logging, metrics, and debugging without
+requiring access to the resolver or stores.
+
+## Config Schema
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    environments:
+      type: sqlite
+      path: .agent_app/policy_environments.db
+    rings:
+      type: sqlite
+      path: .agent_app/policy_release_rings.db
+    ring_assignments:
+      type: sqlite
+      path: .agent_app/policy_ring_activation_assignments.db
+    change_events:                      # Phase 34
+      type: sqlite
+      path: .agent_app/policy_change_events.db
+      strict: false                     # strict mode: event failures propagate
+    reload:                             # Phase 34
+      enabled: true
+    routing:                            # Phase 34
+      enabled: false
+      canary_percentage: 0
+      canary_ring: canary
+      stable_ring: stable
+      hash_key: actor_id                # actor_id | user_id | tenant_id
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod
+      require_active_policy: false
+      cache_ttl_seconds: 300
+      ring: null
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config sections:
+- `change_events` — PolicyChangeEventsConfig with `type`, `path`, and `strict` (default: `None`, backward compatible)
+- `reload` — PolicyReloadConfig with `enabled` (default: `None`, backward compatible)
+- `routing` — RingRoutingConfig with `enabled`, `canary_percentage`, `canary_ring`, `stable_ring`, `hash_key`
+
+## CLI Commands
+
+```bash
+# Request reload
+agentapp policy reload request --config agentapp.yaml --environment prod --ring stable --actor-id ops_admin --reason "Refresh after activation"
+
+# Check cache status
+agentapp policy reload status --config agentapp.yaml
+
+# List change events
+agentapp policy events list --config agentapp.yaml --environment prod --limit 20
+
+# Simulate routing
+agentapp policy routing simulate --config agentapp.yaml --environment prod --actor-id user_123
+```
+
+All Phase 34 commands support `--config`, `--json` for JSON output, and
+`--actor-id` / `--permissions` for RBAC testing.
+
+## Console Pages
+
+| Route | Template | Method | Description |
+|-------|----------|--------|-------------|
+| `GET /events` | `policy_events.html` | GET | List recent change events with type and environment filters |
+| `GET /reload` | `policy_reload.html` | GET | Show cache status and allow reload requests |
+| `POST /reload` | `policy_reload.html` | POST | Submit reload request |
+| `GET /routing` | `policy_routing.html` | GET | Routing simulator form |
+| `POST /routing` | `policy_routing.html` | POST | Simulate routing for given parameters |
+
+The events page supports filtering by environment and event type. The reload
+page shows resolver cache status (entry count, keys, TTL) and provides a form
+for requesting reloads. The routing simulator shows which ring a request would
+route to based on the configured canary percentage and hash key.
+
+## RBAC Permissions (Phase 34 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `RELOAD_REQUEST` | `policy.reload.request` | Requires grant |
+| `RELOAD_VIEW` | `policy.reload.view` | Allowed |
+| `EVENT_VIEW` | `policy.event.view` | Allowed |
+| `ROUTING_SIMULATE` | `policy.routing.simulate` | Allowed |
+
+`RELOAD_VIEW`, `EVENT_VIEW`, and `ROUTING_SIMULATE` are default-allowed
+alongside `BUNDLE_CREATE`, `GATE_RUN`, `ENVIRONMENT_VIEW`, and `RING_VIEW`.
+`RELOAD_REQUEST` requires explicit grants in `RunContext.permissions`, consistent
+with other mutation operations.
+
+## Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.reload.requested` | Manual reload requested via PolicyReloadManager |
+| `policy.reload.hook_succeeded` | A reload hook executed successfully |
+| `policy.reload.hook_failed` | A reload hook raised an exception |
+| `policy.event.emission_failed` | Change event emission failed (non-strict mode) |
+| `policy.event.emission_strict_failed` | Change event emission failed (strict mode, propagated) |
+| `policy.routing.simulated` | Routing simulation performed |
+
+## Design Decisions
+
+1. **Change events emitted AFTER state changes succeed** — Events record what
+   happened, not what is about to happen. This means event emission failures
+   cannot corrupt the main state transition (in non-strict mode).
+
+2. **Non-strict event emission default** — Event emission failures are logged
+   but do not prevent the policy operation from completing. This prioritizes
+   availability over perfect auditability. Strict mode is available when
+   auditability is more important.
+
+3. **Resolver cache uses monotonic time for TTL expiration** — `time.monotonic()`
+   is used instead of `time.time()` for cache TTL checks, preventing issues
+   with system clock adjustments (NTP corrections, leap seconds, manual changes).
+
+4. **Deterministic routing uses SHA-256** — Hash-based routing ensures the same
+   `environment:key` pair always routes to the same ring across process restarts.
+   This is critical for canary deployments where users must see consistent behavior.
+
+5. **Hook failures captured per-hook, not propagated** — When a hook raises an
+   exception, the error is captured in `HookResult` and other hooks continue
+   executing. This prevents a single misbehaving hook from blocking the entire
+   reload process.
+
+6. **RELOAD_VIEW, EVENT_VIEW, ROUTING_SIMULATE are default-allowed** — These
+   are read-only/diagnostic operations with no side effects. Only
+   `RELOAD_REQUEST` (which triggers cache invalidation and hook execution)
+   requires explicit permission.
+
+7. **Append-only event store** — Events can only be appended, never modified or
+   deleted. This ensures a complete audit trail for compliance and debugging.
+
+## Known Limitations
+
+1. **Reload manager is local-process only** — No distributed pub/sub for reload
+   notifications across multiple process instances.
+
+2. **SQLite event store is not a distributed event bus** — Events are stored
+   locally; no Kafka/RabbitMQ integration.
+
+3. **No background polling daemon** — Resolver cache is not automatically
+   refreshed; relies on TTL expiration or explicit reload requests.
+
+4. **No websocket push reload** — No real-time notification to running processes
+   when a reload occurs.
+
+5. **No service mesh traffic splitting** — Canary routing is framework-level
+   deterministic routing, not infrastructure-level traffic splitting (no Istio
+   or Envoy integration).
+
+6. **No automatic rollback based on live metrics** — Canary percentage is
+   manually configured; no automatic rollback on error rate spikes.
+
+7. **No multi-region rollout coordination** — Routing configuration is
+   per-environment; no coordination across geographic regions.

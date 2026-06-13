@@ -2,6 +2,22 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## [v0.22.0] - 2026-06-13
+
+### Added
+
+- PolicyChangeEvent model with 12 event types (policy_change_event.py)
+- PolicyChangeEventStore (InMemory + SQLite) for append-only event persistence
+- PolicyReloadManager for runtime reload notifications and hook management
+- ActivePolicyResolver cache improvements: cache_status(), refresh(env, ring), clear_cache(env, ring)
+- PolicyReleaseService change event emission for 11 state change types
+- Deterministic canary percentage routing via RingRoutingConfig and SHA-256 hash
+- AppRunner ring router integration with policy metadata in AppRunResult
+- PolicyChangeEventsConfig, PolicyReloadConfig, RingRoutingConfig in config schema
+- CLI commands: reload request/status, events list, routing simulate
+- Console pages: events list, reload status, routing simulator
+- RBAC permissions: RELOAD_REQUEST, RELOAD_VIEW, EVENT_VIEW, ROUTING_SIMULATE
+
 ## Phase 33: Release Rings, Canary Evaluation, and Ring-Aware Policy Resolution (0.21.0)
 
 ### Added
