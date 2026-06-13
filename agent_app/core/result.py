@@ -110,3 +110,7 @@ class AppRunResult(BaseModel):
         default_factory=list,
         description="Per-node results for DAG workflow execution",
     )
+    # Phase 34: additional metadata (policy info, etc.)
+    metadata: dict[str, object] = Field(
+        default_factory=dict, description="Additional metadata"
+    )

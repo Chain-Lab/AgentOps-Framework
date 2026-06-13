@@ -60,6 +60,7 @@ class AgentApp:
         policy_engine: Any = None,
         policy_decision_store: Any = None,
         policy_resolver: Any = None,  # Phase 31
+        ring_router: Any = None,  # Phase 34
     ) -> None:
         from agent_app.registry.agent_registry import AgentRegistry
         from agent_app.registry.tool_registry import ToolRegistry
@@ -99,11 +100,22 @@ class AgentApp:
         self.policy_decision_store = policy_decision_store
         # Phase 31: Policy resolver for runtime activation
         self._policy_resolver = policy_resolver
+        # Phase 34: Ring router for ring-aware policy resolution
+        self._ring_router = ring_router
         # Phase 17: Recovery config for auto-recovery policy
         self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
         self._native_agents: dict[str, Any] = {}
         self.trace_collector = trace_collector
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def ring_router(self) -> Any:
+        """Phase 34: Return the ring router, if configured."""
+        return getattr(self, "_ring_router", None)
 
     # ------------------------------------------------------------------
     # Registration helpers
@@ -1281,4 +1293,5 @@ class AgentApp:
                 policy_engine=getattr(self, "policy_engine", None),
                 policy_decision_store=getattr(self, "policy_decision_store", None),
                 policy_resolver=getattr(self, "_policy_resolver", None),
+                ring_router=getattr(self, "_ring_router", None),
             )

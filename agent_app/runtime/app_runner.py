@@ -63,6 +63,7 @@ class AppRunner:
         policy_engine: Any = None,
         policy_decision_store: Any = None,
         policy_resolver: Any = None,  # Phase 31
+        ring_router: Any = None,  # Phase 34
     ) -> None:
         from agent_app.governance.audit import InMemoryAuditLogger
         from agent_app.governance.permission import DefaultPermissionChecker
@@ -85,6 +86,8 @@ class AppRunner:
         self._dag_lease_config = dag_lease_config
         # Phase 31: Policy resolver for runtime activation
         self._policy_resolver = policy_resolver
+        # Phase 34: Ring router for ring-aware policy resolution
+        self._ring_router = ring_router
 
         # Phase 12: observability
         self.trace_collector = trace_collector
@@ -218,6 +221,12 @@ class AppRunner:
             agent_name=entry_agent_name,
         )
 
+        # Phase 34: Extract policy fields from metadata if not already set
+        if context.policy_environment is None and "policy_environment" in merged_meta:
+            context.policy_environment = str(merged_meta["policy_environment"])
+        if context.policy_ring is None and "policy_ring" in merged_meta:
+            context.policy_ring = str(merged_meta["policy_ring"])
+
         # -- Phase 31: Resolve active policy bundle --
         resolved_bundle = await self._resolve_active_policy(context)
         if resolved_bundle is not None:
@@ -245,6 +254,8 @@ class AppRunner:
                 }] if approval else [],
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
+            # Phase 34: Attach policy metadata to result
+            self._attach_policy_metadata(result, context)
             await self._append_to_session(session_id, input, result)
 
             # -- Phase 9: Save interrupted run state --
@@ -293,6 +304,8 @@ class AppRunner:
                 }],
                 latency_ms=int((time.perf_counter() - t0) * 1000),
             )
+            # Phase 34: Attach policy metadata to result
+            self._attach_policy_metadata(result, context)
             await self._append_to_session(session_id, input, result)
             self._record_event(
                 "run.failed",
@@ -314,6 +327,8 @@ class AppRunner:
                 tools=[],
                 **kwargs,
             )
+            # Phase 34: Attach policy metadata to result
+            self._attach_policy_metadata(result, context)
         except Exception as exc:
             latency = int((time.perf_counter() - t0) * 1000)
             error_detail = {"type": "backend_execution_failed", "message": "Backend execution failed; check server logs for details."}
@@ -323,6 +338,8 @@ class AppRunner:
                 error=error_detail,
                 latency_ms=latency,
             )
+            # Phase 34: Attach policy metadata to result
+            self._attach_policy_metadata(result, context)
             self._record_event(
                 "run.failed",
                 trace_id=trace_id,
@@ -470,8 +487,8 @@ class AppRunner:
     async def _resolve_active_policy(self, context: RunContext) -> Any | None:
         """Resolve the active policy bundle for the run's environment.
 
-        Phase 31: Uses the policy resolver to find the active bundle
-        for context.policy_environment (defaults to 'dev').
+        Phase 31: Uses the policy resolver to find the active bundle.
+        Phase 34: Uses ring router to select ring, then resolves for ring.
 
         Args:
             context: The current run context.
@@ -484,11 +501,49 @@ class AppRunner:
             return None
 
         environment = context.policy_environment or "dev"
+
+        # Phase 34: Use ring router if available and no explicit ring set
+        if self._ring_router is not None and context.policy_ring is None:
+            try:
+                ring_name = await self._ring_router.resolve_ring(environment, context)
+                context.policy_ring = ring_name
+            except (KeyError, RuntimeError):
+                # Ring resolution failed, fall through to env-only resolution
+                pass
+
+        # Try ring-aware resolution first if ring is set
+        if context.policy_ring is not None:
+            try:
+                bundle = await self._policy_resolver.resolve_active_bundle_for_ring(
+                    environment, context.policy_ring
+                )
+                return bundle
+            except (KeyError, ValueError):
+                pass
+
+        # Fall back to environment-only resolution
         try:
             bundle = await self._policy_resolver.resolve_active_bundle(environment)
             return bundle
         except (KeyError, ValueError):
             return None
+
+    def _attach_policy_metadata(self, result: AppRunResult, context: RunContext) -> None:
+        """Attach policy metadata to the run result.
+
+        Phase 34: Records policy_environment, policy_ring, and bundle details
+        into result.metadata so callers can inspect which policy governed the run.
+        """
+        result_metadata: dict[str, object] = {}
+        if context.policy_environment:
+            result_metadata["policy_environment"] = context.policy_environment
+        if context.policy_ring:
+            result_metadata["policy_ring"] = context.policy_ring
+        if context.resolved_policy_bundle is not None:
+            result_metadata["policy_bundle_id"] = context.resolved_policy_bundle.bundle_id
+            result_metadata["policy_config_hash"] = context.resolved_policy_bundle.config_hash
+        if result_metadata:
+            result.metadata.update(result_metadata)
 
     # ------------------------------------------------------------------
     # Internals
