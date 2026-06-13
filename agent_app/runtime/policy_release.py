@@ -57,6 +57,8 @@ class PolicyReleaseService:
         activation_store: Any = None,
         policy_resolver: Any = None,
         environment_store: Any = None,
+        ring_store: Any = None,
+        ring_assignment_store: Any = None,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -74,6 +76,8 @@ class PolicyReleaseService:
         self._activation_store = activation_store
         self._policy_resolver = policy_resolver
         self._environment_store = environment_store
+        self._ring_store = ring_store
+        self._ring_assignment_store = ring_assignment_store
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -648,6 +652,195 @@ class PolicyReleaseService:
     def environment_store(self) -> Any:
         """Access the underlying environment store."""
         return self._environment_store
+
+    @property
+    def ring_store(self) -> Any:
+        """Access the underlying release ring store."""
+        return self._ring_store
+
+    @property
+    def ring_assignment_store(self) -> Any:
+        """Access the underlying ring assignment store."""
+        return self._ring_assignment_store
+
+    async def create_ring(
+        self,
+        environment: str,
+        name: str,
+        created_by: str,
+        context: RunContext,
+        description: str | None = None,
+        is_default: bool = False,
+    ) -> Any:
+        """Create a release ring. Requires RING_CREATE permission."""
+        await self._check_permission(PolicyReleasePermission.RING_CREATE, context)
+        if self._ring_store is None:
+            raise RuntimeError("No ring store configured.")
+
+        from agent_app.governance.policy_ring import ReleaseRing
+
+        ring = ReleaseRing(
+            ring_id=f"ring_{uuid.uuid4().hex[:12]}",
+            environment=environment,
+            name=name,
+            description=description,
+            is_default=is_default,
+        )
+        ring = await self._ring_store.create(ring)
+        await self._write_audit(
+            "policy.ring.created",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "ring_id": ring.ring_id,
+                "environment": environment,
+                "name": name,
+                "is_default": is_default,
+            },
+        )
+        return ring
+
+    async def assign_activation_to_ring(
+        self,
+        environment: str,
+        ring_name: str,
+        activation_id: str,
+        assigned_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> Any:
+        """Assign an activation to a ring. Requires RING_ASSIGN permission."""
+        await self._check_permission(PolicyReleasePermission.RING_ASSIGN, context)
+        if self._ring_assignment_store is None:
+            raise RuntimeError("No ring assignment store configured.")
+
+        # Validate activation exists and belongs to same environment
+        activation = await self._activation_store.get(activation_id)
+        if activation is None:
+            raise KeyError(f"Activation '{activation_id}' not found.")
+        if activation.environment != environment:
+            raise ValueError(
+                f"Activation '{activation_id}' belongs to environment "
+                f"'{activation.environment}', not '{environment}'."
+            )
+
+        # Validate bundle exists
+        bundle = await self._bundle_store.get(activation.bundle_id)
+        if bundle is None:
+            raise KeyError(f"Bundle '{activation.bundle_id}' not found.")
+
+        # Create assignment
+        from agent_app.governance.policy_ring_assignment import RingActivationAssignment
+
+        assignment = RingActivationAssignment(
+            assignment_id=f"ra_{uuid.uuid4().hex[:12]}",
+            environment=environment,
+            ring_name=ring_name,
+            activation_id=activation_id,
+            bundle_id=activation.bundle_id,
+            config_hash=activation.config_hash,
+            assigned_by=assigned_by,
+            reason=reason,
+        )
+        assignment = await self._ring_assignment_store.assign(assignment)
+        await self._write_audit(
+            "policy.ring.assignment.created",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "assignment_id": assignment.assignment_id,
+                "environment": environment,
+                "ring_name": ring_name,
+                "activation_id": activation_id,
+                "bundle_id": activation.bundle_id,
+            },
+        )
+        return assignment
+
+    async def promote_canary_to_stable(
+        self,
+        environment: str,
+        canary_ring: str,
+        stable_ring: str,
+        promoted_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> Any:
+        """Promote canary ring's activation to stable ring. Requires RING_PROMOTE permission."""
+        await self._check_permission(PolicyReleasePermission.RING_PROMOTE, context)
+        if self._ring_assignment_store is None:
+            raise RuntimeError("No ring assignment store configured.")
+
+        # Get canary's active assignment
+        canary_assignment = await self._ring_assignment_store.get_active(
+            environment, canary_ring
+        )
+        if canary_assignment is None:
+            raise KeyError(
+                f"No active assignment for ring '{canary_ring}' in environment '{environment}'."
+            )
+
+        # Assign the same activation to stable
+        return await self.assign_activation_to_ring(
+            environment=environment,
+            ring_name=stable_ring,
+            activation_id=canary_assignment.activation_id,
+            assigned_by=promoted_by,
+            context=context,
+            reason=reason or f"Promoted from {canary_ring} to {stable_ring}",
+        )
+
+    async def disable_ring(
+        self,
+        environment: str,
+        ring_name: str,
+        disabled_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> Any:
+        """Disable a ring. Requires RING_DISABLE permission."""
+        await self._check_permission(PolicyReleasePermission.RING_DISABLE, context)
+        if self._ring_store is None:
+            raise RuntimeError("No ring store configured.")
+        ring = await self._ring_store.disable(environment, ring_name)
+        await self._write_audit(
+            "policy.ring.disabled",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "environment": environment,
+                "ring_name": ring_name,
+                "disabled_by": disabled_by,
+                "reason": reason,
+            },
+        )
+        return ring
+
+    async def enable_ring(
+        self,
+        environment: str,
+        ring_name: str,
+        enabled_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> Any:
+        """Enable a ring. Requires RING_ENABLE permission."""
+        await self._check_permission(PolicyReleasePermission.RING_ENABLE, context)
+        if self._ring_store is None:
+            raise RuntimeError("No ring store configured.")
+        ring = await self._ring_store.enable(environment, ring_name)
+        await self._write_audit(
+            "policy.ring.enabled",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "environment": environment,
+                "ring_name": ring_name,
+                "enabled_by": enabled_by,
+                "reason": reason,
+            },
+        )
+        return ring
 
     async def rollback_environment(
         self,
