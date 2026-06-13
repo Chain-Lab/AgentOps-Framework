@@ -19,6 +19,9 @@ class PolicyReleasePermission(StrEnum):
         PROMOTION_EXECUTE: Execute a policy promotion.
         ROLLBACK_EXECUTE: Execute a policy rollback.
         BYPASS_GATE: Bypass a policy gate.
+        ENVIRONMENT_DISABLE: Disable a policy environment.
+        ENVIRONMENT_ENABLE: Enable a policy environment.
+        ENVIRONMENT_VIEW: View policy environment state.
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -29,11 +32,15 @@ class PolicyReleasePermission(StrEnum):
     PROMOTION_EXECUTE = "policy.promotion.execute"
     ROLLBACK_EXECUTE = "policy.rollback.execute"
     BYPASS_GATE = "policy.gate.bypass"
+    ENVIRONMENT_DISABLE = "policy.environment.disable"
+    ENVIRONMENT_ENABLE = "policy.environment.enable"
+    ENVIRONMENT_VIEW = "policy.environment.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.BUNDLE_CREATE,
     PolicyReleasePermission.GATE_RUN,
+    PolicyReleasePermission.ENVIRONMENT_VIEW,
 }
 
 

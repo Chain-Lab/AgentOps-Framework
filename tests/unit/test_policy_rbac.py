@@ -82,3 +82,45 @@ class TestPolicyReleasePermissionChecker:
         assert await checker.check(PolicyReleasePermission.PROMOTION_EXECUTE, context) is False
         assert await checker.check(PolicyReleasePermission.ROLLBACK_EXECUTE, context) is False
         assert await checker.check(PolicyReleasePermission.BYPASS_GATE, context) is False
+
+
+class TestPhase32Permissions:
+    def test_environment_disable_permission(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.ENVIRONMENT_DISABLE == "policy.environment.disable"
+
+    def test_environment_enable_permission(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.ENVIRONMENT_ENABLE == "policy.environment.enable"
+
+    def test_environment_view_permission(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.ENVIRONMENT_VIEW == "policy.environment.view"
+
+    @pytest.mark.asyncio
+    async def test_environment_view_default_allowed(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ENVIRONMENT_VIEW, ctx) is True
+
+    @pytest.mark.asyncio
+    async def test_environment_disable_requires_grant(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ENVIRONMENT_DISABLE, ctx) is False
+        ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.environment.disable"])
+        assert await checker.check(PolicyReleasePermission.ENVIRONMENT_DISABLE, ctx_with_perm) is True
+
+    @pytest.mark.asyncio
+    async def test_environment_enable_requires_grant(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ENVIRONMENT_ENABLE, ctx) is False
+        ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.environment.enable"])
+        assert await checker.check(PolicyReleasePermission.ENVIRONMENT_ENABLE, ctx_with_perm) is True
