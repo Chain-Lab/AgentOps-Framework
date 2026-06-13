@@ -2,6 +2,49 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## Phase 33: Release Rings, Canary Evaluation, and Ring-Aware Policy Resolution (0.21.0)
+
+### Added
+
+- **ReleaseRing model** — Named deployment targets per environment (stable, canary, internal, custom) with ENABLED/DISABLED status and is_default flag
+- **ReleaseRingStore** — Protocol + InMemory + SQLite persistence; create(), get(), get_by_name(), list(), set_default(), disable(), enable() methods
+- **RingActivationAssignment model** — Assigns a specific activation to a ring with ACTIVE/SUPERSEDED/DISABLED lifecycle and supersession tracking
+- **RingActivationAssignmentStore** — Protocol + InMemory + SQLite persistence; assign() auto-supersedes previous ACTIVE assignment; get_active(), list(), disable_active() methods
+- **PolicyRingRouter** — Request-scoped ring resolution: explicit override via RunContext.policy_ring, default ring from store, configured fallback
+- **Ring-aware resolver** — ActivePolicyResolver.resolve_active_bundle_for_ring() and require_active_bundle_for_ring() with triple config_hash integrity check across assignment, activation, and bundle
+- **CanaryEvalRunner** — Runs eval suites against a specific activation for canary validation before stable promotion
+- **CanaryEvalResult** — Model capturing eval outcome: passed, total, passed_count, failed_count, per-case errors
+- **RBAC permissions** — RING_CREATE, RING_ASSIGN, RING_PROMOTE, RING_DISABLE, RING_ENABLE (require grant); RING_VIEW (default-allowed)
+- **RunContext.policy_ring** — Request-scoped ring targeting field
+- **Config extensions** — rings and ring_assignments store configs; runtime.ring default ring override
+- **CLI ring commands** — `agentapp policy ring list/create/assign/promote/disable/enable`
+- **CLI canary commands** — `agentapp policy canary eval`
+- **Console ring pages** — Ring list (GET /rings), ring detail (GET /rings/{env}/{name}), create/assign/promote/disable/enable POST actions
+- **Console templates** — policy_rings.html, policy_ring_detail.html with active assignment display and action forms
+- **Audit events** — policy.ring.created, policy.ring.disabled, policy.ring.enabled, policy.ring.assignment.created, policy.ring.promoted, policy.ring.permission_denied, policy.canary.eval_started/eval_completed/eval_failed
+- **70+ tests** — Ring model (7), ring store (13), ring assignment model (11), ring assignment router (6), RBAC (3), context (2), ring-aware resolver (7), release service (14), config (6), CLI (9), console (7), canary eval (4)
+
+### Changed
+
+- PolicyReleaseService gains create_ring(), assign_activation_to_ring(), promote_canary_to_stable(), disable_ring(), enable_ring() methods; accepts ring_store, ring_assignment_store, ring_router parameters
+- ActivePolicyResolver gains resolve_active_bundle_for_ring(), require_active_bundle_for_ring() methods; accepts ring_assignment_store, ring_store parameters; refresh() clears ring-specific cache entries
+- PolicyReleasePermission gains RING_CREATE, RING_ASSIGN, RING_PROMOTE, RING_DISABLE, RING_ENABLE, RING_VIEW values
+- PolicyReleasePermissionChecker default-allowed set includes RING_VIEW
+- RunContext gains policy_ring: str | None field
+- PolicyReleaseConfig gains rings and ring_assignments store config fields
+- PolicyReleaseRuntimeConfig gains ring: str | None default ring override field
+- CLI gains `policy ring` and `policy canary` subcommand groups
+- Console router gains ring list/detail/create/assign/promote/disable/enable routes; accepts ring_store, ring_assignment_store parameters
+- FastAPI adapter passes ring stores to console router
+- Base console template gains Rings nav link
+
+### Architecture Boundaries Maintained
+
+- Core modules (policy_ring, policy_ring_store, policy_ring_assignment, policy_ring_assignment_store, policy_ring_router, canary) have no FastAPI/Jinja2 imports
+- Console templates only mount when console is enabled
+- Ring router uses store protocols — no direct SQLite coupling
+- CLI uses lazy service initialization to avoid import cycles
+
 ## Phase 32: Policy Rollback, Emergency Disable, and Activation Safety Controls (0.20.0)
 
 ### Added

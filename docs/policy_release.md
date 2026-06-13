@@ -833,3 +833,443 @@ passed via form data.
 6. **No environment-level policy override** — Disabling an environment blocks
    resolution entirely; there is no mechanism to serve a fallback or default
    policy for a disabled environment.
+
+---
+
+# Phase 33: Release Rings, Canary Evaluation, and Ring-Aware Policy Resolution
+
+## Overview
+
+**Phase 33** adds release rings to the Phase 32 policy release system, enabling
+canary deployments and graduated rollouts of policy bundles. It provides:
+
+1. **Release Rings** — Named deployment targets per environment (stable, canary, internal, custom)
+2. **RingActivationAssignment** — Assigns a specific activation (bundle version) to a ring
+3. **PolicyRingRouter** — Request-scoped ring resolution with explicit override and default ring fallback
+4. **Ring-Aware Resolver** — `resolve_active_bundle_for_ring()` and `require_active_bundle_for_ring()` with triple integrity verification
+5. **Canary Eval Flow** — Assign activation to canary ring, run eval suite, promote to stable
+6. **RBAC Permissions** — 6 new ring permissions (RING_CREATE, RING_ASSIGN, RING_PROMOTE, RING_DISABLE, RING_ENABLE, RING_VIEW)
+7. **CLI Commands** — `agentapp policy ring` and `agentapp policy canary` subcommands
+8. **Console Pages** — Ring list and detail pages with create/assign/promote/disable/enable actions
+9. **Audit Events** — 4 new ring lifecycle events
+
+## Architecture
+
+```
+RunContext.policy_ring ──→ PolicyRingRouter.resolve_ring()
+                              │
+                              ▼
+                       ring_name (e.g. "canary")
+                              │
+                              ▼
+                   ActivePolicyResolver
+                   .resolve_active_bundle_for_ring(environment, ring_name)
+                              │
+                              ▼
+                   RingActivationAssignmentStore
+                   → PolicyActivationStore → PolicyBundleStore
+                              │
+                              ▼
+                        PolicyBundle (active for ring)
+
+CLI: agentapp policy ring list/create/assign/promote/disable/enable
+CLI: agentapp policy canary eval
+Console: GET  /rings, /rings/{env}/{name}
+         POST /rings, /rings/{env}/{name}/assign, .../promote, .../disable, .../enable
+```
+
+## ReleaseRing Model
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `ring_id` | `str` | required | Unique ID (`ring_` prefix) |
+| `environment` | `str` | required | Owning environment |
+| `name` | `str` | required | Ring name (stable, canary, internal, etc.) |
+| `description` | `str \| None` | `None` | Human-readable description |
+| `status` | `ReleaseRingStatus` | `ENABLED` | `ENABLED` or `DISABLED` |
+| `is_default` | `bool` | `False` | Whether this is the default ring for the environment |
+| `created_at` | `datetime` | `datetime.now(timezone.utc)` | Creation timestamp |
+| `updated_at` | `datetime` | `datetime.now(timezone.utc)` | Last update timestamp |
+
+**Constraints:** `UNIQUE(environment, name)` — each ring name is unique per environment.
+
+## ReleaseRingStore
+
+Protocol + InMemory + SQLite persistence, following the same pattern as
+`PolicyBundleStore` and `PolicyActivationStore`:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create()` | `create(ring: ReleaseRing) -> ReleaseRing` | Create a new ring |
+| `get()` | `get(ring_id: str) -> ReleaseRing \| None` | Get by ring ID |
+| `get_by_name()` | `get_by_name(environment: str, name: str) -> ReleaseRing \| None` | Get by environment + name |
+| `list()` | `list(environment: str \| None = None) -> list[ReleaseRing]` | List rings, optionally filtered by environment |
+| `set_default()` | `set_default(environment: str, ring_name: str) -> ReleaseRing` | Set ring as default (clears previous default) |
+| `disable()` | `disable(environment: str, ring_name: str) -> ReleaseRing` | Set ring status to DISABLED |
+| `enable()` | `enable(environment: str, ring_name: str) -> ReleaseRing` | Set ring status to ENABLED |
+
+**Factory:** `create_release_ring_store(store_type, db_path)` supports `"memory"` and `"sqlite"` types.
+
+**SQLite schema:** `policy_release_rings` table with `ring_id` as primary key and
+`UNIQUE(environment, name)` constraint.
+
+## RingActivationAssignment Model
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `assignment_id` | `str` | required | Unique ID (`ra_` prefix) |
+| `environment` | `str` | required | Target environment |
+| `ring_name` | `str` | required | Target ring name |
+| `activation_id` | `str` | required | Assigned activation ID |
+| `bundle_id` | `str` | required | Bundle ID (convenience copy) |
+| `config_hash` | `str` | required | Config hash (integrity check) |
+| `status` | `RingActivationAssignmentStatus` | `ACTIVE` | `ACTIVE`, `SUPERSEDED`, or `DISABLED` |
+| `assigned_by` | `str` | required | Who assigned this activation |
+| `reason` | `str \| None` | `None` | Assignment reason |
+| `created_at` | `datetime` | `datetime.now(timezone.utc)` | Creation timestamp |
+| `superseded_at` | `datetime \| None` | `None` | Supersession timestamp |
+| `superseded_by_assignment_id` | `str \| None` | `None` | Assignment that superseded this one |
+
+**Key behavior:** Only one ACTIVE assignment per environment+ring at a time.
+Assigning a new activation to a ring automatically supersedes the previous
+ACTIVE assignment.
+
+## RingActivationAssignmentStore
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `assign()` | `assign(assignment: RingActivationAssignment) -> RingActivationAssignment` | Assign activation to ring (auto-supersedes previous) |
+| `get()` | `get(assignment_id: str) -> RingActivationAssignment \| None` | Get by assignment ID |
+| `get_active()` | `get_active(environment: str, ring_name: str) -> RingActivationAssignment \| None` | Get current ACTIVE assignment |
+| `list()` | `list(environment=None, ring_name=None) -> list[RingActivationAssignment]` | List with optional filters |
+| `disable_active()` | `disable_active(environment, ring_name, disabled_by, reason=None) -> RingActivationAssignment \| None` | Disable the active assignment |
+
+**Factory:** `create_ring_assignment_store(store_type, db_path)` supports `"memory"` and `"sqlite"` types.
+
+**SQLite schema:** `policy_ring_activation_assignments` table with `assignment_id` as primary key.
+
+## PolicyRingRouter
+
+Resolves which ring applies to a given request.
+
+### `resolve_ring(environment, context) -> str`
+
+**Resolution order:**
+
+1. **Explicit override** — If `context.policy_ring` is set, use it directly
+2. **Default ring from store** — If `ring_store` is configured, look up the ring
+   with `is_default=True` and `status=ENABLED` for the environment
+3. **Configured fallback** — Fall back to `default_ring` parameter (default: `"stable"`)
+4. **Disabled ring check** — Raises `RuntimeError` if the selected ring is DISABLED
+5. **Existence check** — Raises `KeyError` if the ring does not exist (unless no `ring_store`)
+
+### Constructor
+
+```python
+PolicyRingRouter(ring_store=None, default_ring="stable")
+```
+
+## Ring-Aware Policy Resolver
+
+`ActivePolicyResolver` gains two new methods for ring-scoped bundle resolution:
+
+### `resolve_active_bundle_for_ring(environment, ring_name) -> PolicyBundle | None`
+
+Resolution chain:
+
+1. Check cache with `(environment, ring_name)` tuple key
+2. Check environment state — returns `None` if environment is DISABLED
+3. Check ring state — returns `None` if ring is DISABLED
+4. Get active `RingActivationAssignment` from assignment store
+5. Load `PolicyActivation` from activation store
+6. Load `PolicyBundle` from bundle store
+7. **Triple integrity check** — Verify `config_hash` matches across assignment, activation, and bundle
+8. Cache result with TTL
+
+### `require_active_bundle_for_ring(environment, ring_name) -> PolicyBundle`
+
+Like `resolve_active_bundle_for_ring()` but raises:
+- `RuntimeError` if environment or ring is DISABLED
+- `KeyError` if no active assignment or bundle found
+
+### Cache Structure
+
+The resolver cache supports both plain string keys (environment-only from Phase 31)
+and tuple keys `(environment, ring_name)` for ring-scoped entries. The `refresh()`
+method clears both types for the given environment.
+
+## Canary Eval Flow
+
+The recommended workflow for safely promoting a policy bundle to production:
+
+### 1. Create Rings
+
+```bash
+agentapp policy ring create --config <path> --environment prod --name canary --actor-id admin
+agentapp policy ring create --config <path> --environment prod --name stable --actor-id admin --is-default
+```
+
+### 2. Assign Activation to Canary
+
+```bash
+agentapp policy ring assign --config <path> --environment prod \
+  --ring canary --activation-id pa_abc123 --actor-id admin \
+  --reason "Testing new policy bundle v2"
+```
+
+### 3. Run Canary Evaluation
+
+```bash
+agentapp policy canary eval --config <path> --environment prod \
+  --ring canary --activation-id pa_abc123 --suite evals/canary_regression.yaml
+```
+
+### 4. Promote to Stable
+
+```bash
+agentapp policy ring promote --config <path> --environment prod \
+  --from-ring canary --to-ring stable --actor-id admin \
+  --reason "Canary eval passed, promoting to stable"
+```
+
+### CanaryEvalRunner
+
+```python
+from agent_app.evals.canary import CanaryEvalRunner
+
+runner = CanaryEvalRunner(app)
+result = await runner.run_for_activation(
+    activation_id="pa_abc123",
+    environment="prod",
+    ring_name="canary",
+    suite_path="evals/canary_regression.yaml",
+)
+# result.passed, result.total, result.passed_count, result.failed_count, result.errors
+```
+
+**CanaryEvalResult fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `environment` | `str` | Target environment |
+| `ring_name` | `str` | Ring being evaluated |
+| `activation_id` | `str` | Activation being evaluated |
+| `suite_name` | `str` | Eval suite name |
+| `passed` | `bool` | Whether all cases passed |
+| `total` | `int` | Total number of eval cases |
+| `passed_count` | `int` | Number of passed cases |
+| `failed_count` | `int` | Number of failed cases |
+| `errors` | `list[str]` | Per-case error messages |
+
+## RBAC Permissions (Phase 33 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `RING_CREATE` | `policy.ring.create` | Requires grant |
+| `RING_ASSIGN` | `policy.ring.assign` | Requires grant |
+| `RING_PROMOTE` | `policy.ring.promote` | Requires grant |
+| `RING_DISABLE` | `policy.ring.disable` | Requires grant |
+| `RING_ENABLE` | `policy.ring.enable` | Requires grant |
+| `RING_VIEW` | `policy.ring.view` | Allowed |
+
+`RING_VIEW` is default-allowed alongside `BUNDLE_CREATE`, `GATE_RUN`, and
+`ENVIRONMENT_VIEW`. All other ring permissions require explicit grants in
+`RunContext.permissions`.
+
+## RunContext Extensions
+
+New field on `RunContext`:
+
+- `policy_ring: str | None` — The ring this run targets. Set by the caller or
+  resolved by `PolicyRingRouter.resolve_ring()` during runtime initialization.
+
+## Config Schema (Phase 33 additions)
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    environments:
+      type: sqlite
+      path: .agent_app/policy_environments.db
+    rings:                              # Phase 33
+      type: sqlite
+      path: .agent_app/policy_release_rings.db
+    ring_assignments:                   # Phase 33
+      type: sqlite
+      path: .agent_app/policy_ring_activation_assignments.db
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod
+      require_active_policy: false
+      cache_ttl_seconds: 300
+      ring: null                        # Phase 33: default ring override
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config fields:
+- `rings` — Optional release ring store config (default: `None`, backward compatible)
+- `ring_assignments` — Optional ring assignment store config (default: `None`, backward compatible)
+- `runtime.ring` — Optional default ring override for runtime resolution
+
+## CLI Commands
+
+### Ring Management
+
+```bash
+# List release rings for an environment
+agentapp policy ring list --config <path> --environment <env> [--json]
+
+# Create a release ring
+agentapp policy ring create --config <path> --environment <env> --name <name> \
+  --actor-id <id> [--description <text>] [--is-default] [--permissions <list>]
+
+# Assign an activation to a ring
+agentapp policy ring assign --config <path> --environment <env> --ring <name> \
+  --activation-id <id> --actor-id <id> [--reason <text>] [--permissions <list>]
+
+# Promote canary activation to stable ring
+agentapp policy ring promote --config <path> --environment <env> \
+  --from-ring <canary> --to-ring <stable> --actor-id <id> \
+  [--reason <text>] [--permissions <list>]
+
+# Disable a release ring
+agentapp policy ring disable --config <path> --environment <env> --ring <name> \
+  --actor-id <id> [--reason <text>] [--permissions <list>]
+
+# Enable a disabled ring
+agentapp policy ring enable --config <path> --environment <env> --ring <name> \
+  --actor-id <id> [--permissions <list>]
+```
+
+### Canary Evaluation
+
+```bash
+# Run canary eval suite against an activation
+agentapp policy canary eval --config <path> --environment <env> --ring <name> \
+  --activation-id <id> --suite <path> [--json]
+```
+
+All ring commands support `--actor-id` and `--permissions` for RBAC testing,
+consistent with Phase 30 promotion commands.
+
+## Console Pages
+
+| Route | Template | Method | Description |
+|-------|----------|--------|-------------|
+| `GET /rings` | `policy_rings.html` | GET | List all rings with environment, status, and active bundle |
+| `GET /rings/{env}/{name}` | `policy_ring_detail.html` | GET | Ring detail with status, active assignment, and history |
+| `POST /rings` | `policy_rings.html` | POST | Create a new release ring |
+| `POST /rings/{env}/{name}/assign` | `policy_ring_detail.html` | POST | Assign an activation to the ring |
+| `POST /rings/{env}/{name}/promote` | `policy_ring_detail.html` | POST | Promote activation to another ring |
+| `POST /rings/{env}/{name}/disable` | `policy_ring_detail.html` | POST | Disable the ring |
+| `POST /rings/{env}/{name}/enable` | `policy_ring_detail.html` | POST | Re-enable the ring |
+
+Console write actions require a `PolicyReleaseService` with appropriate permissions
+passed via form data (`permissions` field, comma-separated).
+
+## Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.ring.created` | New release ring created |
+| `policy.ring.disabled` | Ring disabled |
+| `policy.ring.enabled` | Ring re-enabled |
+| `policy.ring.assignment.created` | Activation assigned to ring |
+| `policy.ring.promoted` | Canary activation promoted to stable (via assign to stable) |
+| `policy.ring.permission_denied` | RBAC check failed for ring operation |
+| `policy.canary.eval_started` | Canary evaluation started |
+| `policy.canary.eval_completed` | Canary evaluation completed |
+| `policy.canary.eval_failed` | Canary evaluation failed |
+
+## Design Decisions
+
+1. **One ACTIVE assignment per environment+ring** — Only one activation can be
+   ACTIVE for a given environment+ring pair. Assigning a new activation
+   automatically supersedes the previous one, preserving a complete assignment
+   history.
+
+2. **RING_VIEW is default-allowed** — Viewing ring state is a read-only operation
+   with no side effects, consistent with `BUNDLE_CREATE`, `GATE_RUN`, and
+   `ENVIRONMENT_VIEW`. All mutation operations require explicit grants.
+
+3. **Tuple cache key for ring resolution** — Ring-scoped cache entries use
+   `(environment, ring_name)` tuples to avoid collisions with environment-only
+   cache entries from Phase 31. The `refresh()` method clears both key types.
+
+4. **Triple integrity verification** — `resolve_active_bundle_for_ring()` verifies
+   `config_hash` across three levels: ring assignment, policy activation, and
+   bundle. Any mismatch raises `ValueError`, detecting config drift at any layer.
+
+5. **Canary eval does not inject metadata** — `EvalRunner.run_suite()` does not
+   accept a metadata parameter, so the caller must pre-configure the app for the
+   target ring/environment before invoking canary eval. This keeps the eval runner
+   decoupled from ring concepts.
+
+6. **Explicit override via `context.policy_ring`** — The `PolicyRingRouter`
+   checks `context.policy_ring` first, allowing callers to explicitly target a
+   ring without modifying store state. This supports testing and one-off runs.
+
+7. **Store factory pattern** — Both `create_release_ring_store()` and
+   `create_ring_assignment_store()` support `"memory"` and `"sqlite"` backends,
+   consistent with all other stores in the framework.
+
+8. **Promote is ring-to-ring assignment** — `promote_canary_to_stable()` reads
+   the canary ring's active assignment and assigns the same activation to the
+   stable ring. This reuses the existing assignment mechanism rather than
+   introducing a separate promotion concept.
+
+9. **SQLite UNIQUE constraint on (environment, name)** — The ring store enforces
+   unique ring names per environment at the database level, preventing accidental
+   duplicate rings.
+
+10. **Backward-compatible optional stores** — `rings` and `ring_assignments` store
+    configs default to `None`. Existing Phase 31/32 configs without ring sections
+    continue to work; ring-aware resolution only activates when ring stores are
+    configured.
+
+## Known Limitations
+
+1. **Canary eval metadata injection** — `EvalRunner.run_suite()` does not accept
+   a metadata parameter, so environment/ring context is not injected into the eval
+   run itself. The caller must ensure the app is configured for the target
+   ring/environment before invoking canary eval.
+
+2. **No automatic canary promotion** — Promotion from canary to stable is manual.
+   There is no automatic promotion based on eval pass rate or time-based rollout.
+
+3. **No ring-level traffic splitting** — All requests for a given environment
+   resolve to a single ring (via `context.policy_ring` or default). There is no
+   percentage-based traffic splitting between rings.
+
+4. **No ring diff/comparison view** — Console pages show ring status and
+   assignments but do not provide a diff between the canary and stable bundle
+   configurations.
+
+5. **Ring disable does not disable assignments** — Disabling a ring prevents new
+   resolution but does not change the status of existing assignments. The
+   `disable_active()` method on the assignment store handles assignment-level
+   disabling separately.
+
+6. **No ring promotion history** — The promote operation creates a new assignment
+   but does not record a separate "promotion" event linking canary and stable
+   assignments. Operators must inspect assignment history manually.
+
+7. **No cross-environment promotion** — Promotion operates within a single
+   environment. Promoting a canary ring from staging to prod requires separate
+   operations in each environment.

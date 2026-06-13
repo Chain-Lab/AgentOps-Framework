@@ -1245,3 +1245,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.18 — Policy promotion approval, RBAC, and console write governance ✅ (Phase 30)
 - v0.19 — Policy runtime activation, environment isolation, and hot reload baseline ✅ (Phase 31)
 - v0.20 — Policy rollback, emergency disable, and activation safety controls ✅ (Phase 32)
+- v0.21 — Release rings, canary evaluation, and ring-aware policy resolution ✅ (Phase 33)
