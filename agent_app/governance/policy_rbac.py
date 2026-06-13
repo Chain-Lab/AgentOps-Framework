@@ -22,6 +22,12 @@ class PolicyReleasePermission(StrEnum):
         ENVIRONMENT_DISABLE: Disable a policy environment.
         ENVIRONMENT_ENABLE: Enable a policy environment.
         ENVIRONMENT_VIEW: View policy environment state.
+        RING_CREATE: Create a release ring.
+        RING_ASSIGN: Assign a ring to an activation.
+        RING_PROMOTE: Promote a policy bundle to a ring.
+        RING_DISABLE: Disable a release ring.
+        RING_ENABLE: Enable a release ring.
+        RING_VIEW: View release ring state.
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -35,12 +41,19 @@ class PolicyReleasePermission(StrEnum):
     ENVIRONMENT_DISABLE = "policy.environment.disable"
     ENVIRONMENT_ENABLE = "policy.environment.enable"
     ENVIRONMENT_VIEW = "policy.environment.view"
+    RING_CREATE = "policy.ring.create"
+    RING_ASSIGN = "policy.ring.assign"
+    RING_PROMOTE = "policy.ring.promote"
+    RING_DISABLE = "policy.ring.disable"
+    RING_ENABLE = "policy.ring.enable"
+    RING_VIEW = "policy.ring.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.BUNDLE_CREATE,
     PolicyReleasePermission.GATE_RUN,
     PolicyReleasePermission.ENVIRONMENT_VIEW,
+    PolicyReleasePermission.RING_VIEW,
 }
 
 

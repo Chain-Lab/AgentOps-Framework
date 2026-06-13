@@ -124,3 +124,30 @@ class TestPhase32Permissions:
         assert await checker.check(PolicyReleasePermission.ENVIRONMENT_ENABLE, ctx) is False
         ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.environment.enable"])
         assert await checker.check(PolicyReleasePermission.ENVIRONMENT_ENABLE, ctx_with_perm) is True
+
+
+class TestPhase33RingPermissions:
+    def test_ring_permissions_exist(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.RING_CREATE == "policy.ring.create"
+        assert PolicyReleasePermission.RING_ASSIGN == "policy.ring.assign"
+        assert PolicyReleasePermission.RING_PROMOTE == "policy.ring.promote"
+        assert PolicyReleasePermission.RING_DISABLE == "policy.ring.disable"
+        assert PolicyReleasePermission.RING_ENABLE == "policy.ring.enable"
+        assert PolicyReleasePermission.RING_VIEW == "policy.ring.view"
+
+    @pytest.mark.asyncio
+    async def test_ring_view_default_allowed(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.RING_VIEW, ctx) is True
+
+    @pytest.mark.asyncio
+    async def test_ring_create_requires_grant(self):
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.RING_CREATE, ctx) is False

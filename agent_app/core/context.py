@@ -48,6 +48,11 @@ class RunContext(BaseModel):
         default=None,
         description="Policy environment for runtime resolution (dev, staging, prod)",
     )
+    # Phase 33: policy ring for runtime resolution
+    policy_ring: str | None = Field(
+        default=None,
+        description="Policy ring for runtime resolution (stable, canary, internal)",
+    )
     # Phase 31: resolved policy bundle for runtime use
     resolved_policy_bundle: Any | None = Field(
         default=None,
