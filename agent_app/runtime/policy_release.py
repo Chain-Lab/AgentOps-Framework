@@ -56,6 +56,7 @@ class PolicyReleaseService:
         allow_gate_bypass: bool = False,
         activation_store: Any = None,
         policy_resolver: Any = None,
+        environment_store: Any = None,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -72,6 +73,7 @@ class PolicyReleaseService:
         self._allow_gate_bypass = allow_gate_bypass
         self._activation_store = activation_store
         self._policy_resolver = policy_resolver
+        self._environment_store = environment_store
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -641,3 +643,204 @@ class PolicyReleaseService:
     def policy_resolver(self) -> Any:
         """Access the underlying policy resolver (for console integration)."""
         return self._policy_resolver
+
+    @property
+    def environment_store(self) -> Any:
+        """Access the underlying environment store."""
+        return self._environment_store
+
+    async def rollback_environment(
+        self,
+        environment: str,
+        rolled_back_by: str,
+        context: RunContext,
+        target_activation_id: str | None = None,
+        reason: str | None = None,
+    ) -> Any:
+        """Roll back an environment to a previous activation.
+
+        Phase 32: Creates a new activation pointing to the previous bundle.
+        Requires ROLLBACK_EXECUTE permission.
+
+        Args:
+            environment: The environment to roll back.
+            rolled_back_by: Who is performing the rollback.
+            context: Run context for RBAC.
+            target_activation_id: Optional specific activation to roll back to.
+            reason: Optional rollback reason.
+
+        Returns:
+            The new rollback PolicyActivation.
+
+        Raises:
+            PolicyReleasePermissionError: If ROLLBACK_EXECUTE permission missing.
+            ValueError: If no previous activation or target is wrong environment.
+            KeyError: If target activation not found.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.ROLLBACK_EXECUTE, context
+        )
+
+        if self._activation_store is None:
+            raise RuntimeError(
+                "No activation store configured. "
+                "Set activation_store to use environment rollback."
+            )
+
+        target_activation = None
+
+        if target_activation_id is not None:
+            target_activation = await self._activation_store.get(target_activation_id)
+            if target_activation is None:
+                raise KeyError(
+                    f"Activation '{target_activation_id}' not found in activation store."
+                )
+            if target_activation.environment != environment:
+                raise ValueError(
+                    f"Target activation '{target_activation_id}' belongs to "
+                    f"environment '{target_activation.environment}', not '{environment}'."
+                )
+        else:
+            target_activation = await self._activation_store.get_previous_activation(
+                environment
+            )
+            if target_activation is None:
+                raise ValueError(
+                    f"No previous activation found for environment '{environment}'."
+                )
+
+        # Validate the target bundle still exists in bundle_store
+        bundle = await self._bundle_store.get(target_activation.bundle_id)
+        if bundle is None:
+            raise ValueError(
+                f"Target bundle '{target_activation.bundle_id}' no longer exists "
+                f"in bundle store. Cannot roll back to it."
+            )
+
+        result = await self._activation_store.rollback_to_activation(
+            environment=environment,
+            target_activation_id=target_activation.activation_id,
+            rolled_back_by=rolled_back_by,
+            reason=reason,
+        )
+
+        # Clear resolver cache for the environment
+        if self._policy_resolver is not None and hasattr(
+            self._policy_resolver, "clear_cache"
+        ):
+            self._policy_resolver.clear_cache(environment)
+
+        await self._write_audit(
+            "policy.activation.rollback_completed",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "environment": environment,
+                "target_activation_id": target_activation.activation_id,
+                "target_bundle_id": target_activation.bundle_id,
+                "new_activation_id": result.activation_id,
+                "rolled_back_by": rolled_back_by,
+                "reason": reason,
+            },
+        )
+
+        return result
+
+    async def disable_policy_environment(
+        self,
+        environment: str,
+        disabled_by: str,
+        context: RunContext,
+        reason: str,
+    ) -> Any:
+        """Disable a policy environment.
+
+        Phase 32: Blocks active policy resolution for the environment.
+        Requires ENVIRONMENT_DISABLE permission. Requires non-empty reason.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.ENVIRONMENT_DISABLE, context
+        )
+
+        if not reason or not reason.strip():
+            raise ValueError(
+                "A non-empty reason is required when disabling a policy environment."
+            )
+
+        if self._environment_store is None:
+            raise RuntimeError(
+                "No environment store configured. "
+                "Set environment_store to use environment disable."
+            )
+
+        state = await self._environment_store.disable(
+            environment=environment,
+            disabled_by=disabled_by,
+            reason=reason,
+        )
+
+        # Clear resolver cache for the environment
+        if self._policy_resolver is not None and hasattr(
+            self._policy_resolver, "clear_cache"
+        ):
+            self._policy_resolver.clear_cache(environment)
+
+        await self._write_audit(
+            "policy.environment.disabled",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "environment": environment,
+                "disabled_by": disabled_by,
+                "reason": reason,
+            },
+        )
+
+        return state
+
+    async def enable_policy_environment(
+        self,
+        environment: str,
+        enabled_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> Any:
+        """Re-enable a disabled policy environment.
+
+        Phase 32: Restores active policy resolution for the environment.
+        Requires ENVIRONMENT_ENABLE permission.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.ENVIRONMENT_ENABLE, context
+        )
+
+        if self._environment_store is None:
+            raise RuntimeError(
+                "No environment store configured. "
+                "Set environment_store to use environment enable."
+            )
+
+        state = await self._environment_store.enable(
+            environment=environment,
+            enabled_by=enabled_by,
+            reason=reason,
+        )
+
+        # Clear resolver cache for the environment
+        if self._policy_resolver is not None and hasattr(
+            self._policy_resolver, "clear_cache"
+        ):
+            self._policy_resolver.clear_cache(environment)
+
+        await self._write_audit(
+            "policy.environment.enabled",
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            data={
+                "environment": environment,
+                "enabled_by": enabled_by,
+                "reason": reason,
+            },
+        )
+
+        return state
