@@ -2,10 +2,12 @@
 
 Phase 29: provides the release safety gate workflow.
 Phase 30: adds RBAC, promotion lifecycle, and audit logging.
+Phase 34: adds change event emission and auto-refresh after state changes.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +16,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from agent_app.core.context import RunContext
+from agent_app.governance.policy_change_event import PolicyChangeEvent, PolicyChangeEventType
 from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
 from agent_app.governance.policy_promotion import PromotionRequest, PromotionRequestStatus
 from agent_app.governance.audit import AuditEvent
+
+logger = logging.getLogger(__name__)
 
 
 class PolicyReleasePermissionError(PermissionError):
@@ -60,6 +65,9 @@ class PolicyReleaseService:
         ring_store: Any = None,
         ring_assignment_store: Any = None,
         ring_router: Any = None,
+        event_store: Any = None,
+        reload_manager: Any = None,
+        strict: bool = False,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -80,6 +88,9 @@ class PolicyReleaseService:
         self._ring_store = ring_store
         self._ring_assignment_store = ring_assignment_store
         self._ring_router = ring_router
+        self._event_store = event_store
+        self._reload_manager = reload_manager
+        self._strict = strict
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -115,6 +126,62 @@ class PolicyReleaseService:
                 data=data or {},
             )
         )
+
+    async def _emit_change_event(
+        self,
+        event_type,  # PolicyChangeEventType
+        environment: str | None = None,
+        ring_name: str | None = None,
+        bundle_id: str | None = None,
+        activation_id: str | None = None,
+        assignment_id: str | None = None,
+        actor_id: str | None = None,
+        reason: str | None = None,
+        data: dict | None = None,
+    ) -> None:
+        """Emit a policy change event if event_store is configured.
+
+        If emission fails and strict mode is not enabled, log and continue.
+        If strict mode is enabled, re-raise the exception.
+        """
+        if self._event_store is None:
+            return
+
+        event = PolicyChangeEvent(
+            event_id=f"pce_{uuid.uuid4().hex[:12]}",
+            event_type=event_type,
+            environment=environment,
+            ring_name=ring_name,
+            bundle_id=bundle_id,
+            activation_id=activation_id,
+            assignment_id=assignment_id,
+            actor_id=actor_id,
+            reason=reason,
+            data=data or {},
+            created_at=datetime.now(timezone.utc),
+        )
+
+        try:
+            await self._event_store.append(event)
+        except Exception:
+            if self._strict:
+                raise
+            # Non-strict: swallow the error, don't corrupt main state transition
+            logger.debug("Change event emission failed for %s", event_type)
+
+    async def _auto_refresh_resolver(
+        self,
+        environment: str | None = None,
+        ring_name: str | None = None,
+    ) -> None:
+        """If reload_manager is configured, refresh resolver for target."""
+        if self._reload_manager is None:
+            return
+        try:
+            await self._reload_manager.refresh_resolver(environment, ring_name)
+        except Exception:
+            if self._strict:
+                raise
 
     async def create_bundle(
         self,
@@ -165,7 +232,13 @@ class PolicyReleaseService:
             created_by=created_by,
             created_at=datetime.now(timezone.utc),
         )
-        return await self._bundle_store.create(bundle)
+        result = await self._bundle_store.create(bundle)
+        await self._emit_change_event(
+            PolicyChangeEventType.BUNDLE_CREATED,
+            bundle_id=result.bundle_id,
+            actor_id=created_by,
+        )
+        return result
 
     async def run_gate(
         self,
@@ -223,7 +296,13 @@ class PolicyReleaseService:
         )
 
         # Store gate result
-        return await self._gate_store.save(gate_result)
+        result = await self._gate_store.save(gate_result)
+        await self._emit_change_event(
+            PolicyChangeEventType.GATE_COMPLETED,
+            bundle_id=bundle_id,
+            actor_id=created_by,
+        )
+        return result
 
     async def promote(
         self,
@@ -269,7 +348,13 @@ class PolicyReleaseService:
                     )
 
         # Promote: activate this bundle (archives previous active)
-        return await self._bundle_store.activate(bundle_id)
+        result = await self._bundle_store.activate(bundle_id)
+        await self._emit_change_event(
+            PolicyChangeEventType.PROMOTION_EXECUTED,
+            bundle_id=bundle_id,
+            actor_id=promoted_by,
+        )
+        return result
 
     async def rollback(
         self,
@@ -587,6 +672,13 @@ class PolicyReleaseService:
                     "reason": reason,
                 },
             )
+            await self._emit_change_event(
+                PolicyChangeEventType.ACTIVATION_CREATED,
+                environment=environment,
+                activation_id=activation.activation_id,
+                bundle_id=request.bundle_id,
+                actor_id=executed_by,
+            )
         else:
             activated = await self._bundle_store.activate(request.bundle_id)
             activation = activated
@@ -664,6 +756,16 @@ class PolicyReleaseService:
     def ring_assignment_store(self) -> Any:
         """Access the underlying ring assignment store."""
         return self._ring_assignment_store
+
+    @property
+    def event_store(self) -> Any:
+        """Access the underlying event store."""
+        return self._event_store
+
+    @property
+    def reload_manager(self) -> Any:
+        """Access the underlying reload manager."""
+        return self._reload_manager
 
     async def create_ring(
         self,
@@ -757,6 +859,17 @@ class PolicyReleaseService:
                 "bundle_id": activation.bundle_id,
             },
         )
+        await self._emit_change_event(
+            PolicyChangeEventType.RING_ASSIGNED,
+            environment=environment,
+            ring_name=ring_name,
+            activation_id=activation_id,
+            bundle_id=activation.bundle_id,
+            assignment_id=assignment.assignment_id,
+            actor_id=assigned_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment, ring_name)
         return assignment
 
     async def promote_canary_to_stable(
@@ -783,7 +896,7 @@ class PolicyReleaseService:
             )
 
         # Assign the same activation to stable
-        return await self.assign_activation_to_ring(
+        result = await self.assign_activation_to_ring(
             environment=environment,
             ring_name=stable_ring,
             activation_id=canary_assignment.activation_id,
@@ -791,6 +904,15 @@ class PolicyReleaseService:
             context=context,
             reason=reason or f"Promoted from {canary_ring} to {stable_ring}",
         )
+        await self._emit_change_event(
+            PolicyChangeEventType.RING_PROMOTED,
+            environment=environment,
+            ring_name=stable_ring,
+            activation_id=canary_assignment.activation_id,
+            actor_id=promoted_by,
+            reason=reason,
+        )
+        return result
 
     async def disable_ring(
         self,
@@ -816,6 +938,14 @@ class PolicyReleaseService:
                 "reason": reason,
             },
         )
+        await self._emit_change_event(
+            PolicyChangeEventType.RING_DISABLED,
+            environment=environment,
+            ring_name=ring_name,
+            actor_id=disabled_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment, ring_name)
         return ring
 
     async def enable_ring(
@@ -842,6 +972,14 @@ class PolicyReleaseService:
                 "reason": reason,
             },
         )
+        await self._emit_change_event(
+            PolicyChangeEventType.RING_ENABLED,
+            environment=environment,
+            ring_name=ring_name,
+            actor_id=enabled_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment, ring_name)
         return ring
 
     async def rollback_environment(
@@ -940,6 +1078,16 @@ class PolicyReleaseService:
             },
         )
 
+        await self._emit_change_event(
+            PolicyChangeEventType.ACTIVATION_ROLLED_BACK,
+            environment=environment,
+            activation_id=result.activation_id,
+            bundle_id=target_activation.bundle_id,
+            actor_id=rolled_back_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment)
+
         return result
 
     async def disable_policy_environment(
@@ -993,6 +1141,14 @@ class PolicyReleaseService:
             },
         )
 
+        await self._emit_change_event(
+            PolicyChangeEventType.ENVIRONMENT_DISABLED,
+            environment=environment,
+            actor_id=disabled_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment)
+
         return state
 
     async def enable_policy_environment(
@@ -1040,5 +1196,13 @@ class PolicyReleaseService:
                 "reason": reason,
             },
         )
+
+        await self._emit_change_event(
+            PolicyChangeEventType.ENVIRONMENT_ENABLED,
+            environment=environment,
+            actor_id=enabled_by,
+            reason=reason,
+        )
+        await self._auto_refresh_resolver(environment)
 
         return state
