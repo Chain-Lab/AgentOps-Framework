@@ -62,6 +62,7 @@ class AppRunner:
         dag_lease_config: Any = None,
         policy_engine: Any = None,
         policy_decision_store: Any = None,
+        policy_resolver: Any = None,  # Phase 31
     ) -> None:
         from agent_app.governance.audit import InMemoryAuditLogger
         from agent_app.governance.permission import DefaultPermissionChecker
@@ -82,6 +83,8 @@ class AppRunner:
         self._dag_compensation_config = dag_compensation_config
         # Phase 16.2: DAG lease backend config
         self._dag_lease_config = dag_lease_config
+        # Phase 31: Policy resolver for runtime activation
+        self._policy_resolver = policy_resolver
 
         # Phase 12: observability
         self.trace_collector = trace_collector
@@ -214,6 +217,11 @@ class AppRunner:
             metadata=merged_meta,
             agent_name=entry_agent_name,
         )
+
+        # -- Phase 31: Resolve active policy bundle --
+        resolved_bundle = await self._resolve_active_policy(context)
+        if resolved_bundle is not None:
+            context.resolved_policy_bundle = resolved_bundle
 
         # -- Simulate tool call (governance pipeline) --
         tool_result = await self._simulate_tool_call(
@@ -454,6 +462,33 @@ class AppRunner:
                 {"role": "user", "content": input},
                 {"role": "assistant", "content": full_output},
             ])
+
+    # ------------------------------------------------------------------
+    # Phase 31: Policy resolution
+    # ------------------------------------------------------------------
+
+    async def _resolve_active_policy(self, context: RunContext) -> Any | None:
+        """Resolve the active policy bundle for the run's environment.
+
+        Phase 31: Uses the policy resolver to find the active bundle
+        for context.policy_environment (defaults to 'dev').
+
+        Args:
+            context: The current run context.
+
+        Returns:
+            The resolved policy bundle, or None if no resolver configured
+            or no active bundle for the environment.
+        """
+        if self._policy_resolver is None:
+            return None
+
+        environment = context.policy_environment or "dev"
+        try:
+            bundle = await self._policy_resolver.resolve_active_bundle(environment)
+            return bundle
+        except (KeyError, ValueError):
+            return None
 
     # ------------------------------------------------------------------
     # Internals

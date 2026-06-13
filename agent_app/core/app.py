@@ -59,6 +59,7 @@ class AgentApp:
         audit_logger: Any = None,
         policy_engine: Any = None,
         policy_decision_store: Any = None,
+        policy_resolver: Any = None,  # Phase 31
     ) -> None:
         from agent_app.registry.agent_registry import AgentRegistry
         from agent_app.registry.tool_registry import ToolRegistry
@@ -96,6 +97,8 @@ class AgentApp:
         self.policy_engine = policy_engine
         # Phase 25: Policy decision store for persistence
         self.policy_decision_store = policy_decision_store
+        # Phase 31: Policy resolver for runtime activation
+        self._policy_resolver = policy_resolver
         # Phase 17: Recovery config for auto-recovery policy
         self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
@@ -1277,4 +1280,5 @@ class AgentApp:
                 dag_lease_config=getattr(self, "_dag_lease_config", None),
                 policy_engine=getattr(self, "policy_engine", None),
                 policy_decision_store=getattr(self, "policy_decision_store", None),
+                policy_resolver=getattr(self, "_policy_resolver", None),
             )

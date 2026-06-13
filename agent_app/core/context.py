@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -45,4 +47,9 @@ class RunContext(BaseModel):
     policy_environment: str | None = Field(
         default=None,
         description="Policy environment for runtime resolution (dev, staging, prod)",
+    )
+    # Phase 31: resolved policy bundle for runtime use
+    resolved_policy_bundle: Any | None = Field(
+        default=None,
+        description="Resolved active policy bundle for the run environment",
     )
