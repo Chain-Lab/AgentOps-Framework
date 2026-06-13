@@ -443,6 +443,19 @@ def build_app(
                 from agent_app.runtime.policy_activation_store import InMemoryPolicyActivationStore
                 activation_store = InMemoryPolicyActivationStore()
 
+        # Phase 32: environment store
+        environment_store = None
+        if getattr(release_config, "environments", None):
+            env_cfg = release_config.environments
+            if env_cfg.type == "sqlite":
+                from agent_app.runtime.policy_environment_store import SQLitePolicyEnvironmentStore
+                environment_store = SQLitePolicyEnvironmentStore(
+                    db_path=env_cfg.path or ".agent_app/policy_environments.db"
+                )
+            else:
+                from agent_app.runtime.policy_environment_store import InMemoryPolicyEnvironmentStore
+                environment_store = InMemoryPolicyEnvironmentStore()
+
         # Phase 31: policy resolver
         policy_resolver = None
         if activation_store is not None:
@@ -455,6 +468,10 @@ def build_app(
                 cache_ttl_seconds=cache_ttl,
             )
 
+        # Update resolver with environment store
+        if policy_resolver is not None and environment_store is not None:
+            policy_resolver._environment_store = environment_store
+
         release_service = PolicyReleaseService(
             bundle_store=bundle_store,
             replay_runner=replay_runner,
@@ -465,8 +482,11 @@ def build_app(
             allow_gate_bypass=getattr(release_config, "allow_gate_bypass", False),
             activation_store=activation_store,
             policy_resolver=policy_resolver,
+            environment_store=environment_store,
         )
         app._release_service = release_service
+        if environment_store is not None:
+            app._environment_store = environment_store
     app._release_config = release_config
     return app
 

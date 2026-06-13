@@ -397,6 +397,10 @@ class PolicyReleaseConfig(BaseModel):
         default=None,
         description="Policy activation store configuration (Phase 31)",
     )
+    environments: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Environment state store config (Phase 32)",
+    )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,
         description="Release gate rules",
