@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+{% if state %}
+<h2>Environment: {{ state.environment }}</h2>
+<p>Status: <strong>{{ state.status }}</strong></p>
+{% if state.disabled_reason %}
+<p>Disabled Reason: {{ state.disabled_reason }}</p>
+<p>Disabled By: {{ state.disabled_by }}</p>
+{% endif %}
+
+{% if state.status == "enabled" %}
+<!-- Disable form -->
+<form method="POST" action="/policy-console/environments/{{ state.environment }}/disable">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason (required)" required>
+  <input name="permissions" value="policy.environment.disable">
+  <button type="submit">Disable Environment</button>
+</form>
+{% else %}
+<!-- Enable form -->
+<form method="POST" action="/policy-console/environments/{{ state.environment }}/enable">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.environment.enable">
+  <button type="submit">Enable Environment</button>
+</form>
+{% endif %}
+
+<!-- Rollback form -->
+{% if active_activation %}
+<form method="POST" action="/policy-console/activations/{{ active_activation.activation_id }}/rollback">
+  <input name="environment" value="{{ state.environment }}">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Rollback reason">
+  <input name="permissions" value="policy.rollback.execute">
+  <button type="submit">Rollback to Previous</button>
+</form>
+{% endif %}
+
+<!-- Active activation info -->
+{% if active_activation %}
+<h3>Active Activation</h3>
+<p>ID: {{ active_activation.activation_id }}</p>
+<p>Bundle: {{ active_activation.bundle_id }}</p>
+{% endif %}
+
+<!-- Recent activations -->
+{% if activations %}
+<h3>Recent Activations</h3>
+<table>
+  <tr><th>ID</th><th>Bundle</th><th>Status</th><th>By</th></tr>
+  {% for a in activations[:10] %}
+  <tr>
+    <td><a href="/policy-console/activations/{{ a.activation_id }}">{{ a.activation_id }}</a></td>
+    <td>{{ a.bundle_id }}</td>
+    <td>{{ a.status }}</td>
+    <td>{{ a.activated_by }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% else %}
+<h2>Environment not found</h2>
+<p>Environment store not configured or environment does not exist.</p>
+{% endif %}
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+{% endblock %}

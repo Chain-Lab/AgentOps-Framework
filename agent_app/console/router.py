@@ -38,6 +38,7 @@ def build_policy_console_router(
     promotion_store: Any = None,
     release_service: Any = None,
     activation_store: Any = None,
+    environment_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -51,6 +52,7 @@ def build_policy_console_router(
         promotion_store: Optional promotion request store (Phase 30).
         release_service: Optional policy release service (Phase 30).
         activation_store: Optional policy activation store (Phase 31).
+        environment_store: Optional policy environment store (Phase 32).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -822,6 +824,291 @@ def build_policy_console_router(
                 "activations": [],
                 "environments": env_data,
                 "store_available": activation_store is not None,
+            },
+        )
+
+    # Phase 32: environment detail and rollback actions
+    @router.get("/environments/{environment}", response_class=HTMLResponse)
+    async def environment_detail(request: Request, environment: str):
+        """Environment detail page with status, disable/enable/rollback forms."""
+        state = None
+        active_activation = None
+        activations_list: list[dict] = []
+        message = None
+
+        if environment_store is not None:
+            state = await environment_store.get(environment)
+        if activation_store is not None:
+            acts = await activation_store.list()
+            env_acts = [a for a in acts if a.environment == environment]
+            # Find the active activation for this environment
+            for a in env_acts:
+                if a.status == PolicyActivationStatus.ACTIVE:
+                    active_activation = _activation_to_row(a)
+                    break
+            # Recent activations (up to 10)
+            for a in env_acts[:10]:
+                activations_list.append(_activation_to_row(a))
+
+        # Build a simple state dict for the template
+        state_dict = None
+        if state is not None:
+            state_dict = {
+                "environment": state.environment,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "disabled_reason": state.disabled_reason,
+                "disabled_by": state.disabled_by,
+                "disabled_at": state.disabled_at.isoformat() if state.disabled_at and hasattr(state.disabled_at, "isoformat") else None,
+                "enabled_by": state.enabled_by,
+                "enabled_at": state.enabled_at.isoformat() if state.enabled_at and hasattr(state.enabled_at, "isoformat") else None,
+            }
+
+        return templates.TemplateResponse(
+            request,
+            "policy_environment_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "state": state_dict,
+                "active_activation": active_activation,
+                "activations": activations_list,
+                "message": message,
+                "store_available": environment_store is not None,
+            },
+        )
+
+    @router.post("/environments/{environment}/disable", response_class=HTMLResponse)
+    async def disable_environment(request: Request, environment: str):
+        """Disable a policy environment."""
+        message = None
+        state = None
+        active_activation = None
+        activations_list: list[dict] = []
+
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                elif not reason:
+                    message = "reason is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.disable_policy_environment(
+                        environment=environment,
+                        disabled_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Environment '{environment}' disabled successfully."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render the detail page
+        if environment_store is not None:
+            state = await environment_store.get(environment)
+        if activation_store is not None:
+            acts = await activation_store.list()
+            env_acts = [a for a in acts if a.environment == environment]
+            for a in env_acts:
+                if a.status == PolicyActivationStatus.ACTIVE:
+                    active_activation = _activation_to_row(a)
+                    break
+            for a in env_acts[:10]:
+                activations_list.append(_activation_to_row(a))
+
+        state_dict = None
+        if state is not None:
+            state_dict = {
+                "environment": state.environment,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "disabled_reason": state.disabled_reason,
+                "disabled_by": state.disabled_by,
+                "disabled_at": state.disabled_at.isoformat() if state.disabled_at and hasattr(state.disabled_at, "isoformat") else None,
+                "enabled_by": state.enabled_by,
+                "enabled_at": state.enabled_at.isoformat() if state.enabled_at and hasattr(state.enabled_at, "isoformat") else None,
+            }
+
+        return templates.TemplateResponse(
+            request,
+            "policy_environment_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "state": state_dict,
+                "active_activation": active_activation,
+                "activations": activations_list,
+                "message": message,
+                "store_available": environment_store is not None,
+            },
+        )
+
+    @router.post("/environments/{environment}/enable", response_class=HTMLResponse)
+    async def enable_environment(request: Request, environment: str):
+        """Re-enable a disabled policy environment."""
+        message = None
+        state = None
+        active_activation = None
+        activations_list: list[dict] = []
+
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.enable_policy_environment(
+                        environment=environment,
+                        enabled_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Environment '{environment}' enabled successfully."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render the detail page
+        if environment_store is not None:
+            state = await environment_store.get(environment)
+        if activation_store is not None:
+            acts = await activation_store.list()
+            env_acts = [a for a in acts if a.environment == environment]
+            for a in env_acts:
+                if a.status == PolicyActivationStatus.ACTIVE:
+                    active_activation = _activation_to_row(a)
+                    break
+            for a in env_acts[:10]:
+                activations_list.append(_activation_to_row(a))
+
+        state_dict = None
+        if state is not None:
+            state_dict = {
+                "environment": state.environment,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "disabled_reason": state.disabled_reason,
+                "disabled_by": state.disabled_by,
+                "disabled_at": state.disabled_at.isoformat() if state.disabled_at and hasattr(state.disabled_at, "isoformat") else None,
+                "enabled_by": state.enabled_by,
+                "enabled_at": state.enabled_at.isoformat() if state.enabled_at and hasattr(state.enabled_at, "isoformat") else None,
+            }
+
+        return templates.TemplateResponse(
+            request,
+            "policy_environment_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "state": state_dict,
+                "active_activation": active_activation,
+                "activations": activations_list,
+                "message": message,
+                "store_available": environment_store is not None,
+            },
+        )
+
+    @router.post("/activations/{activation_id}/rollback", response_class=HTMLResponse)
+    async def rollback_activation(request: Request, activation_id: str):
+        """Roll back an environment to a previous activation."""
+        message = None
+        environment = None
+
+        if release_service is None:
+            message = "Policy release service not configured."
+        else:
+            try:
+                form = await request.form()
+                environment = form.get("environment", "")
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not environment or not actor_id:
+                    message = "environment and actor_id are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    await release_service.rollback_environment(
+                        environment=environment,
+                        rolled_back_by=actor_id,
+                        context=context,
+                        target_activation_id=activation_id,
+                        reason=reason,
+                    )
+                    message = f"Rollback to activation '{activation_id}' completed successfully."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render the environment detail page
+        state = None
+        active_activation = None
+        activations_list: list[dict] = []
+        env_name = environment or ""
+
+        if environment_store is not None and env_name:
+            state = await environment_store.get(env_name)
+        if activation_store is not None and env_name:
+            acts = await activation_store.list()
+            env_acts = [a for a in acts if a.environment == env_name]
+            for a in env_acts:
+                if a.status == PolicyActivationStatus.ACTIVE:
+                    active_activation = _activation_to_row(a)
+                    break
+            for a in env_acts[:10]:
+                activations_list.append(_activation_to_row(a))
+
+        state_dict = None
+        if state is not None:
+            state_dict = {
+                "environment": state.environment,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "disabled_reason": state.disabled_reason,
+                "disabled_by": state.disabled_by,
+                "disabled_at": state.disabled_at.isoformat() if state.disabled_at and hasattr(state.disabled_at, "isoformat") else None,
+                "enabled_by": state.enabled_by,
+                "enabled_at": state.enabled_at.isoformat() if state.enabled_at and hasattr(state.enabled_at, "isoformat") else None,
+            }
+
+        return templates.TemplateResponse(
+            request,
+            "policy_environment_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "state": state_dict,
+                "active_activation": active_activation,
+                "activations": activations_list,
+                "message": message,
+                "store_available": environment_store is not None,
             },
         )
 
