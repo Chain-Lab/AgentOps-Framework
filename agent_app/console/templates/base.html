@@ -21,6 +21,9 @@
       <a href="/policy-console/activations" class="{% if '/activations' in request.url.path and '/detail' not in request.url.path %}active{% endif %}">Activations</a>
       <a href="/policy-console/environments" class="{% if '/environments' in request.url.path %}active{% endif %}">Environments</a>
       <a href="/policy-console/rings" class="{% if '/rings' in request.url.path %}active{% endif %}">Rings</a>
+      <a href="/policy-console/events" class="{% if '/events' in request.url.path %}active{% endif %}">Events</a>
+      <a href="/policy-console/reload" class="{% if '/reload' in request.url.path %}active{% endif %}">Reload</a>
+      <a href="/policy-console/routing/simulate" class="{% if '/routing/simulate' in request.url.path %}active{% endif %}">Routing Sim</a>
     </nav>
   </header>
   <main class="console-main">

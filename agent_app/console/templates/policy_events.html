@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Events</h2>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+{% endif %}
+
+{% if events %}
+<table>
+  <tr><th>Event ID</th><th>Type</th><th>Environment</th><th>Ring</th><th>Actor</th><th>Created At</th></tr>
+  {% for e in events %}
+  <tr>
+    <td>{{ e.event_id }}</td>
+    <td>{{ e.event_type }}</td>
+    <td>{{ e.environment }}</td>
+    <td>{{ e.ring_name }}</td>
+    <td>{{ e.actor_id }}</td>
+    <td>{{ e.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No events found.</p>
+{% endif %}
+{% endblock %}

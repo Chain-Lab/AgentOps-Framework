@@ -786,6 +786,10 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 33: ring stores
         ring_store=getattr(agent_app, "_ring_store", None),
         ring_assignment_store=getattr(agent_app, "_ring_assignment_store", None),
+        # Phase 34: event store, reload manager, ring router
+        event_store=getattr(agent_app, "_event_store", None),
+        reload_manager=getattr(agent_app, "_reload_manager", None),
+        ring_router=getattr(agent_app, "_ring_router", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

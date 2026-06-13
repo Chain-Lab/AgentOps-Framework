@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Routing Simulation</h2>
+
+<h3>Simulate Routing</h3>
+<form method="POST" action="/policy-console/routing/simulate">
+  <input name="environment" value="prod" placeholder="Environment">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="user_id" placeholder="User ID (defaults to actor_id)">
+  <input name="tenant_id" placeholder="Tenant ID">
+  <button type="submit">Simulate</button>
+</form>
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+
+{% if result %}
+<h3>Simulation Result</h3>
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  {% if result.selected_ring is defined %}
+  <tr><td>Selected Ring</td><td>{{ result.selected_ring }}</td></tr>
+  {% endif %}
+  {% if result.routing_mode is defined %}
+  <tr><td>Routing Mode</td><td>{{ result.routing_mode }}</td></tr>
+  {% endif %}
+  {% if result.bucket is defined %}
+  <tr><td>Bucket</td><td>{{ result.bucket }}</td></tr>
+  {% endif %}
+  {% if result.canary_percentage is defined %}
+  <tr><td>Canary Percentage</td><td>{{ result.canary_percentage }}</td></tr>
+  {% endif %}
+  {% if result.reason is defined %}
+  <tr><td>Reason</td><td>{{ result.reason }}</td></tr>
+  {% endif %}
+</table>
+{% endif %}
+{% endblock %}

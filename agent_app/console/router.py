@@ -41,6 +41,9 @@ def build_policy_console_router(
     environment_store: Any = None,
     ring_store: Any = None,
     ring_assignment_store: Any = None,
+    event_store: Any = None,
+    reload_manager: Any = None,
+    ring_router: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -57,6 +60,9 @@ def build_policy_console_router(
         environment_store: Optional policy environment store (Phase 32).
         ring_store: Optional release ring store (Phase 33).
         ring_assignment_store: Optional ring activation assignment store (Phase 33).
+        event_store: Optional policy event store (Phase 34).
+        reload_manager: Optional policy reload manager (Phase 34).
+        ring_router: Optional ring router for routing simulation (Phase 34).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -1522,6 +1528,160 @@ def build_policy_console_router(
                 "assignments": assignments,
                 "message": message,
                 "store_available": ring_store is not None,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 34 Task 10: Events, reload, and routing simulation pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/events", response_class=HTMLResponse)
+    async def policy_events(request: Request):
+        """Events list page."""
+        if event_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_events.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "events": [],
+                    "error": "Event store not configured",
+                },
+            )
+        events_raw = await event_store.list(limit=50)
+        rows: list[dict] = []
+        for e in events_raw:
+            rows.append({
+                "event_id": e.event_id,
+                "event_type": e.event_type.value,
+                "environment": e.environment,
+                "ring_name": e.ring_name,
+                "actor_id": e.actor_id,
+                "created_at": e.created_at.isoformat() if e.created_at else "",
+            })
+        return templates.TemplateResponse(
+            request,
+            "policy_events.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "events": rows,
+                "error": None,
+            },
+        )
+
+    @router.get("/reload", response_class=HTMLResponse)
+    async def policy_reload_page(request: Request):
+        """Reload page showing cache info and reload form."""
+        cache_info: dict = {}
+        if release_service and release_service.policy_resolver:
+            cache_info = release_service.policy_resolver.cache_status()
+        return templates.TemplateResponse(
+            request,
+            "policy_reload.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "cache_info": cache_info,
+                "results": [],
+                "message": None,
+            },
+        )
+
+    @router.post("/reload", response_class=HTMLResponse)
+    async def policy_reload_post(request: Request):
+        """POST reload: request a policy reload."""
+        form = await request.form()
+        environment = form.get("environment", "")
+        ring_name = form.get("ring_name", "")
+        actor_id = form.get("actor_id", "")
+        reason = form.get("reason", "")
+
+        results: list[dict] = []
+        message = None
+        if reload_manager is not None:
+            try:
+                reload_results = await reload_manager.request_reload(
+                    environment=environment or None,
+                    ring_name=ring_name or None,
+                    requested_by=actor_id or None,
+                    reason=reason or None,
+                )
+                results = [
+                    {"target": r.target.model_dump(), "refreshed": r.refreshed, "error": r.error}
+                    for r in reload_results
+                ]
+                message = f"Reload requested: {len(results)} results"
+            except Exception as exc:
+                message = f"Reload failed: {exc}"
+        else:
+            message = "Reload manager not configured"
+
+        cache_info: dict = {}
+        if release_service and release_service.policy_resolver:
+            cache_info = release_service.policy_resolver.cache_status()
+
+        return templates.TemplateResponse(
+            request,
+            "policy_reload.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "cache_info": cache_info,
+                "results": results,
+                "message": message,
+            },
+        )
+
+    @router.get("/routing/simulate", response_class=HTMLResponse)
+    async def policy_routing_simulate_page(request: Request):
+        """Routing simulator form page."""
+        return templates.TemplateResponse(
+            request,
+            "policy_routing_simulate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "result": None,
+                "message": None,
+            },
+        )
+
+    @router.post("/routing/simulate", response_class=HTMLResponse)
+    async def policy_routing_simulate_post(request: Request):
+        """POST routing simulation: simulate ring routing for a user."""
+        form = await request.form()
+        environment = form.get("environment", "prod")
+        actor_id = form.get("actor_id", "")
+        user_id = form.get("user_id", "") or actor_id
+        tenant_id = form.get("tenant_id", "")
+
+        result = None
+        message = None
+        if ring_router is not None:
+            from agent_app.core.context import RunContext
+            context = RunContext(
+                run_id="sim_0",
+                user_id=user_id,
+                tenant_id=tenant_id,
+                permissions=[],
+            )
+            try:
+                result = await ring_router.simulate_routing(environment, context)
+            except Exception as exc:
+                message = f"Routing simulation failed: {exc}"
+        else:
+            message = "Ring router not configured"
+
+        return templates.TemplateResponse(
+            request,
+            "policy_routing_simulate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "result": result,
+                "message": message,
             },
         )
 

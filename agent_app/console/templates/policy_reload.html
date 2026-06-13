@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Reload</h2>
+
+{% if cache_info %}
+<h3>Cache Status</h3>
+<table>
+  {% for key, value in cache_info.items() %}
+  <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h3>Request Reload</h3>
+<form method="POST" action="/policy-console/reload">
+  <input name="environment" placeholder="Environment (optional)">
+  <input name="ring_name" placeholder="Ring name (optional)">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Reload</button>
+</form>
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+
+{% if results %}
+<h3>Reload Results</h3>
+<table>
+  <tr><th>Target</th><th>Refreshed</th><th>Error</th></tr>
+  {% for r in results %}
+  <tr>
+    <td>{{ r.target }}</td>
+    <td>{{ r.refreshed }}</td>
+    <td>{{ r.error or "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endblock %}
