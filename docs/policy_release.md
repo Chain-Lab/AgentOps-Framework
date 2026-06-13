@@ -523,3 +523,313 @@ Two new fields on `RunContext`:
 - No multi-environment bulk promotion (promote one environment at a time)
 - Console pages are read-only (activations created via promotion execution)
 - No activation diff view (future: show config changes between superseding activations)
+
+---
+
+# Phase 32: Policy Rollback, Emergency Disable, and Activation Safety Controls
+
+## Overview
+
+**Phase 32** adds emergency controls and safety mechanisms to the Phase 31
+activation system. It provides:
+
+1. **PolicyEnvironmentState** — ENABLED/DISABLED status per environment with reason tracking
+2. **PolicyEnvironmentStore** — Protocol + InMemory + SQLite persistence for environment states
+3. **Activation Rollback** — `rollback_to_activation()` creates a new activation pointing to a previous bundle, superseding the current active
+4. **Rollback Fields on PolicyActivation** — `rollback_of_activation_id` and `rollback_target_activation_id` for rollback lineage tracking
+5. **ActivePolicyResolver Safety** — Disabled environments return `None` for `resolve_active_bundle()`, raise `RuntimeError` for `require_active_bundle()`
+6. **RBAC Permissions** — 3 new permissions: `ENVIRONMENT_DISABLE`, `ENVIRONMENT_ENABLE` (require grant), `ENVIRONMENT_VIEW` (default-allowed)
+7. **Service APIs** — `rollback_environment()`, `disable_policy_environment()`, `enable_policy_environment()` with RBAC + audit
+8. **CLI Commands** — `agentapp policy environment list/disable/enable`, `agentapp policy activation rollback`
+9. **Console Pages** — Environment detail page with disable/enable/rollback forms
+
+## PolicyEnvironmentState Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `environment` | `str` | Environment name |
+| `status` | `PolicyEnvironmentStatus` | `ENABLED` or `DISABLED` (default: `ENABLED`) |
+| `disabled_reason` | `str \| None` | Why the environment was disabled |
+| `disabled_by` | `str \| None` | Who disabled the environment |
+| `disabled_at` | `datetime \| None` | When the environment was disabled |
+| `enabled_by` | `str \| None` | Who last enabled the environment |
+| `enabled_at` | `datetime \| None` | When the environment was last enabled |
+| `updated_at` | `datetime` | Last update timestamp |
+
+**Default state:** When an environment has no stored state, `get()` returns a
+`PolicyEnvironmentState` with `status=ENABLED` and all tracking fields as `None`.
+This means new environments are enabled by default without requiring explicit
+initialization.
+
+## PolicyEnvironmentStore
+
+Protocol + InMemory + SQLite persistence, following the same pattern as
+`PolicyBundleStore` and `PolicyActivationStore`:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get()` | `get(environment: str) -> PolicyEnvironmentState` | Returns current state (defaults to ENABLED) |
+| `disable()` | `disable(environment: str, disabled_by: str, reason: str) -> PolicyEnvironmentState` | Sets status to DISABLED with reason and actor |
+| `enable()` | `enable(environment: str, enabled_by: str, reason: str \| None = None) -> PolicyEnvironmentState` | Sets status to ENABLED with actor |
+| `list()` | `list() -> list[PolicyEnvironmentState]` | Lists all stored environment states |
+
+**SQLite schema:** `policy_environment_states` table with `environment` as primary key.
+Uses `INSERT OR REPLACE` for disable/enable operations.
+
+**Factory:** `create_policy_environment_store(store_type, db_path)` supports `"memory"`
+and `"sqlite"` types.
+
+## Activation Rollback Lifecycle
+
+Rollback creates a **new** activation record pointing to the target bundle rather
+than modifying existing records. This preserves a complete audit trail.
+
+### Steps
+
+1. **Validate** — Check ROLLBACK_EXECUTE permission; verify target activation exists
+   and belongs to the same environment; verify target bundle still exists in bundle store
+2. **Supersede current** — Current ACTIVE activation transitions to SUPERSEDED with
+   `superseded_by_activation_id` pointing to the new rollback activation
+3. **Create new activation** — New `PolicyActivation` record with:
+   - `bundle_id` = target activation's bundle_id
+   - `config_hash` = target activation's config_hash
+   - `status` = ACTIVE
+   - `rollback_of_activation_id` = the current activation that was superseded
+   - `rollback_target_activation_id` = the target activation being rolled back to
+4. **Clear cache** — Resolver cache entry for the environment is invalidated
+
+### Rollback Fields on PolicyActivation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rollback_of_activation_id` | `str \| None` | The activation that was superseded by this rollback |
+| `rollback_target_activation_id` | `str \| None` | The activation this rollback targets (points to its bundle) |
+
+Both fields are `None` for activations created via normal promotion execution.
+
+### `rollback_to_activation()` on PolicyActivationStore
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get_previous_activation()` | `get_previous_activation(environment, before_activation_id=None) -> PolicyActivation \| None` | Find the most recent non-ACTIVE activation |
+| `rollback_to_activation()` | `rollback_to_activation(environment, target_activation_id, rolled_back_by, reason=None) -> PolicyActivation` | Create new ACTIVE activation pointing to target's bundle |
+
+**SQLite migration:** Existing databases automatically get `rollback_of_activation_id` and
+`rollback_target_activation_id` columns added via `ALTER TABLE`.
+
+## Environment Disable/Enable Lifecycle
+
+### Disable
+
+1. Check `ENVIRONMENT_DISABLE` permission
+2. Require non-empty `reason` (mandatory for audit trail)
+3. Store sets status to DISABLED with `disabled_reason`, `disabled_by`, `disabled_at`
+4. Clear resolver cache for the environment
+5. Audit event: `policy.environment.disabled`
+
+### Enable
+
+1. Check `ENVIRONMENT_ENABLE` permission
+2. Store sets status to ENABLED with `enabled_by`, `enabled_at`
+3. Clear resolver cache for the environment
+4. Audit event: `policy.environment.enabled`
+
+Both operations refresh the resolver cache to ensure the safety check immediately
+reflects the new state.
+
+## RBAC Permissions (Phase 32 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ENVIRONMENT_DISABLE` | `policy.environment.disable` | Requires grant |
+| `ENVIRONMENT_ENABLE` | `policy.environment.enable` | Requires grant |
+| `ENVIRONMENT_VIEW` | `policy.environment.view` | Allowed |
+
+`ENVIRONMENT_VIEW` is default-allowed alongside `BUNDLE_CREATE` and `GATE_RUN`.
+`ENVIRONMENT_DISABLE` and `ENVIRONMENT_ENABLE` require explicit grants in
+`RunContext.permissions`, consistent with other destructive operations.
+
+`ROLLBACK_EXECUTE` (`policy.rollback.execute`) already existed from Phase 30 and
+governs the new `rollback_environment()` method.
+
+## ActivePolicyResolver Safety Behavior
+
+The resolver checks environment state before attempting bundle resolution:
+
+### `resolve_active_bundle(environment) → PolicyBundle | None`
+
+If environment is DISABLED:
+- Returns `None` immediately (no store lookup, no bundle fetch)
+- Caches the `None` result if TTL caching is enabled
+
+If environment is ENABLED (or no environment store configured):
+- Proceeds with normal resolution (activation lookup, bundle fetch, hash verification)
+
+### `require_active_bundle(environment) → PolicyBundle`
+
+If environment is DISABLED:
+- Raises `RuntimeError` with message including the disabled reason:
+  `"Policy environment '<env>' is disabled: <reason>. Enable the environment before requiring active policy."`
+
+If environment is ENABLED but no active bundle exists:
+- Raises `KeyError` (unchanged from Phase 31)
+
+This two-tier error behavior allows callers to gracefully handle disabled environments
+(via `resolve_active_bundle`) while still getting a clear error for strict enforcement
+(via `require_active_bundle`).
+
+## Config Schema (Phase 32 additions)
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    environments:
+      type: sqlite
+      path: .agent_app/policy_environments.db
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod
+      require_active_policy: false
+      cache_ttl_seconds: 300
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config section:
+- `environments` — Optional environment store config (default: `None`, backward compatible)
+
+The config loader wires `environment_store` into both `PolicyReleaseService` and
+`ActivePolicyResolver` when the `environments` section is present.
+
+## CLI Commands (Phase 32 additions)
+
+```bash
+# List environment states
+agentapp policy environment list --config <path>
+
+# Disable an environment (requires --reason)
+agentapp policy environment disable --config <path> --environment <env> --disabled-by <who> --reason <text> [--actor-id <id>] [--permissions <list>]
+
+# Re-enable a disabled environment
+agentapp policy environment enable --config <path> --environment <env> --enabled-by <who> [--reason <text>] [--actor-id <id>] [--permissions <list>]
+
+# Roll back an environment to a previous activation
+agentapp policy activation rollback --config <path> --environment <env> --rolled-back-by <who> [--target-activation-id <id>] [--reason <text>] [--actor-id <id>] [--permissions <list>]
+```
+
+All Phase 32 commands support `--actor-id` and `--permissions` for RBAC testing,
+consistent with Phase 30 promotion commands.
+
+The `activation rollback` command creates a new activation pointing to the previous
+bundle. If `--target-activation-id` is omitted, it rolls back to the most recent
+non-ACTIVE activation for the environment.
+
+## Console Pages (Phase 32 additions)
+
+| Route | Template | Method | Description |
+|-------|----------|--------|-------------|
+| `GET /environments/{environment}` | `policy_environment_detail.html` | GET | Environment detail page with status, activations, and action forms |
+| `POST /environments/{environment}/disable` | `policy_environment_detail.html` | POST | Disable the environment |
+| `POST /environments/{environment}/enable` | `policy_environment_detail.html` | POST | Re-enable the environment |
+| `POST /environments/{environment}/rollback` | `policy_environment_detail.html` | POST | Roll back to a previous activation |
+
+The environment detail page shows:
+- Current environment status (ENABLED/DISABLED badge)
+- Disabled reason, disabled_by, and disabled_at if applicable
+- Current active activation details
+- List of previous activations for the environment
+- Action forms for disable/enable/rollback (respecting RBAC permissions)
+
+Console actions require a `PolicyReleaseService` with appropriate permissions
+passed via form data.
+
+## Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.environment.disabled` | Environment successfully disabled |
+| `policy.environment.enabled` | Environment successfully re-enabled |
+| `policy.environment.disable_denied` | ENVIRONMENT_DISABLE permission denied |
+| `policy.environment.enable_denied` | ENVIRONMENT_ENABLE permission denied |
+| `policy.activation.rollback_completed` | Rollback successfully created new activation |
+| `policy.activation.rollback_failed` | Rollback failed (validation or store error) |
+| `policy.activation.rollback_denied` | ROLLBACK_EXECUTE permission denied |
+| `policy.runtime.policy_resolution_blocked` | Resolver returned None for disabled environment |
+
+## Design Decisions
+
+1. **Rollback creates a new activation** — Instead of reactivating an old record,
+   rollback creates a fresh `PolicyActivation` pointing to the target's bundle.
+   This preserves the complete activation lineage and audit trail, enabling
+   operators to trace the full history of which bundle was active at any time.
+
+2. **Disabled environment returns None for resolve, RuntimeError for require** —
+   The two-tier behavior lets callers choose their safety level. Callers using
+   `resolve_active_bundle()` can gracefully degrade (e.g., fall back to a default
+   policy), while `require_active_bundle()` provides a hard stop with a clear
+   error message including the disabled reason.
+
+3. **Disable requires a non-empty reason** — Unlike other operations where reason
+   is optional, disabling a policy environment mandates a reason string. This
+   ensures the audit trail always captures why production policy was blocked.
+
+4. **Environment defaults to ENABLED** — When no state is stored for an environment,
+   `get()` returns `PolicyEnvironmentStatus.ENABLED`. This avoids requiring explicit
+   initialization for every environment and maintains backward compatibility with
+   Phase 31 configs.
+
+5. **ENVIRONMENT_VIEW is default-allowed** — Viewing environment state is a read-only
+   operation with no side effects, consistent with `BUNDLE_CREATE` and `GATE_RUN`
+   being default-allowed. Disable and enable are destructive and require grants.
+
+6. **Resolver cache cleared on state change** — Both disable/enable and rollback
+   clear the resolver cache for the affected environment. This ensures the safety
+   check and bundle resolution immediately reflect the new state without waiting
+   for TTL expiry.
+
+7. **Target bundle validation in rollback** — `rollback_environment()` verifies the
+   target bundle still exists in the bundle store before creating the rollback
+   activation. This prevents rolling back to a bundle that was deleted or lost.
+
+8. **SQLite schema migration for rollback columns** — Existing `policy_activations`
+   tables automatically get `rollback_of_activation_id` and
+   `rollback_target_activation_id` columns added via `ALTER TABLE` on store init.
+   This ensures Phase 31 databases work without manual migration.
+
+## Known Limitations
+
+1. **No automatic rollback trigger** — Rollback is operator-initiated only. There
+   is no automatic rollback on policy failure or error rate threshold.
+
+2. **No rollback preview** — No diff or preview of what the rollback will change
+   before executing it. Operators must inspect the target activation manually.
+
+3. **No multi-environment rollback** — Rollback operates on one environment at a
+   time. Bulk rollback across environments is not supported.
+
+4. **Resolver cache uses clear, not targeted invalidation** — When the resolver
+   lacks a `refresh()` method, `clear_cache()` is called instead, invalidating
+   cache entries for all environments rather than just the affected one.
+
+5. **Environment disable does not interrupt in-flight runs** — Disabling an
+   environment only affects future resolution calls. Currently executing runs
+   continue with their already-resolved policy bundle.
+
+6. **No environment-level policy override** — Disabling an environment blocks
+   resolution entirely; there is no mechanism to serve a fallback or default
+   policy for a disabled environment.

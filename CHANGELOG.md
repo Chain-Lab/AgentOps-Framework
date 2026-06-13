@@ -2,6 +2,37 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## Phase 32: Policy Rollback, Emergency Disable, and Activation Safety Controls (0.20.0)
+
+### Added
+
+- **PolicyEnvironmentState model** — ENABLED/DISABLED status per environment with disabled_reason, disabled_by, disabled_at, enabled_by, enabled_at, updated_at timestamps
+- **PolicyEnvironmentStore** — Protocol + InMemory + SQLite persistence for environment states; get(), disable(), enable(), list() methods
+- **Activation rollback** — rollback_to_activation() creates new activation pointing to previous bundle, supersedes current active
+- **PolicyActivation rollback fields** — rollback_of_activation_id (the superseded activation) and rollback_target_activation_id (the target activation being rolled back to)
+- **PolicyActivationStore rollback methods** — get_previous_activation() and rollback_to_activation() on both InMemory and SQLite stores; SQLite ALTER TABLE migration for new columns
+- **ActivePolicyResolver safety** — Disabled environments return None for resolve_active_bundle(), raise RuntimeError with disabled reason for require_active_bundle()
+- **RBAC permissions** — ENVIRONMENT_DISABLE, ENVIRONMENT_ENABLE (require explicit grant), ENVIRONMENT_VIEW (default-allowed)
+- **Service APIs** — rollback_environment(), disable_policy_environment(), enable_policy_environment() with RBAC + audit + resolver cache clearing
+- **Config extensions** — environments store config (type + path) wired through loader into PolicyReleaseService and ActivePolicyResolver
+- **CLI commands** — `agentapp policy environment list/disable/enable`, `agentapp policy activation rollback --environment <env>`
+- **Console pages** — Environment detail page (GET /environments/{environment}), disable POST, enable POST, rollback POST
+- **Console template** — `policy_environment_detail.html` with status badge, action forms, and activation history
+- **Audit events** — policy.environment.disabled/enabled, policy.environment.disable_denied/enable_denied, policy.activation.rollback_completed/failed/rollback_denied, policy.runtime.policy_resolution_blocked
+- **75+ tests** — Model (7), store (11), rollback (12), RBAC (6), resolver safety (6), service (14), config (4), CLI (8), console (7)
+
+### Changed
+
+- PolicyReleaseService gains rollback_environment(), disable_policy_environment(), enable_policy_environment(), environment_store property
+- PolicyReleaseService.__init__() accepts environment_store parameter
+- ActivePolicyResolver.__init__() accepts environment_store parameter; resolve and require methods check environment state
+- PolicyActivation model gains rollback_of_activation_id and rollback_target_activation_id fields
+- PolicyActivationStore protocol gains get_previous_activation() and rollback_to_activation() methods
+- PolicyReleasePermission gains ENVIRONMENT_DISABLE, ENVIRONMENT_ENABLE, ENVIRONMENT_VIEW values
+- PolicyReleasePermissionChecker default-allowed set includes ENVIRONMENT_VIEW
+- Console router accepts environment_store parameter; adds environment detail, disable, enable, rollback routes
+- FastAPI adapter passes environment_store to console router
+
 ## Phase 31: Policy Runtime Activation, Environment Isolation, and Hot Reload Baseline (0.19.0)
 
 ### Added
