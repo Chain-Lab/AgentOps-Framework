@@ -180,13 +180,50 @@ class ActivePolicyResolver:
             raise KeyError(f"No active policy bundle for environment '{environment}' ring '{ring_name}'.")
         return bundle
 
-    def refresh(self, environment: str) -> None:
-        """Clear cache for environment (and any ring-specific entries)."""
-        self._cache.pop(environment, None)
-        # Also clear ring-specific cache entries
-        keys_to_remove = [k for k in self._cache if isinstance(k, tuple) and k[0] == environment]
-        for k in keys_to_remove:
-            del self._cache[k]
+    def cache_status(self) -> dict[str, Any]:
+        """Return cache status information."""
+        keys: list[str] = []
+        for k in self._cache:
+            if isinstance(k, tuple):
+                keys.append(f"{k[0]}:{k[1]}")
+            else:
+                keys.append(k)
+        return {
+            "entries": len(self._cache),
+            "keys": keys,
+            "ttl": self._cache_ttl,
+        }
 
-    def clear_cache(self) -> None:
-        self._cache.clear()
+    def refresh(
+        self,
+        environment: str | None = None,
+        ring_name: str | None = None,
+    ) -> None:
+        """Clear cache for target. If both None, clear all."""
+        if environment is None and ring_name is None:
+            self._cache.clear()
+        elif environment is not None and ring_name is not None:
+            self._cache.pop((environment, ring_name), None)
+        elif environment is not None:
+            # Clear env key + all ring tuple keys for that env
+            self._cache.pop(environment, None)
+            keys_to_remove = [k for k in self._cache if isinstance(k, tuple) and k[0] == environment]
+            for k in keys_to_remove:
+                del self._cache[k]
+        # ring_name alone without environment: no-op (need env for cache key)
+
+    def clear_cache(
+        self,
+        environment: str | None = None,
+        ring_name: str | None = None,
+    ) -> None:
+        """Clear cache. If both None, clear all. If environment, clear env + ring keys. If env+ring, clear specific."""
+        if environment is None and ring_name is None:
+            self._cache.clear()
+        elif environment is not None and ring_name is not None:
+            self._cache.pop((environment, ring_name), None)
+        elif environment is not None:
+            self._cache.pop(environment, None)
+            keys_to_remove = [k for k in self._cache if isinstance(k, tuple) and k[0] == environment]
+            for k in keys_to_remove:
+                del self._cache[k]
