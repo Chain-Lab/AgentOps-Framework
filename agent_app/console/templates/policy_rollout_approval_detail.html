@@ -19,12 +19,61 @@
   <tr><th>Resolved At</th><td>{{ approval.resolved_at or "—" }}</td></tr>
 </table>
 
+{% if approval.expires_at %}
+<h3>Expiration</h3>
+<table>
+  <tr><th>Expires At</th><td>{{ approval.expires_at }}</td></tr>
+</table>
+{% endif %}
+
+{% if approval.policy %}
+<h3>Approval Policy</h3>
+<table>
+  <tr><th>Policy Type</th><td>{{ approval.policy.policy_type }}</td></tr>
+  <tr><th>Required Approvals</th><td>{{ approval.policy.required_approvals }}</td></tr>
+  {% if approval.policy.allowed_approver_roles %}
+  <tr><th>Allowed Approver Roles</th><td>{{ approval.policy.allowed_approver_roles | join(", ") }}</td></tr>
+  {% endif %}
+  {% if approval.policy.allowed_approver_permissions %}
+  <tr><th>Allowed Approver Permissions</th><td>{{ approval.policy.allowed_approver_permissions | join(", ") }}</td></tr>
+  {% endif %}
+  {% if approval.policy.prohibit_requester_approval %}
+  <tr><th>Prohibit Requester Approval</th><td>{{ approval.policy.prohibit_requester_approval }}</td></tr>
+  {% endif %}
+</table>
+{% endif %}
+
+<h3>Approval Progress</h3>
+<p>{{ approval.current_approvals }}/{{ approval.required_approvals }} approvals</p>
+
+{% if approval.status == "pending" and approval.remaining_approvals > 0 %}
+<p class="info">Approval recorded. Waiting for {{ approval.remaining_approvals }} more approval(s).</p>
+{% endif %}
+
+{% if approval.decisions %}
+<h3>Decisions</h3>
+<table>
+  <tr><th>Decision ID</th><th>Type</th><th>Decided By</th><th>Reason</th><th>Roles</th><th>Timestamp</th></tr>
+  {% for d in approval.decisions %}
+  <tr>
+    <td>{{ d.decision_id }}</td>
+    <td>{{ d.decision_type }}</td>
+    <td>{{ d.decided_by }}</td>
+    <td>{{ d.reason or "—" }}</td>
+    <td>{{ d.roles | join(", ") }}</td>
+    <td>{{ d.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
 {% if approval.status == "pending" %}
 <h3>Approve</h3>
 <form method="POST" action="/policy-console/rollout-approvals/{{ approval.approval_id }}/approve">
   <input name="actor_id" placeholder="Actor ID">
   <input name="permissions" value="policy.rollout.approval.approve">
   <input name="reason" placeholder="Reason">
+  <input name="roles" placeholder="Roles (comma-separated)">
   <button type="submit">Approve</button>
 </form>
 
@@ -33,6 +82,7 @@
   <input name="actor_id" placeholder="Actor ID">
   <input name="permissions" value="policy.rollout.approval.reject">
   <input name="reason" placeholder="Reason">
+  <input name="roles" placeholder="Roles (comma-separated)">
   <button type="submit">Reject</button>
 </form>
 {% endif %}

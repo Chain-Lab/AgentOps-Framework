@@ -2195,6 +2195,8 @@ def build_policy_console_router(
                 form = await request.form()
                 actor_id = form.get("actor_id", "")
                 reason = form.get("reason") or None
+                roles_str = form.get("roles", "")
+                roles = [r.strip() for r in roles_str.split(",") if r.strip()] if roles_str else []
                 if not actor_id:
                     error_msg = "actor_id is required."
                 else:
@@ -2203,6 +2205,7 @@ def build_policy_console_router(
                         run_id=f"console_{actor_id}",
                         user_id=actor_id,
                         tenant_id=form.get("tenant_id") or "default",
+                        roles=roles,
                         permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
                     )
                     updated = await rollout_service.approve_step(
@@ -2249,6 +2252,8 @@ def build_policy_console_router(
                 form = await request.form()
                 actor_id = form.get("actor_id", "")
                 reason = form.get("reason") or None
+                roles_str = form.get("roles", "")
+                roles = [r.strip() for r in roles_str.split(",") if r.strip()] if roles_str else []
                 if not actor_id:
                     error_msg = "actor_id is required."
                 else:
@@ -2257,6 +2262,7 @@ def build_policy_console_router(
                         run_id=f"console_{actor_id}",
                         user_id=actor_id,
                         tenant_id=form.get("tenant_id") or "default",
+                        roles=roles,
                         permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
                     )
                     updated = await rollout_service.reject_step(
@@ -2691,6 +2697,14 @@ def _parse_rollout_steps(steps_yaml: str) -> list:
 # Phase 36: rollout approval helpers
 def _approval_to_row(approval: Any) -> dict:
     """Convert RolloutStepApproval to a dict for template rendering."""
+    # Compute approval progress
+    decisions = getattr(approval, "decisions", [])
+    current_approvals = sum(
+        1 for d in decisions
+        if hasattr(d, "decision_type") and d.decision_type.value == "approve"
+    )
+    policy = getattr(approval, "policy", None)
+    required_approvals = policy.required_approvals if policy else 1
     return {
         "approval_id": approval.approval_id,
         "rollout_id": approval.rollout_id,
@@ -2702,6 +2716,8 @@ def _approval_to_row(approval: Any) -> dict:
         "requested_by": approval.requested_by,
         "resolved_by": approval.resolved_by or "",
         "created_at": approval.created_at.isoformat() if approval.created_at else "",
+        "current_approvals": current_approvals,
+        "required_approvals": required_approvals,
     }
 
 
@@ -2713,6 +2729,45 @@ def _approval_to_detail(approval: Any) -> dict:
     resolved = approval.resolved_at
     if resolved and hasattr(resolved, "isoformat"):
         resolved = resolved.isoformat()
+    expires_at = getattr(approval, "expires_at", None)
+    if expires_at and hasattr(expires_at, "isoformat"):
+        expires_at = expires_at.isoformat()
+
+    # Policy information
+    policy = getattr(approval, "policy", None)
+    policy_dict = None
+    if policy is not None:
+        policy_dict = {
+            "policy_type": policy.policy_type.value if hasattr(policy.policy_type, "value") else str(policy.policy_type),
+            "required_approvals": policy.required_approvals,
+            "allowed_approver_permissions": list(policy.allowed_approver_permissions) if hasattr(policy, "allowed_approver_permissions") else [],
+            "allowed_approver_roles": list(policy.allowed_approver_roles) if hasattr(policy, "allowed_approver_roles") else [],
+            "prohibit_requester_approval": policy.prohibit_requester_approval,
+            "expires_after_seconds": policy.expires_after_seconds,
+        }
+
+    # Decisions
+    decisions_list = []
+    raw_decisions = getattr(approval, "decisions", [])
+    for d in raw_decisions:
+        d_created = d.created_at
+        if hasattr(d_created, "isoformat"):
+            d_created = d_created.isoformat()
+        decisions_list.append({
+            "decision_id": d.decision_id,
+            "decision_type": d.decision_type.value if hasattr(d.decision_type, "value") else str(d.decision_type),
+            "decided_by": d.decided_by,
+            "reason": d.reason or "",
+            "roles": list(d.roles) if hasattr(d, "roles") else [],
+            "permissions": list(d.permissions) if hasattr(d, "permissions") else [],
+            "created_at": d_created,
+        })
+
+    # Approval progress
+    current_approvals = sum(1 for d in decisions_list if d["decision_type"] == "approve")
+    required_approvals = policy.required_approvals if policy else 1
+    remaining_approvals = max(0, required_approvals - current_approvals)
+
     return {
         "approval_id": approval.approval_id,
         "rollout_id": approval.rollout_id,
@@ -2727,4 +2782,10 @@ def _approval_to_detail(approval: Any) -> dict:
         "resolved_reason": approval.resolved_reason or "",
         "created_at": created,
         "resolved_at": resolved or "",
+        "policy": policy_dict,
+        "decisions": decisions_list,
+        "required_approvals": required_approvals,
+        "current_approvals": current_approvals,
+        "remaining_approvals": remaining_approvals,
+        "expires_at": expires_at or "",
     }

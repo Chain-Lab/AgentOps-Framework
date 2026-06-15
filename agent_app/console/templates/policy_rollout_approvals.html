@@ -10,7 +10,7 @@
 
 {% if approvals %}
 <table>
-  <tr><th>Approval ID</th><th>Rollout ID</th><th>Step ID</th><th>Environment</th><th>Ring</th><th>Status</th><th>Requested By</th><th>Resolved By</th><th>Created At</th></tr>
+  <tr><th>Approval ID</th><th>Rollout ID</th><th>Step ID</th><th>Environment</th><th>Ring</th><th>Status</th><th>Progress</th><th>Requested By</th><th>Resolved By</th><th>Created At</th></tr>
   {% for a in approvals %}
   <tr>
     <td><a href="/policy-console/rollout-approvals/{{ a.approval_id }}">{{ a.approval_id }}</a></td>
@@ -19,6 +19,7 @@
     <td>{{ a.environment }}</td>
     <td>{{ a.ring_name }}</td>
     <td>{{ a.status }}</td>
+    <td>{{ a.current_approvals }}/{{ a.required_approvals }}</td>
     <td>{{ a.requested_by }}</td>
     <td>{{ a.resolved_by }}</td>
     <td>{{ a.created_at }}</td>
