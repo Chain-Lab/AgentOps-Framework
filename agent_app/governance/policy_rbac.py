@@ -37,6 +37,10 @@ class PolicyReleasePermission(StrEnum):
         ROLLOUT_EXECUTE: Execute a policy rollout.
         ROLLOUT_CANCEL: Cancel a policy rollout.
         ROLLOUT_VIEW: View policy rollout state (default-allowed).
+        ROLLOUT_APPROVAL_REQUEST: Request approval for a rollout step (requires explicit permission).
+        ROLLOUT_APPROVAL_APPROVE: Approve a rollout step (requires explicit permission).
+        ROLLOUT_APPROVAL_REJECT: Reject a rollout step (requires explicit permission).
+        ROLLOUT_APPROVAL_VIEW: View rollout approval state (default-allowed).
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -65,6 +69,10 @@ class PolicyReleasePermission(StrEnum):
     ROLLOUT_EXECUTE = "policy.rollout.execute"
     ROLLOUT_CANCEL = "policy.rollout.cancel"
     ROLLOUT_VIEW = "policy.rollout.view"
+    ROLLOUT_APPROVAL_REQUEST = "policy.rollout.approval.request"
+    ROLLOUT_APPROVAL_APPROVE = "policy.rollout.approval.approve"
+    ROLLOUT_APPROVAL_REJECT = "policy.rollout.approval.reject"
+    ROLLOUT_APPROVAL_VIEW = "policy.rollout.approval.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -75,6 +83,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.RELOAD_VIEW,
     PolicyReleasePermission.EVENT_VIEW,
     PolicyReleasePermission.ROLLOUT_VIEW,
+    PolicyReleasePermission.ROLLOUT_APPROVAL_VIEW,
 }
 
 
