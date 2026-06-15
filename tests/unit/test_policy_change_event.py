@@ -16,7 +16,7 @@ class TestPolicyChangeEventType:
     """Tests for PolicyChangeEventType enum."""
 
     def test_all_event_types_valid(self) -> None:
-        """All 12 enum values are valid strings with expected dot-notation."""
+        """All 18 enum values are valid strings with expected dot-notation."""
         expected = {
             "policy.bundle.created",
             "policy.gate.completed",
@@ -30,13 +30,19 @@ class TestPolicyChangeEventType:
             "policy.ring.disabled",
             "policy.ring.enabled",
             "policy.reload.requested",
+            "policy.rollout.created",
+            "policy.rollout.started",
+            "policy.rollout.step_succeeded",
+            "policy.rollout.completed",
+            "policy.rollout.failed",
+            "policy.rollout.cancelled",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 12 enum members defined."""
-        assert len(PolicyChangeEventType) == 12
+        """Exactly 18 enum members defined."""
+        assert len(PolicyChangeEventType) == 18
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""
@@ -133,3 +139,37 @@ class TestPolicyChangeEvent:
         )
         event_a.data["key"] = "value"
         assert "key" not in event_b.data
+
+
+class TestRolloutEventTypesPhase35:
+    """Tests for the six rollout event types added in Phase 35."""
+
+    def test_rollout_event_types_exist(self) -> None:
+        """All six rollout event types exist with correct values."""
+        assert PolicyChangeEventType.ROLLOUT_CREATED == "policy.rollout.created"
+        assert PolicyChangeEventType.ROLLOUT_STARTED == "policy.rollout.started"
+        assert PolicyChangeEventType.ROLLOUT_STEP_SUCCEEDED == "policy.rollout.step_succeeded"
+        assert PolicyChangeEventType.ROLLOUT_COMPLETED == "policy.rollout.completed"
+        assert PolicyChangeEventType.ROLLOUT_FAILED == "policy.rollout.failed"
+        assert PolicyChangeEventType.ROLLOUT_CANCELLED == "policy.rollout.cancelled"
+
+    def test_rollout_event_creation(self) -> None:
+        """Create a PolicyChangeEvent with ROLLOUT_CREATED type."""
+        now = datetime.now(timezone.utc)
+        event = PolicyChangeEvent(
+            event_id="pce_rollout_001",
+            event_type=PolicyChangeEventType.ROLLOUT_CREATED,
+            environment="production",
+            ring_name="canary",
+            bundle_id="pb_042",
+            actor_id="user-7",
+            reason="Scheduled rollout",
+            data={"steps": 5},
+            created_at=now,
+        )
+        assert event.event_type == PolicyChangeEventType.ROLLOUT_CREATED
+        assert event.event_type == "policy.rollout.created"
+        assert event.environment == "production"
+        assert event.ring_name == "canary"
+        assert event.bundle_id == "pb_042"
+        assert event.data == {"steps": 5}

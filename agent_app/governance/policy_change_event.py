@@ -24,6 +24,12 @@ class PolicyChangeEventType(StrEnum):
     RING_DISABLED = "policy.ring.disabled"
     RING_ENABLED = "policy.ring.enabled"
     MANUAL_RELOAD_REQUESTED = "policy.reload.requested"
+    ROLLOUT_CREATED = "policy.rollout.created"
+    ROLLOUT_STARTED = "policy.rollout.started"
+    ROLLOUT_STEP_SUCCEEDED = "policy.rollout.step_succeeded"
+    ROLLOUT_COMPLETED = "policy.rollout.completed"
+    ROLLOUT_FAILED = "policy.rollout.failed"
+    ROLLOUT_CANCELLED = "policy.rollout.cancelled"
 
 
 class PolicyChangeEvent(BaseModel):
