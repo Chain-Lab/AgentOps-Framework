@@ -16,7 +16,7 @@
 <h3>Steps</h3>
 {% if plan.steps %}
 <table>
-  <tr><th>Step ID</th><th>Type</th><th>Environment</th><th>Ring</th><th>Status</th><th>Error</th></tr>
+  <tr><th>Step ID</th><th>Type</th><th>Environment</th><th>Ring</th><th>Status</th><th>Approval</th><th>Error</th></tr>
   {% for s in plan.steps %}
   <tr>
     <td>{{ s.step_id }}</td>
@@ -24,6 +24,20 @@
     <td>{{ s.environment }}</td>
     <td>{{ s.ring_name }}</td>
     <td>{{ s.status }}</td>
+    <td>
+      {% if s.approval_id %}
+        <a href="/policy-console/rollout-approvals/{{ s.approval_id }}">{{ s.approval_id }}</a>
+      {% elif s.status == "blocked" and s.requires_approval %}
+        <form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/steps/{{ s.step_id }}/request-approval" style="display:inline">
+          <input name="actor_id" placeholder="Actor ID">
+          <input name="permissions" value="policy.rollout.approval.request">
+          <input name="reason" placeholder="Reason">
+          <button type="submit">Request Approval</button>
+        </form>
+      {% else %}
+        —
+      {% endif %}
+    </td>
     <td>{{ s.error or "—" }}</td>
   </tr>
   {% endfor %}

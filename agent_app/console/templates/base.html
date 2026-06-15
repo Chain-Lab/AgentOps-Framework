@@ -23,7 +23,8 @@
       <a href="/policy-console/rings" class="{% if '/rings' in request.url.path %}active{% endif %}">Rings</a>
       <a href="/policy-console/events" class="{% if '/events' in request.url.path %}active{% endif %}">Events</a>
       <a href="/policy-console/reload" class="{% if '/reload' in request.url.path %}active{% endif %}">Reload</a>
-      <a href="/policy-console/rollouts" class="{% if '/rollouts' in request.url.path %}active{% endif %}">Rollouts</a>
+      <a href="/policy-console/rollouts" class="{% if '/rollouts' in request.url.path and '/rollout-approvals' not in request.url.path %}active{% endif %}">Rollouts</a>
+      <a href="/policy-console/rollout-approvals" class="{% if '/rollout-approvals' in request.url.path %}active{% endif %}">Approvals</a>
       <a href="/policy-console/routing/simulate" class="{% if '/routing/simulate' in request.url.path %}active{% endif %}">Routing Sim</a>
     </nav>
   </header>

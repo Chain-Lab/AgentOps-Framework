@@ -793,6 +793,8 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 35: rollout store and service
         rollout_store=getattr(agent_app, "_rollout_store", None),
         rollout_service=getattr(agent_app, "_rollout_service", None),
+        # Phase 36: rollout approval store
+        approval_store=getattr(agent_app, "_rollout_approval_store", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout Step Approvals</h2>
+
+<form method="GET" action="/policy-console/rollout-approvals" class="filter-form">
+  <input name="status" placeholder="Status (pending/approved/rejected)" value="{{ filters.status }}">
+  <input name="rollout_id" placeholder="Rollout ID" value="{{ filters.rollout_id }}">
+  <button type="submit">Filter</button>
+</form>
+
+{% if approvals %}
+<table>
+  <tr><th>Approval ID</th><th>Rollout ID</th><th>Step ID</th><th>Environment</th><th>Ring</th><th>Status</th><th>Requested By</th><th>Resolved By</th><th>Created At</th></tr>
+  {% for a in approvals %}
+  <tr>
+    <td><a href="/policy-console/rollout-approvals/{{ a.approval_id }}">{{ a.approval_id }}</a></td>
+    <td><a href="/policy-console/rollouts/{{ a.rollout_id }}">{{ a.rollout_id }}</a></td>
+    <td>{{ a.step_id }}</td>
+    <td>{{ a.environment }}</td>
+    <td>{{ a.ring_name }}</td>
+    <td>{{ a.status }}</td>
+    <td>{{ a.requested_by }}</td>
+    <td>{{ a.resolved_by }}</td>
+    <td>{{ a.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No rollout step approvals found.</p>
+{% endif %}
+
+{% if not store_available %}
+<p class="error">Approval store not configured.</p>
+{% endif %}
+{% endblock %}

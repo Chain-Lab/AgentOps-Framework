@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+{% if approval %}
+<h2>Rollout Step Approval: {{ approval.approval_id }}</h2>
+
+<table>
+  <tr><th>Approval ID</th><td>{{ approval.approval_id }}</td></tr>
+  <tr><th>Rollout ID</th><td><a href="/policy-console/rollouts/{{ approval.rollout_id }}">{{ approval.rollout_id }}</a></td></tr>
+  <tr><th>Step ID</th><td>{{ approval.step_id }}</td></tr>
+  <tr><th>Bundle ID</th><td>{{ approval.bundle_id }}</td></tr>
+  <tr><th>Environment</th><td>{{ approval.environment }}</td></tr>
+  <tr><th>Ring</th><td>{{ approval.ring_name }}</td></tr>
+  <tr><th>Requested By</th><td>{{ approval.requested_by }}</td></tr>
+  <tr><th>Requested Reason</th><td>{{ approval.requested_reason or "—" }}</td></tr>
+  <tr><th>Status</th><td>{{ approval.status }}</td></tr>
+  <tr><th>Resolved By</th><td>{{ approval.resolved_by or "—" }}</td></tr>
+  <tr><th>Resolved Reason</th><td>{{ approval.resolved_reason or "—" }}</td></tr>
+  <tr><th>Created At</th><td>{{ approval.created_at }}</td></tr>
+  <tr><th>Resolved At</th><td>{{ approval.resolved_at or "—" }}</td></tr>
+</table>
+
+{% if approval.status == "pending" %}
+<h3>Approve</h3>
+<form method="POST" action="/policy-console/rollout-approvals/{{ approval.approval_id }}/approve">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" value="policy.rollout.approval.approve">
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Approve</button>
+</form>
+
+<h3>Reject</h3>
+<form method="POST" action="/policy-console/rollout-approvals/{{ approval.approval_id }}/reject">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" value="policy.rollout.approval.reject">
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Reject</button>
+</form>
+{% endif %}
+
+{% elif error %}
+<h2>Rollout Step Approval</h2>
+<p class="error">{{ error }}</p>
+
+{% else %}
+<h2>Rollout Step Approval</h2>
+<p>Approval store not configured or approval does not exist.</p>
+{% endif %}
+{% endblock %}

@@ -46,6 +46,7 @@ def build_policy_console_router(
     ring_router: Any = None,
     rollout_store: Any = None,
     rollout_service: Any = None,
+    approval_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -67,6 +68,7 @@ def build_policy_console_router(
         ring_router: Optional ring router for routing simulation (Phase 34).
         rollout_store: Optional rollout plan store (Phase 35).
         rollout_service: Optional rollout service (Phase 35).
+        approval_store: Optional rollout step approval store (Phase 36).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -2045,6 +2047,250 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 36 Task 8: Rollout Approval pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/rollout-approvals", response_class=HTMLResponse)
+    async def rollout_approvals_list(request: Request):
+        """Rollout step approvals list page."""
+        from agent_app.governance.policy_rollout_approval import RolloutStepApprovalStatus
+
+        status_filter = request.query_params.get("status", "")
+        rollout_id_filter = request.query_params.get("rollout_id", "")
+
+        approvals: list[dict] = []
+        if approval_store is not None:
+            parsed_status = None
+            if status_filter:
+                try:
+                    parsed_status = RolloutStepApprovalStatus(status_filter)
+                except ValueError:
+                    parsed_status = None
+            parsed_rollout_id = rollout_id_filter or None
+            results = await approval_store.list(status=parsed_status, rollout_id=parsed_rollout_id)
+            for a in results:
+                approvals.append(_approval_to_row(a))
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_approvals.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "approvals": approvals,
+                "filters": {
+                    "status": status_filter,
+                    "rollout_id": rollout_id_filter,
+                },
+                "store_available": approval_store is not None,
+            },
+        )
+
+    @router.get("/rollout-approvals/{approval_id}", response_class=HTMLResponse)
+    async def rollout_approval_detail(request: Request, approval_id: str):
+        """Single rollout step approval detail page."""
+        if approval_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_approval_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "approval": None,
+                    "error": "Approval store not configured.",
+                },
+            )
+        approval = await approval_store.get(approval_id)
+        if approval is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_approval_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "approval": None,
+                    "error": f"Approval '{approval_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_approval_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "approval": _approval_to_detail(approval),
+                "error": None,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/steps/{step_id}/request-approval")
+    async def rollout_request_approval(request: Request, rollout_id: str, step_id: str):
+        """Request approval for a rollout step."""
+        message = None
+        plan_detail = None
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    result = await rollout_service.request_step_approval(
+                        rollout_id=rollout_id,
+                        step_id=step_id,
+                        requested_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Approval requested for step '{step_id}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render rollout detail page
+        if rollout_store is not None:
+            plan = await rollout_store.get(rollout_id)
+            if plan is not None:
+                plan_detail = _rollout_to_detail(plan)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": rollout_store is not None,
+                "plan": plan_detail,
+                "message": message,
+                "error": None if plan_detail else message,
+            },
+        )
+
+    @router.post("/rollout-approvals/{approval_id}/approve")
+    async def rollout_approve_approval(request: Request, approval_id: str):
+        """Approve a pending rollout step approval."""
+        error_msg = None
+        approval_dict = None
+        if rollout_service is None:
+            error_msg = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    error_msg = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    updated = await rollout_service.approve_step(
+                        approval_id=approval_id,
+                        approved_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    approval_dict = _approval_to_detail(updated)
+            except PermissionError as exc:
+                error_msg = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                error_msg = str(exc)
+            except Exception as exc:
+                error_msg = str(exc)
+
+        # Re-render approval detail page
+        if approval_dict is None and approval_store is not None:
+            approval = await approval_store.get(approval_id)
+            if approval is not None:
+                approval_dict = _approval_to_detail(approval)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_approval_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": approval_store is not None,
+                "approval": approval_dict,
+                "error": error_msg,
+            },
+        )
+
+    @router.post("/rollout-approvals/{approval_id}/reject")
+    async def rollout_approve_reject(request: Request, approval_id: str):
+        """Reject a pending rollout step approval."""
+        error_msg = None
+        approval_dict = None
+        if rollout_service is None:
+            error_msg = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    error_msg = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    updated = await rollout_service.reject_step(
+                        approval_id=approval_id,
+                        rejected_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    approval_dict = _approval_to_detail(updated)
+            except PermissionError as exc:
+                error_msg = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                error_msg = str(exc)
+            except Exception as exc:
+                error_msg = str(exc)
+
+        # Re-render approval detail page
+        if approval_dict is None and approval_store is not None:
+            approval = await approval_store.get(approval_id)
+            if approval is not None:
+                approval_dict = _approval_to_detail(approval)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_approval_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": approval_store is not None,
+                "approval": approval_dict,
+                "error": error_msg,
+            },
+        )
+
     return router
 
 def _get_templates_dir() -> str:
@@ -2376,6 +2622,8 @@ def _step_to_row(step: Any) -> dict:
         "status": step.status,
         "error": step.error,
         "activation_id": step.activation_id or "",
+        "requires_approval": getattr(step, "requires_approval", False),
+        "approval_id": getattr(step, "approval_id", None) or "",
     }
 
 
@@ -2438,3 +2686,45 @@ def _parse_rollout_steps(steps_yaml: str) -> list:
     except Exception:
         # If YAML parsing fails, re-raise with clear message
         raise
+
+
+# Phase 36: rollout approval helpers
+def _approval_to_row(approval: Any) -> dict:
+    """Convert RolloutStepApproval to a dict for template rendering."""
+    return {
+        "approval_id": approval.approval_id,
+        "rollout_id": approval.rollout_id,
+        "step_id": approval.step_id,
+        "bundle_id": approval.bundle_id,
+        "environment": approval.environment,
+        "ring_name": approval.ring_name or "",
+        "status": approval.status.value,
+        "requested_by": approval.requested_by,
+        "resolved_by": approval.resolved_by or "",
+        "created_at": approval.created_at.isoformat() if approval.created_at else "",
+    }
+
+
+def _approval_to_detail(approval: Any) -> dict:
+    """Convert RolloutStepApproval to a detail page dict."""
+    created = approval.created_at
+    if hasattr(created, "isoformat"):
+        created = created.isoformat()
+    resolved = approval.resolved_at
+    if resolved and hasattr(resolved, "isoformat"):
+        resolved = resolved.isoformat()
+    return {
+        "approval_id": approval.approval_id,
+        "rollout_id": approval.rollout_id,
+        "step_id": approval.step_id,
+        "bundle_id": approval.bundle_id,
+        "environment": approval.environment,
+        "ring_name": approval.ring_name or "",
+        "requested_by": approval.requested_by,
+        "requested_reason": approval.requested_reason or "",
+        "status": approval.status.value,
+        "resolved_by": approval.resolved_by or "",
+        "resolved_reason": approval.resolved_reason or "",
+        "created_at": created,
+        "resolved_at": resolved or "",
+    }
