@@ -1,12 +1,15 @@
 """Rollout step approval store -- persists RolloutStepApproval instances with Protocol + InMemory + SQLite."""
 from __future__ import annotations
 
+import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
 from agent_app.governance.policy_rollout_approval import (
+    RolloutApprovalDecision,
+    RolloutApprovalPolicy,
     RolloutStepApproval,
     RolloutStepApprovalStatus,
 )
@@ -33,6 +36,14 @@ class RolloutStepApprovalStore(Protocol):
         status: RolloutStepApprovalStatus | None = None,
         rollout_id: str | None = None,
     ) -> list[RolloutStepApproval]: ...
+
+    async def add_decision(self, approval_id: str, decision: RolloutApprovalDecision) -> RolloutStepApproval:
+        """Add a decision to an approval and evaluate status."""
+        ...
+
+    async def expire_pending(self, now: datetime | None = None) -> list[RolloutStepApproval]:
+        """Mark pending approvals past their expires_at as EXPIRED. Returns expired approvals."""
+        ...
 
 
 class InMemoryRolloutStepApprovalStore:
@@ -109,6 +120,46 @@ class InMemoryRolloutStepApprovalStore:
             results.append(approval)
         return results
 
+    async def add_decision(self, approval_id: str, decision: RolloutApprovalDecision) -> RolloutStepApproval:
+        from agent_app.runtime.policy_rollout_approval_policy import RolloutApprovalPolicyEvaluator
+
+        approval = self._approvals.get(approval_id)
+        if approval is None:
+            raise KeyError(f"Rollout step approval '{approval_id}' not found")
+        if approval.status != RolloutStepApprovalStatus.PENDING:
+            raise ValueError(
+                f"Cannot add decision: approval '{approval_id}' status is {approval.status.value}, expected PENDING"
+            )
+        existing_actors = {d.decided_by for d in approval.decisions}
+        if decision.decided_by in existing_actors:
+            raise ValueError(
+                f"Actor '{decision.decided_by}' has already submitted a decision for approval '{approval_id}'"
+            )
+        approval.decisions.append(decision)
+        evaluator = RolloutApprovalPolicyEvaluator()
+        new_status = evaluator.evaluate_status(approval)
+        if new_status != RolloutStepApprovalStatus.PENDING:
+            approval.status = new_status
+            approval.resolved_by = decision.decided_by
+            approval.resolved_reason = decision.reason
+            approval.resolved_at = datetime.now()
+        return approval
+
+    async def expire_pending(self, now: datetime | None = None) -> list[RolloutStepApproval]:
+        if now is None:
+            now = datetime.now(timezone.utc)
+        expired: list[RolloutStepApproval] = []
+        for approval in self._approvals.values():
+            if (
+                approval.status == RolloutStepApprovalStatus.PENDING
+                and approval.expires_at is not None
+                and now >= approval.expires_at
+            ):
+                approval.status = RolloutStepApprovalStatus.EXPIRED
+                approval.resolved_at = now
+                expired.append(approval)
+        return expired
+
 
 class SQLiteRolloutStepApprovalStore:
     """SQLite-backed rollout step approval store."""
@@ -135,23 +186,38 @@ class SQLiteRolloutStepApprovalStore:
                 resolved_by TEXT,
                 resolved_reason TEXT,
                 created_at TEXT NOT NULL,
-                resolved_at TEXT
+                resolved_at TEXT,
+                policy_json TEXT,
+                decisions_json TEXT,
+                expires_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_rsa_status ON policy_rollout_step_approvals(status);
             CREATE INDEX IF NOT EXISTS idx_rsa_rollout ON policy_rollout_step_approvals(rollout_id);
         """)
+        # Migration: add new columns if they don't exist
+        for col in ("policy_json", "decisions_json", "expires_at"):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE policy_rollout_step_approvals ADD COLUMN {col} TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         self._conn.commit()
 
     async def create(self, approval: RolloutStepApproval) -> RolloutStepApproval:
         existing = await self.get_pending_for_step(approval.rollout_id, approval.step_id)
         if existing is not None:
             return existing
+        policy_json = approval.policy.model_dump_json()
+        decisions_json = json.dumps([d.model_dump(mode="json") for d in approval.decisions])
+        expires_at_str = approval.expires_at.isoformat() if approval.expires_at else None
         self._conn.execute(
             """INSERT INTO policy_rollout_step_approvals
                (approval_id, rollout_id, step_id, bundle_id, environment,
                 ring_name, requested_by, requested_reason, status,
-                resolved_by, resolved_reason, created_at, resolved_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                resolved_by, resolved_reason, created_at, resolved_at,
+                policy_json, decisions_json, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 approval.approval_id,
                 approval.rollout_id,
@@ -166,6 +232,9 @@ class SQLiteRolloutStepApprovalStore:
                 approval.resolved_reason,
                 approval.created_at.isoformat(),
                 approval.resolved_at.isoformat() if approval.resolved_at else None,
+                policy_json,
+                decisions_json,
+                expires_at_str,
             ),
         )
         self._conn.commit()
@@ -291,12 +360,110 @@ class SQLiteRolloutStepApprovalStore:
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_approval(row) for row in rows]
 
+    async def add_decision(self, approval_id: str, decision: RolloutApprovalDecision) -> RolloutStepApproval:
+        from agent_app.runtime.policy_rollout_approval_policy import RolloutApprovalPolicyEvaluator
+
+        row = self._conn.execute(
+            "SELECT * FROM policy_rollout_step_approvals WHERE approval_id=?", (approval_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Rollout step approval '{approval_id}' not found")
+        approval = self._row_to_approval(row)
+        if approval.status != RolloutStepApprovalStatus.PENDING:
+            raise ValueError(
+                f"Cannot add decision: approval '{approval_id}' status is {approval.status.value}, expected PENDING"
+            )
+        existing_actors = {d.decided_by for d in approval.decisions}
+        if decision.decided_by in existing_actors:
+            raise ValueError(
+                f"Actor '{decision.decided_by}' has already submitted a decision for approval '{approval_id}'"
+            )
+        approval.decisions.append(decision)
+        decisions_json = json.dumps([d.model_dump(mode="json") for d in approval.decisions])
+        evaluator = RolloutApprovalPolicyEvaluator()
+        new_status = evaluator.evaluate_status(approval)
+        if new_status != RolloutStepApprovalStatus.PENDING:
+            now = datetime.now()
+            self._conn.execute(
+                """UPDATE policy_rollout_step_approvals
+                   SET status=?, resolved_by=?, resolved_reason=?, resolved_at=?, decisions_json=?
+                   WHERE approval_id=?""",
+                (
+                    new_status.value,
+                    decision.decided_by,
+                    decision.reason,
+                    now.isoformat(),
+                    decisions_json,
+                    approval_id,
+                ),
+            )
+            approval.status = new_status
+            approval.resolved_by = decision.decided_by
+            approval.resolved_reason = decision.reason
+            approval.resolved_at = now
+        else:
+            self._conn.execute(
+                """UPDATE policy_rollout_step_approvals
+                   SET decisions_json=?
+                   WHERE approval_id=?""",
+                (decisions_json, approval_id),
+            )
+        self._conn.commit()
+        return approval
+
+    async def expire_pending(self, now: datetime | None = None) -> list[RolloutStepApproval]:
+        if now is None:
+            now = datetime.now(timezone.utc)
+        rows = self._conn.execute(
+            """SELECT * FROM policy_rollout_step_approvals
+               WHERE status=? AND expires_at IS NOT NULL""",
+            (RolloutStepApprovalStatus.PENDING.value,),
+        ).fetchall()
+        expired: list[RolloutStepApproval] = []
+        for row in rows:
+            approval = self._row_to_approval(row)
+            if now >= approval.expires_at:
+                self._conn.execute(
+                    """UPDATE policy_rollout_step_approvals
+                       SET status=?, resolved_at=?
+                       WHERE approval_id=?""",
+                    (
+                        RolloutStepApprovalStatus.EXPIRED.value,
+                        now.isoformat(),
+                        approval.approval_id,
+                    ),
+                )
+                approval.status = RolloutStepApprovalStatus.EXPIRED
+                approval.resolved_at = now
+                expired.append(approval)
+        if expired:
+            self._conn.commit()
+        return expired
+
     def _row_to_approval(self, row: sqlite3.Row) -> RolloutStepApproval:
         data = dict(row)
         data["status"] = RolloutStepApprovalStatus(data["status"])
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         if data["resolved_at"] is not None:
             data["resolved_at"] = datetime.fromisoformat(data["resolved_at"])
+        # Parse policy_json
+        policy_json = data.pop("policy_json", None)
+        if policy_json:
+            data["policy"] = RolloutApprovalPolicy(**json.loads(policy_json))
+        else:
+            data.pop("policy", None)  # Let model default handle it
+        # Parse decisions_json
+        decisions_json = data.pop("decisions_json", None)
+        if decisions_json:
+            data["decisions"] = [RolloutApprovalDecision(**d) for d in json.loads(decisions_json)]
+        else:
+            data.pop("decisions", None)  # Let model default handle it
+        # Parse expires_at
+        expires_at_str = data.pop("expires_at", None)
+        if expires_at_str:
+            data["expires_at"] = datetime.fromisoformat(expires_at_str)
+        else:
+            data.pop("expires_at", None)  # Let model default handle it
         return RolloutStepApproval(**data)
 
     def close(self) -> None:
