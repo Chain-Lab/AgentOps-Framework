@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from agent_app.core.context import RunContext
@@ -19,8 +19,16 @@ from agent_app.governance.policy_rollout import (
     RolloutStepType,
 )
 from agent_app.governance.policy_rollout_approval import (
+    RolloutApprovalDecision,
+    RolloutApprovalDecisionType,
+    RolloutApprovalPolicy,
+    RolloutApprovalPolicyType,
     RolloutStepApproval,
     RolloutStepApprovalStatus,
+)
+from agent_app.runtime.policy_rollout_approval_policy import (
+    ApprovalPolicyError,
+    RolloutApprovalPolicyEvaluator,
 )
 from agent_app.governance.audit import AuditEvent
 
@@ -42,6 +50,7 @@ class RolloutService:
         permission_checker: Any | None = None,
         approval_store: Any | None = None,
         approval_require_reason: bool = False,
+        approval_policy: RolloutApprovalPolicy | None = None,
     ) -> None:
         self._rollout_store = rollout_store
         self._release_service = release_service
@@ -51,6 +60,7 @@ class RolloutService:
         self._permission_checker = permission_checker
         self._approval_store = approval_store
         self._approval_require_reason = approval_require_reason
+        self._approval_policy = approval_policy
 
     # --- Permission check ---
     async def _check_permission(
@@ -405,6 +415,7 @@ class RolloutService:
         requested_by: str,
         context: RunContext,
         reason: str | None = None,
+        policy: RolloutApprovalPolicy | None = None,
     ) -> RolloutStepApproval:
         """Request approval for a rollout step that requires human sign-off."""
         await self._check_permission_any(
@@ -437,6 +448,22 @@ class RolloutService:
         if existing is not None:
             return existing
 
+        # Resolve policy: explicit > step-level > service default > SINGLE default
+        resolved_policy = policy
+        if resolved_policy is None:
+            resolved_policy = getattr(step, "approval_policy", None)
+        if resolved_policy is None:
+            resolved_policy = self._approval_policy
+        if resolved_policy is None:
+            resolved_policy = RolloutApprovalPolicy()
+
+        # Compute expires_at if policy specifies it
+        expires_at = None
+        if resolved_policy.expires_after_seconds is not None:
+            expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=resolved_policy.expires_after_seconds
+            )
+
         # Create new approval
         approval = RolloutStepApproval(
             approval_id=f"rsa_{uuid.uuid4().hex[:12]}",
@@ -448,6 +475,8 @@ class RolloutService:
             requested_by=requested_by,
             requested_reason=reason,
             status=RolloutStepApprovalStatus.PENDING,
+            policy=resolved_policy,
+            expires_at=expires_at,
             created_at=datetime.now(timezone.utc),
         )
         approval = await self._approval_store.create(approval)
@@ -503,7 +532,7 @@ class RolloutService:
         context: RunContext,
         reason: str | None = None,
     ) -> RolloutStepApproval:
-        """Approve a pending rollout step approval."""
+        """Approve a pending rollout step approval via decision-based flow."""
         await self._check_permission(PolicyReleasePermission.ROLLOUT_APPROVAL_APPROVE, context)
 
         approval = await self._approval_store.get(approval_id)
@@ -519,51 +548,93 @@ class RolloutService:
         if self._approval_require_reason and reason is None:
             raise ValueError("Reason is required for approval")
 
-        # Mark approval as approved
-        approval = await self._approval_store.approve(approval_id, approved_by, reason)
-
-        # Find the rollout plan and step
-        plan = await self._rollout_store.get(approval.rollout_id)
-        if plan is not None:
-            step = next(
-                (s for s in plan.steps if s.step_id == approval.step_id), None
-            )
-            if step is not None and step.status == RolloutStepStatus.BLOCKED:
-                updated_steps = [
-                    s.model_copy(update={
-                        "status": RolloutStepStatus.PENDING,
-                        "error": None,
-                    })
-                    if s.step_id == approval.step_id else s
-                    for s in plan.steps
-                ]
-                plan = plan.model_copy(update={
-                    "steps": updated_steps,
-                    "updated_at": datetime.now(timezone.utc),
-                })
-                await self._rollout_store.update(plan)
-
-        # Emit events
-        await self._write_audit(
-            "policy.rollout.approval.approved",
-            user_id=approved_by,
-            tenant_id=context.tenant_id,
-            data={
-                "rollout_id": approval.rollout_id,
-                "step_id": approval.step_id,
-                "approval_id": approval_id,
-                "bundle_id": approval.bundle_id,
-                "environment": approval.environment,
-            },
-        )
-        await self._emit_change_event(
-            PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
-            environment=approval.environment,
-            ring_name=approval.ring_name,
-            bundle_id=approval.bundle_id,
-            actor_id=approved_by,
+        # Build decision
+        decision = RolloutApprovalDecision(
+            decision_id=f"rsd_{uuid.uuid4().hex[:12]}",
+            approval_id=approval_id,
+            decision_type=RolloutApprovalDecisionType.APPROVE,
+            decided_by=approved_by,
             reason=reason,
+            roles=list(context.roles) if hasattr(context, "roles") else [],
+            permissions=list(context.permissions) if hasattr(context, "permissions") else [],
+            created_at=datetime.now(timezone.utc),
         )
+
+        # Validate via evaluator
+        plan = await self._rollout_store.get(approval.rollout_id)
+        evaluator = RolloutApprovalPolicyEvaluator()
+        evaluator.validate_decision(approval, decision, rollout=plan)
+
+        # Add decision to store
+        approval = await self._approval_store.add_decision(approval_id, decision)
+
+        if approval.status == RolloutStepApprovalStatus.APPROVED:
+            # Quorum reached (or SINGLE) — unblock step
+            if plan is not None:
+                step = next(
+                    (s for s in plan.steps if s.step_id == approval.step_id), None
+                )
+                if step is not None and step.status == RolloutStepStatus.BLOCKED:
+                    updated_steps = [
+                        s.model_copy(update={
+                            "status": RolloutStepStatus.PENDING,
+                            "error": None,
+                        })
+                        if s.step_id == approval.step_id else s
+                        for s in plan.steps
+                    ]
+                    plan = plan.model_copy(update={
+                        "steps": updated_steps,
+                        "updated_at": datetime.now(timezone.utc),
+                    })
+                    await self._rollout_store.update(plan)
+
+            # Emit events
+            await self._write_audit(
+                "policy.rollout.approval.approved",
+                user_id=approved_by,
+                tenant_id=context.tenant_id,
+                data={
+                    "rollout_id": approval.rollout_id,
+                    "step_id": approval.step_id,
+                    "approval_id": approval_id,
+                    "bundle_id": approval.bundle_id,
+                    "environment": approval.environment,
+                },
+            )
+            await self._emit_change_event(
+                PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
+                environment=approval.environment,
+                ring_name=approval.ring_name,
+                bundle_id=approval.bundle_id,
+                actor_id=approved_by,
+                reason=reason,
+            )
+            # If quorum policy, emit quorum_reached event
+            if approval.policy.policy_type == RolloutApprovalPolicyType.QUORUM:
+                await self._emit_change_event(
+                    PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
+                    environment=approval.environment,
+                    ring_name=approval.ring_name,
+                    bundle_id=approval.bundle_id,
+                    actor_id=approved_by,
+                    reason="Quorum reached",
+                    data={"quorum_reached": True},
+                )
+        elif approval.status == RolloutStepApprovalStatus.PENDING:
+            # Quorum not yet reached — keep step BLOCKED
+            await self._write_audit(
+                "policy.rollout.approval.decision_recorded",
+                user_id=approved_by,
+                tenant_id=context.tenant_id,
+                data={
+                    "rollout_id": approval.rollout_id,
+                    "step_id": approval.step_id,
+                    "approval_id": approval_id,
+                    "decision_id": decision.decision_id,
+                    "bundle_id": approval.bundle_id,
+                },
+            )
 
         return approval
 
@@ -574,7 +645,7 @@ class RolloutService:
         context: RunContext,
         reason: str | None = None,
     ) -> RolloutStepApproval:
-        """Reject a pending rollout step approval."""
+        """Reject a pending rollout step approval via decision-based flow."""
         await self._check_permission(PolicyReleasePermission.ROLLOUT_APPROVAL_REJECT, context)
 
         approval = await self._approval_store.get(approval_id)
@@ -590,11 +661,27 @@ class RolloutService:
         if self._approval_require_reason and reason is None:
             raise ValueError("Reason is required for rejection")
 
-        # Mark approval as rejected
-        approval = await self._approval_store.reject(approval_id, rejected_by, reason)
+        # Build decision
+        decision = RolloutApprovalDecision(
+            decision_id=f"rsd_{uuid.uuid4().hex[:12]}",
+            approval_id=approval_id,
+            decision_type=RolloutApprovalDecisionType.REJECT,
+            decided_by=rejected_by,
+            reason=reason,
+            roles=list(context.roles) if hasattr(context, "roles") else [],
+            permissions=list(context.permissions) if hasattr(context, "permissions") else [],
+            created_at=datetime.now(timezone.utc),
+        )
 
-        # Find the rollout plan and step
+        # Validate via evaluator
         plan = await self._rollout_store.get(approval.rollout_id)
+        evaluator = RolloutApprovalPolicyEvaluator()
+        evaluator.validate_decision(approval, decision, rollout=plan)
+
+        # Add decision to store — any reject immediately resolves to REJECTED
+        approval = await self._approval_store.add_decision(approval_id, decision)
+
+        # Find the rollout plan and step — mark step FAILED, plan FAILED
         if plan is not None:
             step = next(
                 (s for s in plan.steps if s.step_id == approval.step_id), None
@@ -659,6 +746,34 @@ class RolloutService:
             return []
 
         return await self._approval_store.list(status, rollout_id)
+
+    async def expire_approvals(self, context: RunContext) -> list[RolloutStepApproval]:
+        """Mark pending approvals past their expires_at as EXPIRED."""
+        if self._approval_store is None:
+            return []
+        expired = await self._approval_store.expire_pending()
+        for approval in expired:
+            await self._write_audit(
+                "policy.rollout.approval.expired",
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                data={
+                    "rollout_id": approval.rollout_id,
+                    "step_id": approval.step_id,
+                    "approval_id": approval.approval_id,
+                    "bundle_id": approval.bundle_id,
+                    "environment": approval.environment,
+                },
+            )
+            await self._emit_change_event(
+                PolicyChangeEventType.ROLLOUT_APPROVAL_EXPIRED,
+                environment=approval.environment,
+                ring_name=approval.ring_name,
+                bundle_id=approval.bundle_id,
+                actor_id=context.user_id,
+                data={"approval_id": approval.approval_id},
+            )
+        return expired
 
     # --- Step execution ---
 
