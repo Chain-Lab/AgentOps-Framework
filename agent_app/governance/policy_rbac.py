@@ -32,6 +32,11 @@ class PolicyReleasePermission(StrEnum):
         RELOAD_VIEW: View policy reload status (default-allowed).
         EVENT_VIEW: View policy change events (default-allowed).
         ROUTING_SIMULATE: Simulate policy routing decisions (requires explicit permission).
+        ROLLOUT_CREATE: Create a policy rollout.
+        ROLLOUT_START: Start a policy rollout.
+        ROLLOUT_EXECUTE: Execute a policy rollout.
+        ROLLOUT_CANCEL: Cancel a policy rollout.
+        ROLLOUT_VIEW: View policy rollout state (default-allowed).
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -55,6 +60,11 @@ class PolicyReleasePermission(StrEnum):
     RELOAD_VIEW = "policy.reload.view"
     EVENT_VIEW = "policy.event.view"
     ROUTING_SIMULATE = "policy.routing.simulate"
+    ROLLOUT_CREATE = "policy.rollout.create"
+    ROLLOUT_START = "policy.rollout.start"
+    ROLLOUT_EXECUTE = "policy.rollout.execute"
+    ROLLOUT_CANCEL = "policy.rollout.cancel"
+    ROLLOUT_VIEW = "policy.rollout.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -64,6 +74,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.RING_VIEW,
     PolicyReleasePermission.RELOAD_VIEW,
     PolicyReleasePermission.EVENT_VIEW,
+    PolicyReleasePermission.ROLLOUT_VIEW,
 }
 
 

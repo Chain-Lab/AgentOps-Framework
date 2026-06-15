@@ -203,3 +203,34 @@ class TestPhase34Permissions:
         assert await checker.check(PolicyReleasePermission.ROUTING_SIMULATE, ctx) is False
         ctx_with_perm = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=["policy.routing.simulate"])
         assert await checker.check(PolicyReleasePermission.ROUTING_SIMULATE, ctx_with_perm) is True
+
+
+class TestRolloutPermissionsPhase35:
+    """Phase 35 — RBAC rollout permissions."""
+
+    def test_rollout_permissions_exist(self):
+        """All 5 new rollout permissions have correct string values."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+        assert PolicyReleasePermission.ROLLOUT_CREATE == "policy.rollout.create"
+        assert PolicyReleasePermission.ROLLOUT_START == "policy.rollout.start"
+        assert PolicyReleasePermission.ROLLOUT_EXECUTE == "policy.rollout.execute"
+        assert PolicyReleasePermission.ROLLOUT_CANCEL == "policy.rollout.cancel"
+        assert PolicyReleasePermission.ROLLOUT_VIEW == "policy.rollout.view"
+
+    @pytest.mark.asyncio
+    async def test_rollout_view_default_allowed(self):
+        """ROLLOUT_VIEW is in the default-allowed set."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ROLLOUT_VIEW, ctx) is True
+
+    @pytest.mark.asyncio
+    async def test_rollout_create_requires_permission(self):
+        """ROLLOUT_CREATE is NOT in default-allowed set, requires explicit permission."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
+        from agent_app.core.context import RunContext
+        checker = PolicyReleasePermissionChecker()
+        ctx = RunContext(run_id="r1", user_id="u1", tenant_id="t1", permissions=[])
+        assert await checker.check(PolicyReleasePermission.ROLLOUT_CREATE, ctx) is False
