@@ -579,6 +579,38 @@ def main() -> int:
     rollout_cancel.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
     rollout_cancel.add_argument("--reason", default=None, help="Reason for cancellation")
 
+    # Phase 36: rollout approval commands
+    rollout_approval = rollout_sub.add_parser("approval", help="Rollout step approval management (Phase 36)")
+    rollout_approval_sub = rollout_approval.add_subparsers(dest="approval_command")
+
+    approval_list = rollout_approval_sub.add_parser("list", help="List rollout step approvals")
+    approval_list.add_argument("--config", required=True, help="Config file path")
+    approval_list.add_argument("--rollout-id", default=None, help="Filter by rollout ID")
+    approval_list.add_argument("--status", default=None, help="Filter by approval status")
+    approval_list.add_argument("--json", action="store_true", help="Output as JSON")
+
+    approval_request = rollout_approval_sub.add_parser("request", help="Request approval for a rollout step")
+    approval_request.add_argument("--config", required=True, help="Config file path")
+    approval_request.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    approval_request.add_argument("--step-id", required=True, help="Step ID to request approval for")
+    approval_request.add_argument("--actor-id", required=True, help="Actor ID")
+    approval_request.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+    approval_request.add_argument("--reason", default=None, help="Reason for the approval request")
+
+    approval_approve = rollout_approval_sub.add_parser("approve", help="Approve a rollout step approval")
+    approval_approve.add_argument("--config", required=True, help="Config file path")
+    approval_approve.add_argument("--approval-id", required=True, help="Approval ID to approve")
+    approval_approve.add_argument("--actor-id", required=True, help="Actor ID")
+    approval_approve.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+    approval_approve.add_argument("--reason", default=None, help="Reason for approval")
+
+    approval_reject = rollout_approval_sub.add_parser("reject", help="Reject a rollout step approval")
+    approval_reject.add_argument("--config", required=True, help="Config file path")
+    approval_reject.add_argument("--approval-id", required=True, help="Approval ID to reject")
+    approval_reject.add_argument("--actor-id", required=True, help="Actor ID")
+    approval_reject.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+    approval_reject.add_argument("--reason", default=None, help="Reason for rejection")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -850,6 +882,16 @@ def main() -> int:
             return asyncio.run(_cmd_policy_rollout_run_all(args))
         if args.rollout_command == "cancel":
             return asyncio.run(_cmd_policy_rollout_cancel(args))
+        # Phase 36: rollout approval subcommands
+        if args.rollout_command == "approval":
+            if args.approval_command == "list":
+                return asyncio.run(_cmd_policy_rollout_approval_list(args))
+            if args.approval_command == "request":
+                return asyncio.run(_cmd_policy_rollout_approval_request(args))
+            if args.approval_command == "approve":
+                return asyncio.run(_cmd_policy_rollout_approval_approve(args))
+            if args.approval_command == "reject":
+                return asyncio.run(_cmd_policy_rollout_approval_reject(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -4403,6 +4445,213 @@ async def _cmd_policy_rollout_cancel(args: argparse.Namespace) -> int:
         "updated_at": str(plan.updated_at),
     }
     print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+# --- Phase 36: Rollout approval CLI commands ---
+
+
+def _approval_to_dict(approval) -> dict:
+    """Convert a RolloutStepApproval to a JSON-serializable dict."""
+    return {
+        "approval_id": approval.approval_id,
+        "rollout_id": approval.rollout_id,
+        "step_id": approval.step_id,
+        "bundle_id": approval.bundle_id,
+        "environment": approval.environment,
+        "ring_name": approval.ring_name,
+        "requested_by": approval.requested_by,
+        "requested_reason": approval.requested_reason,
+        "status": approval.status.value if hasattr(approval.status, "value") else approval.status,
+        "resolved_by": approval.resolved_by,
+        "resolved_reason": approval.resolved_reason,
+        "created_at": str(approval.created_at),
+        "resolved_at": str(approval.resolved_at) if approval.resolved_at else None,
+    }
+
+
+async def _cmd_policy_rollout_approval_list(args: argparse.Namespace) -> int:
+    """List rollout step approvals."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_approval import RolloutStepApprovalStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    status_filter = None
+    if args.status:
+        try:
+            status_filter = RolloutStepApprovalStatus(args.status)
+        except ValueError:
+            print(
+                f"Invalid status '{args.status}'. Valid values: {[s.value for s in RolloutStepApprovalStatus]}",
+                file=sys.stderr,
+            )
+            return 1
+
+    context = _build_context("cli_viewer", getattr(args, "permissions", []))
+
+    try:
+        approvals = await service.list_step_approvals(
+            status=status_filter,
+            rollout_id=args.rollout_id,
+            context=context,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error listing approvals: {exc}", file=sys.stderr)
+        return 1
+
+    if not approvals:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No rollout step approvals found.")
+        return 0
+
+    if args.json:
+        data = [_approval_to_dict(a) for a in approvals]
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Approval ID':<20} {'Rollout ID':<20} {'Step ID':<10} {'Status':<10} {'Requested By':<15}")
+        print("-" * 80)
+        for a in approvals:
+            status_str = a.status.value if hasattr(a.status, "value") else a.status
+            print(f"{a.approval_id:<20} {a.rollout_id:<20} {a.step_id:<10} {status_str:<10} {a.requested_by:<15}")
+    return 0
+
+
+async def _cmd_policy_rollout_approval_request(args: argparse.Namespace) -> int:
+    """Request approval for a rollout step."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        approval = await service.request_step_approval(
+            rollout_id=args.rollout_id,
+            step_id=args.step_id,
+            requested_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error requesting approval: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_approval_to_dict(approval), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_approval_approve(args: argparse.Namespace) -> int:
+    """Approve a rollout step approval."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        approval = await service.approve_step(
+            approval_id=args.approval_id,
+            approved_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error approving step: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_approval_to_dict(approval), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_approval_reject(args: argparse.Namespace) -> int:
+    """Reject a rollout step approval."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        approval = await service.reject_step(
+            approval_id=args.approval_id,
+            rejected_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error rejecting step: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_approval_to_dict(approval), indent=2, default=str))
     return 0
 
 
