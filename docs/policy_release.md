@@ -1682,3 +1682,391 @@ with other mutation operations.
 
 7. **No multi-region rollout coordination** — Routing configuration is
    per-environment; no coordination across geographic regions.
+
+---
+
+# Phase 35: Multi-Environment Rollout Orchestration
+
+## Overview
+
+**Phase 35** adds multi-environment rollout orchestration to the Phase 34
+policy release system, enabling step-by-step rollout plans with dependency
+enforcement, gate/eval checks, and approval blocking. It provides:
+
+1. **RolloutPlan Model** — Ordered rollout plans with DRAFT → ACTIVE → COMPLETED/FAILED/CANCELLED lifecycle
+2. **RolloutStep Model** — Individual rollout steps with ACTIVATE, ASSIGN_RING, CANARY_EVAL, PROMOTE_RING types
+3. **Step Dependencies** — `require_previous_step` enforces sequential execution
+4. **Approval Blocking** — `requires_approval` marks step BLOCKED in MVP (no approval resolution flow)
+5. **RolloutService** — Orchestrates plan creation, execution, and cancellation
+6. **RolloutPlanStore** — Protocol + InMemory + SQLite persistence with factory
+7. **Config** — `governance.policy_release.rollouts` for store type and path
+8. **CLI Commands** — Full rollout lifecycle via `agentapp policy rollout` subcommands
+9. **Console Pages** — Rollout list, detail, create, and action pages
+10. **Audit Events** — All rollout operations produce audit events
+11. **RBAC Permissions** — 5 rollout-specific permissions
+
+## RolloutPlan Model
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rollout_id` | `str` | required | Unique ID (`ro_` prefix) |
+| `name` | `str` | required | Human-readable plan name |
+| `environment` | `str` | required | Target environment |
+| `status` | `RolloutPlanStatus` | `DRAFT` | Plan lifecycle status |
+| `steps` | `list[RolloutStep]` | required | Ordered list of rollout steps |
+| `created_by` | `str` | required | Who created the plan |
+| `reason` | `str \| None` | `None` | Why the rollout was created |
+| `created_at` | `datetime` | `datetime.now(timezone.utc)` | Creation timestamp |
+| `updated_at` | `datetime` | `datetime.now(timezone.utc)` | Last update timestamp |
+
+**Plan lifecycle:**
+- **DRAFT** — Created but not yet started; steps can be added or modified
+- **ACTIVE** — Currently executing; steps transition through their lifecycle
+- **COMPLETED** — All steps succeeded
+- **FAILED** — A step failed, halting the rollout
+- **CANCELLED** — Manually cancelled by an operator
+
+## RolloutStep Model
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `step_id` | `str` | required | Unique ID (`ros_` prefix) |
+| `rollout_id` | `str` | required | Parent rollout plan ID |
+| `step_type` | `RolloutStepType` | required | Type of rollout step |
+| `environment` | `str` | required | Target environment |
+| `ring_name` | `str \| None` | `None` | Target ring (for ASSIGN_RING, CANARY_EVAL, PROMOTE_RING) |
+| `bundle_id` | `str \| None` | `None` | Target bundle (for ACTIVATE) |
+| `activation_id` | `str \| None` | `None` | Target activation (for ASSIGN_RING, CANARY_EVAL, PROMOTE_RING) |
+| `status` | `RolloutStepStatus` | `PENDING` | Step lifecycle status |
+| `require_previous_step` | `bool` | `True` | Whether this step depends on the previous step completing first |
+| `requires_approval` | `bool` | `False` | Whether this step requires approval before execution |
+| `reason` | `str \| None` | `None` | Step-specific reason |
+| `error` | `str \| None` | `None` | Error message if the step failed |
+| `created_at` | `datetime` | `datetime.now(timezone.utc)` | Creation timestamp |
+| `updated_at` | `datetime` | `datetime.now(timezone.utc)` | Last update timestamp |
+
+**Step lifecycle:**
+- **PENDING** — Not yet started
+- **RUNNING** — Currently executing
+- **SUCCEEDED** — Completed successfully
+- **FAILED** — Execution failed (error field populated)
+- **BLOCKED** — Waiting for approval (MVP: no resolution flow)
+- **SKIPPED** — Skipped due to plan failure or cancellation
+
+## RolloutStepType
+
+| Type | Description | Required Fields |
+|------|-------------|-----------------|
+| `ACTIVATE` | Activate a bundle in an environment | `bundle_id` |
+| `ASSIGN_RING` | Assign an activation to a ring | `activation_id`, `ring_name` |
+| `CANARY_EVAL` | Run canary evaluation against an activation | `activation_id`, `ring_name` |
+| `PROMOTE_RING` | Promote canary ring activation to stable | `ring_name` (from-ring implied as canary) |
+
+## Step Dependencies
+
+Steps can declare `require_previous_step=True` (the default), which enforces
+that the previous step must be in `SUCCEEDED` status before this step can run.
+If the previous step is `FAILED`, `BLOCKED`, or `SKIPPED`, the dependent step
+cannot execute and the plan transitions to `FAILED`.
+
+When `require_previous_step=False`, the step can run in parallel with the
+previous step (though the current implementation runs steps sequentially).
+
+## Approval Blocking
+
+Steps marked with `requires_approval=True` transition to `BLOCKED` status
+when `run_next_step()` encounters them. In the MVP, there is no approval
+resolution flow — a BLOCKED step cannot be unblocked through the API or CLI.
+The plan effectively stalls at the blocked step. This is by design: the
+approval gate forces manual intervention (e.g., external review, manual
+promotion) before proceeding.
+
+To unblock, operators must cancel the plan and create a new one without
+the approval-required step, or modify the step before starting the plan.
+
+## RolloutService
+
+Core orchestrator that manages rollout plan lifecycle.
+
+### `create_plan(name, environment, steps, created_by, reason=None, context=None)`
+
+Creates a new DRAFT rollout plan with the specified steps. Requires
+`ROLLOUT_CREATE` permission. Emits `policy.rollout.created` audit event
+and `ROLLOUT_CREATED` change event.
+
+### `start_plan(rollout_id, context=None)`
+
+Transitions a DRAFT plan to ACTIVE. Requires `ROLLOUT_START` permission.
+Emits `policy.rollout.started` audit event and `ROLLOUT_STARTED` change event.
+
+### `run_next_step(rollout_id, context=None)`
+
+Executes the next available step in an ACTIVE plan. Requires `ROLLOUT_EXECUTE`
+permission. Steps with `require_previous_step=True` wait for the previous step
+to succeed. Steps with `requires_approval=True` transition to BLOCKED.
+
+Emits `policy.rollout.step_succeeded` or `policy.rollout.step_failed` audit
+events, and `STEP_SUCCEEDED` change event on success.
+
+### `run_all_available(rollout_id, context=None)`
+
+Runs all available steps in sequence until a step fails, is blocked, or no
+more steps are available. Returns the list of executed step results.
+
+### `cancel_plan(rollout_id, context=None)`
+
+Transitions an ACTIVE plan to CANCELLED. Remaining PENDING steps are set to
+SKIPPED. Requires `ROLLOUT_CANCEL` permission. Emits
+`policy.rollout.cancelled` audit event and `CANCELLED` change event.
+
+## Step Execution Behavior
+
+### ACTIVATE
+
+Activates a bundle in the specified environment by calling
+`PolicyReleaseService.execute_promotion()`. The `bundle_id` and
+`created_by` are passed as parameters.
+
+### ASSIGN_RING
+
+Assigns an activation to a ring by calling
+`PolicyReleaseService.assign_activation_to_ring()`. The `activation_id`,
+`ring_name`, `environment`, and `created_by` are passed as parameters.
+
+### CANARY_EVAL
+
+Runs a canary evaluation by invoking `CanaryEvalRunner.run_for_activation()`.
+The `activation_id`, `environment`, and `ring_name` are passed. If the eval
+fails (not passed), the step is marked FAILED.
+
+### PROMOTE_RING
+
+Promotes the canary ring activation to the stable ring by calling
+`PolicyReleaseService.promote_canary_to_stable()`. The `ring_name` is used
+as the `from_ring`, and the default stable ring is used as `to_ring`.
+
+## RolloutPlanStore
+
+Protocol + InMemory + SQLite persistence, following the same pattern as
+all other stores in the framework:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create()` | `create(plan: RolloutPlan) -> RolloutPlan` | Create a new rollout plan |
+| `get()` | `get(rollout_id: str) -> RolloutPlan \| None` | Get by rollout ID |
+| `list()` | `list(environment: str \| None = None, status: str \| None = None) -> list[RolloutPlan]` | List with optional filters |
+| `update()` | `update(plan: RolloutPlan) -> RolloutPlan` | Update an existing plan |
+| `delete()` | `delete(rollout_id: str) -> None` | Delete a plan |
+
+**Factory:** `create_rollout_plan_store(store_type, db_path)` supports `"memory"`
+and `"sqlite"` types.
+
+**SQLite schema:** `policy_rollout_plans` table with `rollout_id` as primary key.
+
+## Config Schema (Phase 35 additions)
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    environments:
+      type: sqlite
+      path: .agent_app/policy_environments.db
+    rings:
+      type: sqlite
+      path: .agent_app/policy_release_rings.db
+    ring_assignments:
+      type: sqlite
+      path: .agent_app/policy_ring_activation_assignments.db
+    change_events:
+      type: sqlite
+      path: .agent_app/policy_change_events.db
+      strict: false
+    reload:
+      enabled: true
+    routing:
+      enabled: false
+      canary_percentage: 0
+      canary_ring: canary
+      stable_ring: stable
+      hash_key: actor_id
+    rollouts:                            # Phase 35
+      type: sqlite
+      path: .agent_app/policy_rollouts.db
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod
+      require_active_policy: false
+      cache_ttl_seconds: 300
+      ring: null
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config section:
+- `rollouts` — Optional rollout plan store config (default: `None`, backward compatible)
+
+## CLI Commands
+
+```bash
+# Create a rollout plan
+agentapp policy rollout create --config <path> --name <name> --environment <env> \
+  --steps <json> --created-by <who> [--reason <text>] [--actor-id <id>] [--permissions <list>]
+
+# List rollout plans
+agentapp policy rollout list --config <path> [--environment <env>] [--status <status>] [--json]
+
+# Show rollout plan details
+agentapp policy rollout show --config <path> --rollout-id <id> [--json]
+
+# Start a rollout plan (DRAFT → ACTIVE)
+agentapp policy rollout start --config <path> --rollout-id <id> \
+  --actor-id <id> [--permissions <list>]
+
+# Run the next available step
+agentapp policy rollout run-next --config <path> --rollout-id <id> \
+  --actor-id <id> [--permissions <list>]
+
+# Run all available steps
+agentapp policy rollout run-all --config <path> --rollout-id <id> \
+  --actor-id <id> [--permissions <list>]
+
+# Cancel a rollout plan
+agentapp policy rollout cancel --config <path> --rollout-id <id> \
+  --actor-id <id> [--permissions <list>]
+```
+
+The `--steps` parameter accepts a JSON array of step definitions:
+
+```json
+[
+  {"step_type": "ACTIVATE", "bundle_id": "pb_abc123", "require_previous_step": true},
+  {"step_type": "ASSIGN_RING", "ring_name": "canary", "activation_id": "pa_def456", "requires_approval": true},
+  {"step_type": "CANARY_EVAL", "ring_name": "canary", "activation_id": "pa_def456"},
+  {"step_type": "PROMOTE_RING", "ring_name": "canary"}
+]
+```
+
+All rollout commands support `--actor-id` and `--permissions` for RBAC testing,
+consistent with Phase 30+ commands.
+
+## Console Workflow
+
+| Route | Template | Method | Description |
+|-------|----------|--------|-------------|
+| `GET /rollouts` | `policy_rollouts.html` | GET | List all rollout plans with status badges |
+| `GET /rollouts/{rollout_id}` | `policy_rollout_detail.html` | GET | Rollout detail with step list and status |
+| `GET /rollouts/create` | `policy_rollout_create.html` | GET | Create rollout plan form |
+| `POST /rollouts` | `policy_rollouts.html` | POST | Create a new rollout plan |
+| `POST /rollouts/{rollout_id}/start` | `policy_rollout_detail.html` | POST | Start a rollout plan |
+| `POST /rollouts/{rollout_id}/run-next` | `policy_rollout_detail.html` | POST | Run the next step |
+| `POST /rollouts/{rollout_id}/run-all` | `policy_rollout_detail.html` | POST | Run all available steps |
+| `POST /rollouts/{rollout_id}/cancel` | `policy_rollout_detail.html` | POST | Cancel a rollout plan |
+
+Console actions require a `RolloutService` with appropriate permissions
+passed via form data.
+
+## Failure and Blocked Behavior
+
+### Step Failure
+
+When a step fails during execution:
+1. The step status is set to `FAILED` with the error message
+2. The plan status transitions to `FAILED`
+3. All remaining PENDING steps are set to `SKIPPED`
+4. `policy.rollout.step_failed` and `policy.rollout.failed` audit events are emitted
+5. No further steps can be executed on the plan
+
+### Step Blocked
+
+When a step requires approval (`requires_approval=True`):
+1. The step status is set to `BLOCKED`
+2. The plan remains `ACTIVE` but cannot progress past the blocked step
+3. `policy.rollout.step_blocked` audit event is emitted
+4. In the MVP, there is no approval resolution flow — the plan stalls
+
+### Plan Cancellation
+
+When a plan is cancelled:
+1. The plan status transitions to `CANCELLED`
+2. All remaining PENDING steps are set to `SKIPPED`
+3. Running steps continue to completion (no interruption)
+4. `policy.rollout.cancelled` audit event is emitted
+
+## Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.rollout.created` | New rollout plan created |
+| `policy.rollout.started` | Plan transitioned from DRAFT to ACTIVE |
+| `policy.rollout.step_succeeded` | A rollout step completed successfully |
+| `policy.rollout.step_failed` | A rollout step failed |
+| `policy.rollout.step_blocked` | A step requires approval (BLOCKED) |
+| `policy.rollout.completed` | All steps succeeded, plan COMPLETED |
+| `policy.rollout.failed` | A step failed, plan FAILED |
+| `policy.rollout.cancelled` | Plan manually cancelled |
+
+## Change Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `ROLLOUT_CREATED` | New rollout plan created |
+| `ROLLOUT_STARTED` | Plan started (DRAFT → ACTIVE) |
+| `STEP_SUCCEEDED` | A rollout step succeeded |
+| `COMPLETED` | Plan completed successfully |
+| `FAILED` | Plan failed due to step failure |
+| `CANCELLED` | Plan cancelled by operator |
+
+## RBAC Permissions (Phase 35 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ROLLOUT_CREATE` | `policy.rollout.create` | Requires grant |
+| `ROLLOUT_START` | `policy.rollout.start` | Requires grant |
+| `ROLLOUT_EXECUTE` | `policy.rollout.execute` | Requires grant |
+| `ROLLOUT_CANCEL` | `policy.rollout.cancel` | Requires grant |
+| `ROLLOUT_VIEW` | `policy.rollout.view` | Allowed |
+
+`ROLLOUT_VIEW` is default-allowed alongside `BUNDLE_CREATE`, `GATE_RUN`,
+`ENVIRONMENT_VIEW`, `RING_VIEW`, `RELOAD_VIEW`, `EVENT_VIEW`, and
+`ROUTING_SIMULATE`. All other rollout permissions require explicit grants
+in `RunContext.permissions`, consistent with other destructive operations.
+
+## Known Limitations
+
+1. **No background scheduler** — Rollout steps are executed on-demand via CLI or
+   API calls. There is no automatic step scheduling or timer-based progression.
+
+2. **No external CI/CD integration** — Rollout steps execute within the
+   framework. There is no integration with Jenkins, GitHub Actions, or other
+   CI/CD platforms.
+
+3. **Step approval is MVP/block-only** — The `requires_approval` flag marks a
+   step as BLOCKED, but there is no approval resolution flow. Operators must
+   cancel and recreate the plan without the approval step.
+
+4. **No automatic rollback based on live metrics** — If a canary eval fails,
+   the step is marked FAILED but there is no automatic rollback of previous
+   steps. Rollback must be performed manually.
+
+5. **No distributed execution lock** — Rollout execution is local to a single
+   process. Concurrent execution of the same plan from multiple processes is
+   not protected by a distributed lock.
+
+6. **Rollout execution is local command/API driven** — Steps execute
+   synchronously within the calling process. There is no background worker,
+   task queue, or distributed execution engine.

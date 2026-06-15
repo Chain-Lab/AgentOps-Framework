@@ -2,6 +2,33 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.23.0 — Phase 35: Multi-Environment Rollout Orchestration
+
+### Added
+
+- RolloutPlan and RolloutStep models (governance/policy_rollout.py)
+- RolloutPlanStore protocol with InMemory and SQLite implementations
+- RolloutService for orchestrating multi-environment rollout plans
+- Step types: ACTIVATE, ASSIGN_RING, CANARY_EVAL, PROMOTE_RING
+- Step dependency enforcement (require_previous_step)
+- Approval blocking (requires_approval marks step BLOCKED)
+- Plan lifecycle: DRAFT → ACTIVE → COMPLETED/FAILED/CANCELLED
+- Rollout RBAC permissions: ROLLOUT_CREATE, ROLLOUT_START, ROLLOUT_EXECUTE, ROLLOUT_CANCEL, ROLLOUT_VIEW
+- Rollout change event types: ROLLOUT_CREATED, ROLLOUT_STARTED, STEP_SUCCEEDED, COMPLETED, FAILED, CANCELLED
+- CLI rollout commands: create, list, show, start, run-next, run-all, cancel
+- Console rollout pages: list, detail, create, start, run-next, run-all, cancel
+- Config: governance.policy_release.rollouts (type, path)
+- Audit events for all rollout operations
+
+### Known Limitations
+
+- No background scheduler
+- No external CI/CD integration
+- Step approval is MVP/block-only
+- No automatic rollback based on live metrics
+- No distributed execution lock
+- Rollout execution is local command/API driven
+
 ## [v0.22.0] - 2026-06-13
 
 ### Added
