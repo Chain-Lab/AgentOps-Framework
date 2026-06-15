@@ -1,11 +1,13 @@
-"""Tests for Phase 36 Task 7: CLI rollout approval commands."""
+"""Tests for Phase 36 Task 7 / Phase 37 Task 6: CLI rollout approval commands."""
 from __future__ import annotations
 
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -462,3 +464,177 @@ class TestPhase36RolloutApprovalCLI:
         )
         assert rc != 0, "Expected non-zero exit code for already-resolved approval"
         assert "pending" in err.lower() or "status" in err.lower() or "already" in err.lower()
+
+
+class TestPhase37ApprovalCLIPolicyFields:
+    """Tests for Phase 37 Task 6: policy-aware approval CLI updates."""
+
+    def test_approval_to_dict_includes_policy(self):
+        """_approval_to_dict includes policy, decisions, expires_at fields."""
+        from agent_app.cli import _approval_to_dict
+        from agent_app.governance.policy_rollout_approval import (
+            RolloutApprovalPolicy,
+            RolloutApprovalPolicyType,
+            RolloutStepApproval,
+            RolloutStepApprovalStatus,
+        )
+
+        policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.QUORUM,
+            required_approvals=2,
+            allowed_approver_roles=["admin", "reviewer"],
+            allowed_approver_permissions=["policy.rollout.approval.approve"],
+            prohibit_requester_approval=True,
+            prohibit_creator_approval=False,
+            expires_after_seconds=3600,
+            require_reason=True,
+        )
+        approval = RolloutStepApproval(
+            approval_id="rsa_test",
+            rollout_id="ro_test",
+            step_id="s1",
+            bundle_id="bnd_test",
+            environment="prod",
+            ring_name="canary",
+            requested_by="admin",
+            requested_reason="Needs review",
+            status=RolloutStepApprovalStatus.PENDING,
+            resolved_by=None,
+            resolved_reason=None,
+            created_at=datetime.now(timezone.utc),
+            resolved_at=None,
+            policy=policy,
+            decisions=[],
+            expires_at=datetime.now(timezone.utc),
+        )
+
+        result = _approval_to_dict(approval)
+
+        # Policy field
+        assert result["policy"] is not None
+        assert result["policy"]["policy_type"] == "quorum"
+        assert result["policy"]["required_approvals"] == 2
+        assert result["policy"]["allowed_approver_roles"] == ["admin", "reviewer"]
+        assert result["policy"]["allowed_approver_permissions"] == ["policy.rollout.approval.approve"]
+        assert result["policy"]["prohibit_requester_approval"] is True
+        assert result["policy"]["prohibit_creator_approval"] is False
+        assert result["policy"]["expires_after_seconds"] == 3600
+        assert result["policy"]["require_reason"] is True
+
+        # expires_at field
+        assert result["expires_at"] is not None
+
+        # required_approvals and current_approvals
+        assert result["required_approvals"] == 2
+        assert result["current_approvals"] == 0
+
+    def test_approval_to_dict_includes_decisions(self):
+        """_approval_to_dict includes decisions array with decision details."""
+        from agent_app.cli import _approval_to_dict
+        from agent_app.governance.policy_rollout_approval import (
+            RolloutApprovalDecision,
+            RolloutApprovalDecisionType,
+            RolloutApprovalPolicy,
+            RolloutStepApproval,
+            RolloutStepApprovalStatus,
+        )
+
+        now = datetime.now(timezone.utc)
+        decision = RolloutApprovalDecision(
+            decision_id="rsd_test1",
+            approval_id="rsa_test",
+            decision_type=RolloutApprovalDecisionType.APPROVE,
+            decided_by="reviewer1",
+            reason="Looks good",
+            roles=["reviewer"],
+            permissions=["policy.rollout.approval.approve"],
+            created_at=now,
+        )
+        policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.QUORUM,
+            required_approvals=2,
+        )
+        approval = RolloutStepApproval(
+            approval_id="rsa_test",
+            rollout_id="ro_test",
+            step_id="s1",
+            bundle_id="bnd_test",
+            environment="prod",
+            ring_name="canary",
+            requested_by="admin",
+            requested_reason="Needs review",
+            status=RolloutStepApprovalStatus.PENDING,
+            resolved_by=None,
+            resolved_reason=None,
+            created_at=now,
+            resolved_at=None,
+            policy=policy,
+            decisions=[decision],
+            expires_at=None,
+        )
+
+        result = _approval_to_dict(approval)
+
+        # Decisions array
+        assert len(result["decisions"]) == 1
+        d = result["decisions"][0]
+        assert d["decision_id"] == "rsd_test1"
+        assert d["decision_type"] == "approve"
+        assert d["decided_by"] == "reviewer1"
+        assert d["reason"] == "Looks good"
+        assert d["roles"] == ["reviewer"]
+        assert d["permissions"] == ["policy.rollout.approval.approve"]
+
+        # current_approvals counts approve decisions
+        assert result["current_approvals"] == 1
+        assert result["required_approvals"] == 2
+
+    def test_approval_to_dict_no_policy_backward_compat(self):
+        """_approval_to_dict handles approval without policy/decisions gracefully."""
+        from agent_app.cli import _approval_to_dict
+
+        # Create a mock approval without policy/decisions attributes
+        approval = MagicMock()
+        approval.approval_id = "rsa_old"
+        approval.rollout_id = "ro_old"
+        approval.step_id = "s1"
+        approval.bundle_id = "bnd_old"
+        approval.environment = "prod"
+        approval.ring_name = "canary"
+        approval.requested_by = "admin"
+        approval.requested_reason = None
+        approval.status = MagicMock(value="pending")
+        approval.resolved_by = None
+        approval.resolved_reason = None
+        approval.created_at = datetime.now(timezone.utc)
+        approval.resolved_at = None
+        # No policy attribute
+        del approval.policy
+        # No decisions attribute
+        del approval.decisions
+        # No expires_at attribute
+        del approval.expires_at
+
+        result = _approval_to_dict(approval)
+
+        assert result["policy"] is None
+        assert result["decisions"] == []
+        assert result["expires_at"] is None
+        assert result["required_approvals"] == 1
+        assert result["current_approvals"] == 0
+
+    def test_build_context_passes_roles(self):
+        """_build_context with roles creates RunContext with those roles."""
+        from agent_app.cli import _build_context
+
+        ctx = _build_context("test_user", ["perm1"], roles=["admin", "reviewer"])
+        assert ctx.roles == ["admin", "reviewer"]
+        assert ctx.user_id == "test_user"
+        assert ctx.permissions == ["perm1"]
+
+    def test_build_context_no_roles_default_empty(self):
+        """_build_context without roles defaults to empty list."""
+        from agent_app.cli import _build_context
+
+        ctx = _build_context("test_user", ["perm1"])
+        assert ctx.roles == []

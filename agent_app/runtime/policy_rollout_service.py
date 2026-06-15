@@ -563,10 +563,33 @@ class RolloutService:
         # Validate via evaluator
         plan = await self._rollout_store.get(approval.rollout_id)
         evaluator = RolloutApprovalPolicyEvaluator()
-        evaluator.validate_decision(approval, decision, rollout=plan)
+        try:
+            evaluator.validate_decision(approval, decision, rollout=plan)
+        except ApprovalPolicyError as exc:
+            try:
+                await self._write_audit(
+                    "policy.rollout.approval.policy_denied",
+                    user_id=approved_by,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "approval_id": approval_id,
+                        "rollout_id": approval.rollout_id,
+                        "step_id": approval.step_id,
+                        "actor_id": approved_by,
+                        "denial_reason": str(exc),
+                    },
+                )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
+            raise
 
         # Add decision to store
         approval = await self._approval_store.add_decision(approval_id, decision)
+
+        # Compute current approval count for event data
+        current_approvals = sum(
+            1 for d in approval.decisions if d.decision_type == RolloutApprovalDecisionType.APPROVE
+        )
 
         if approval.status == RolloutStepApprovalStatus.APPROVED:
             # Quorum reached (or SINGLE) — unblock step
@@ -590,51 +613,104 @@ class RolloutService:
                     await self._rollout_store.update(plan)
 
             # Emit events
-            await self._write_audit(
-                "policy.rollout.approval.approved",
-                user_id=approved_by,
-                tenant_id=context.tenant_id,
-                data={
-                    "rollout_id": approval.rollout_id,
-                    "step_id": approval.step_id,
-                    "approval_id": approval_id,
-                    "bundle_id": approval.bundle_id,
-                    "environment": approval.environment,
-                },
-            )
-            await self._emit_change_event(
-                PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
-                environment=approval.environment,
-                ring_name=approval.ring_name,
-                bundle_id=approval.bundle_id,
-                actor_id=approved_by,
-                reason=reason,
-            )
-            # If quorum policy, emit quorum_reached event
-            if approval.policy.policy_type == RolloutApprovalPolicyType.QUORUM:
+            try:
+                await self._write_audit(
+                    "policy.rollout.approval.approved",
+                    user_id=approved_by,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "rollout_id": approval.rollout_id,
+                        "step_id": approval.step_id,
+                        "approval_id": approval_id,
+                        "bundle_id": approval.bundle_id,
+                        "environment": approval.environment,
+                    },
+                )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
+            try:
                 await self._emit_change_event(
                     PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
                     environment=approval.environment,
                     ring_name=approval.ring_name,
                     bundle_id=approval.bundle_id,
                     actor_id=approved_by,
-                    reason="Quorum reached",
-                    data={"quorum_reached": True},
+                    reason=reason,
                 )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
+            # If quorum policy, emit quorum_reached audit event
+            if approval.policy.policy_type == RolloutApprovalPolicyType.QUORUM:
+                try:
+                    await self._write_audit(
+                        "policy.rollout.approval.quorum_reached",
+                        user_id=approved_by,
+                        tenant_id=context.tenant_id,
+                        data={
+                            "approval_id": approval_id,
+                            "rollout_id": approval.rollout_id,
+                            "step_id": approval.step_id,
+                            "actor_id": approved_by,
+                            "decision_type": "approve",
+                            "required_approvals": approval.policy.required_approvals,
+                            "current_approvals": current_approvals,
+                            "policy_type": approval.policy.policy_type.value,
+                        },
+                    )
+                except Exception:
+                    pass  # Event emission failure shouldn't crash rollout operations
+                try:
+                    await self._emit_change_event(
+                        PolicyChangeEventType.ROLLOUT_APPROVAL_QUORUM_REACHED,
+                        environment=approval.environment,
+                        ring_name=approval.ring_name,
+                        bundle_id=approval.bundle_id,
+                        actor_id=approved_by,
+                        reason="Quorum reached",
+                        data={
+                            "approval_id": approval_id,
+                            "required_approvals": approval.policy.required_approvals,
+                            "current_approvals": current_approvals,
+                        },
+                    )
+                except Exception:
+                    pass  # Event emission failure shouldn't crash rollout operations
         elif approval.status == RolloutStepApprovalStatus.PENDING:
             # Quorum not yet reached — keep step BLOCKED
-            await self._write_audit(
-                "policy.rollout.approval.decision_recorded",
-                user_id=approved_by,
-                tenant_id=context.tenant_id,
-                data={
-                    "rollout_id": approval.rollout_id,
-                    "step_id": approval.step_id,
-                    "approval_id": approval_id,
-                    "decision_id": decision.decision_id,
-                    "bundle_id": approval.bundle_id,
-                },
-            )
+            try:
+                await self._write_audit(
+                    "policy.rollout.approval.decision_recorded",
+                    user_id=approved_by,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "approval_id": approval_id,
+                        "rollout_id": approval.rollout_id,
+                        "step_id": approval.step_id,
+                        "actor_id": approved_by,
+                        "decision_type": "approve",
+                        "required_approvals": approval.policy.required_approvals,
+                        "current_approvals": current_approvals,
+                        "policy_type": approval.policy.policy_type.value,
+                    },
+                )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
+            try:
+                await self._emit_change_event(
+                    PolicyChangeEventType.ROLLOUT_APPROVAL_DECISION_RECORDED,
+                    environment=approval.environment,
+                    ring_name=approval.ring_name,
+                    bundle_id=approval.bundle_id,
+                    actor_id=approved_by,
+                    reason=reason,
+                    data={
+                        "approval_id": approval_id,
+                        "decision_type": "approve",
+                        "current_approvals": current_approvals,
+                    },
+                )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
 
         return approval
 
@@ -676,10 +752,33 @@ class RolloutService:
         # Validate via evaluator
         plan = await self._rollout_store.get(approval.rollout_id)
         evaluator = RolloutApprovalPolicyEvaluator()
-        evaluator.validate_decision(approval, decision, rollout=plan)
+        try:
+            evaluator.validate_decision(approval, decision, rollout=plan)
+        except ApprovalPolicyError as exc:
+            try:
+                await self._write_audit(
+                    "policy.rollout.approval.policy_denied",
+                    user_id=rejected_by,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "approval_id": approval_id,
+                        "rollout_id": approval.rollout_id,
+                        "step_id": approval.step_id,
+                        "actor_id": rejected_by,
+                        "denial_reason": str(exc),
+                    },
+                )
+            except Exception:
+                pass  # Event emission failure shouldn't crash rollout operations
+            raise
 
         # Add decision to store — any reject immediately resolves to REJECTED
         approval = await self._approval_store.add_decision(approval_id, decision)
+
+        # Compute current approval count for event data
+        current_approvals = sum(
+            1 for d in approval.decisions if d.decision_type == RolloutApprovalDecisionType.APPROVE
+        )
 
         # Find the rollout plan and step — mark step FAILED, plan FAILED
         if plan is not None:
@@ -708,27 +807,69 @@ class RolloutService:
                 })
                 await self._rollout_store.update(plan)
 
-        # Emit events
-        await self._write_audit(
-            "policy.rollout.approval.rejected",
-            user_id=rejected_by,
-            tenant_id=context.tenant_id,
-            data={
-                "rollout_id": approval.rollout_id,
-                "step_id": approval.step_id,
-                "approval_id": approval_id,
-                "bundle_id": approval.bundle_id,
-                "environment": approval.environment,
-            },
-        )
-        await self._emit_change_event(
-            PolicyChangeEventType.ROLLOUT_APPROVAL_REJECTED,
-            environment=approval.environment,
-            ring_name=approval.ring_name,
-            bundle_id=approval.bundle_id,
-            actor_id=rejected_by,
-            reason=reason,
-        )
+        # Emit decision_recorded audit event
+        try:
+            await self._write_audit(
+                "policy.rollout.approval.decision_recorded",
+                user_id=rejected_by,
+                tenant_id=context.tenant_id,
+                data={
+                    "approval_id": approval_id,
+                    "rollout_id": approval.rollout_id,
+                    "step_id": approval.step_id,
+                    "actor_id": rejected_by,
+                    "decision_type": "reject",
+                    "required_approvals": approval.policy.required_approvals,
+                    "current_approvals": current_approvals,
+                    "policy_type": approval.policy.policy_type.value,
+                },
+            )
+        except Exception:
+            pass  # Event emission failure shouldn't crash rollout operations
+        try:
+            await self._emit_change_event(
+                PolicyChangeEventType.ROLLOUT_APPROVAL_DECISION_RECORDED,
+                environment=approval.environment,
+                ring_name=approval.ring_name,
+                bundle_id=approval.bundle_id,
+                actor_id=rejected_by,
+                reason=reason,
+                data={
+                    "approval_id": approval_id,
+                    "decision_type": "reject",
+                    "current_approvals": current_approvals,
+                },
+            )
+        except Exception:
+            pass  # Event emission failure shouldn't crash rollout operations
+
+        # Emit rejected events
+        try:
+            await self._write_audit(
+                "policy.rollout.approval.rejected",
+                user_id=rejected_by,
+                tenant_id=context.tenant_id,
+                data={
+                    "rollout_id": approval.rollout_id,
+                    "step_id": approval.step_id,
+                    "approval_id": approval_id,
+                    "bundle_id": approval.bundle_id,
+                    "environment": approval.environment,
+                },
+            )
+        except Exception:
+            pass  # Event emission failure shouldn't crash rollout operations
+        try:
+            await self._emit_change_event(
+                PolicyChangeEventType.ROLLOUT_APPROVAL_REJECTED,
+                environment=approval.environment,
+                ring_name=approval.ring_name,
+                bundle_id=approval.bundle_id,
+                actor_id=rejected_by,
+                reason=reason,
+            )
+        except Exception:
+            pass  # Event emission failure shouldn't crash rollout operations
 
         return approval
 

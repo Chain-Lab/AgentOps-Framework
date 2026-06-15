@@ -16,7 +16,7 @@ class TestPolicyChangeEventType:
     """Tests for PolicyChangeEventType enum."""
 
     def test_all_event_types_valid(self) -> None:
-        """All 21 enum values are valid strings with expected dot-notation."""
+        """All enum values are valid strings with expected dot-notation."""
         expected = {
             "policy.bundle.created",
             "policy.gate.completed",
@@ -39,13 +39,17 @@ class TestPolicyChangeEventType:
             "policy.rollout.approval.requested",
             "policy.rollout.approval.approved",
             "policy.rollout.approval.rejected",
+            "policy.rollout.approval.expired",
+            "policy.rollout.approval.decision_recorded",
+            "policy.rollout.approval.quorum_reached",
+            "policy.rollout.approval.policy_denied",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 21 enum members defined."""
-        assert len(PolicyChangeEventType) == 21
+        """Exactly 25 enum members defined."""
+        assert len(PolicyChangeEventType) == 25
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""

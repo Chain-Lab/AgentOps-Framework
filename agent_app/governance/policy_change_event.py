@@ -34,6 +34,9 @@ class PolicyChangeEventType(StrEnum):
     ROLLOUT_APPROVAL_APPROVED = "policy.rollout.approval.approved"
     ROLLOUT_APPROVAL_REJECTED = "policy.rollout.approval.rejected"
     ROLLOUT_APPROVAL_EXPIRED = "policy.rollout.approval.expired"
+    ROLLOUT_APPROVAL_DECISION_RECORDED = "policy.rollout.approval.decision_recorded"
+    ROLLOUT_APPROVAL_QUORUM_REACHED = "policy.rollout.approval.quorum_reached"
+    ROLLOUT_APPROVAL_POLICY_DENIED = "policy.rollout.approval.policy_denied"
 
 
 class PolicyChangeEvent(BaseModel):

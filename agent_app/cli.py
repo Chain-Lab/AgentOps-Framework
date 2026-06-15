@@ -603,6 +603,7 @@ def main() -> int:
     approval_approve.add_argument("--actor-id", required=True, help="Actor ID")
     approval_approve.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
     approval_approve.add_argument("--reason", default=None, help="Reason for approval")
+    approval_approve.add_argument("--roles", action="append", default=[], help="Approver roles (Phase 37)")
 
     approval_reject = rollout_approval_sub.add_parser("reject", help="Reject a rollout step approval")
     approval_reject.add_argument("--config", required=True, help="Config file path")
@@ -610,6 +611,13 @@ def main() -> int:
     approval_reject.add_argument("--actor-id", required=True, help="Actor ID")
     approval_reject.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
     approval_reject.add_argument("--reason", default=None, help="Reason for rejection")
+    approval_reject.add_argument("--roles", action="append", default=[], help="Approver roles (Phase 37)")
+
+    # Phase 37: expire subcommand
+    approval_expire = rollout_approval_sub.add_parser("expire", help="Expire pending approvals past their expiration time")
+    approval_expire.add_argument("--config", required=True, help="Config file path")
+    approval_expire.add_argument("--actor-id", required=True, help="Who is expiring approvals")
+    approval_expire.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
 
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
@@ -892,6 +900,8 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_rollout_approval_approve(args))
             if args.approval_command == "reject":
                 return asyncio.run(_cmd_policy_rollout_approval_reject(args))
+            if args.approval_command == "expire":
+                return asyncio.run(_cmd_policy_rollout_approval_expire(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -2746,7 +2756,7 @@ def _get_release_service(app: Any) -> Any:
     return service
 
 
-def _build_context(actor_id: str, permissions: list[str], tenant_id: str = "default") -> RunContext:
+def _build_context(actor_id: str, permissions: list[str], roles: list[str] | None = None, tenant_id: str = "default") -> RunContext:
     """Build a RunContext for CLI invocations."""
     from agent_app.core.context import RunContext
     return RunContext(
@@ -2754,6 +2764,7 @@ def _build_context(actor_id: str, permissions: list[str], tenant_id: str = "defa
         user_id=actor_id,
         tenant_id=tenant_id,
         permissions=permissions,
+        roles=roles or [],
     )
 
 
@@ -4467,6 +4478,31 @@ def _approval_to_dict(approval) -> dict:
         "resolved_reason": approval.resolved_reason,
         "created_at": str(approval.created_at),
         "resolved_at": str(approval.resolved_at) if approval.resolved_at else None,
+        "policy": {
+            "policy_type": approval.policy.policy_type.value,
+            "required_approvals": approval.policy.required_approvals,
+            "allowed_approver_roles": approval.policy.allowed_approver_roles,
+            "allowed_approver_permissions": approval.policy.allowed_approver_permissions,
+            "prohibit_requester_approval": approval.policy.prohibit_requester_approval,
+            "prohibit_creator_approval": approval.policy.prohibit_creator_approval,
+            "expires_after_seconds": approval.policy.expires_after_seconds,
+            "require_reason": approval.policy.require_reason,
+        } if hasattr(approval, 'policy') and approval.policy else None,
+        "decisions": [
+            {
+                "decision_id": d.decision_id,
+                "decision_type": d.decision_type.value,
+                "decided_by": d.decided_by,
+                "reason": d.reason,
+                "roles": d.roles,
+                "permissions": d.permissions,
+                "created_at": str(d.created_at),
+            }
+            for d in (approval.decisions if hasattr(approval, 'decisions') else [])
+        ],
+        "expires_at": str(approval.expires_at) if hasattr(approval, 'expires_at') and approval.expires_at else None,
+        "required_approvals": approval.policy.required_approvals if hasattr(approval, 'policy') and approval.policy else 1,
+        "current_approvals": sum(1 for d in (approval.decisions if hasattr(approval, 'decisions') else []) if d.decision_type.value == "approve"),
     }
 
 
@@ -4523,11 +4559,13 @@ async def _cmd_policy_rollout_approval_list(args: argparse.Namespace) -> int:
         data = [_approval_to_dict(a) for a in approvals]
         print(json.dumps(data, indent=2, default=str))
     else:
-        print(f"{'Approval ID':<20} {'Rollout ID':<20} {'Step ID':<10} {'Status':<10} {'Requested By':<15}")
-        print("-" * 80)
+        print(f"{'Approval ID':<20} {'Rollout ID':<20} {'Step ID':<10} {'Status':<10} {'Approvals':<12} {'Requested By':<15}")
+        print("-" * 92)
         for a in approvals:
             status_str = a.status.value if hasattr(a.status, "value") else a.status
-            print(f"{a.approval_id:<20} {a.rollout_id:<20} {a.step_id:<10} {status_str:<10} {a.requested_by:<15}")
+            current = sum(1 for d in (a.decisions if hasattr(a, 'decisions') else []) if d.decision_type.value == "approve")
+            required = a.policy.required_approvals if hasattr(a, 'policy') and a.policy else 1
+            print(f"{a.approval_id:<20} {a.rollout_id:<20} {a.step_id:<10} {status_str:<10} {current}/{required:<11} {a.requested_by:<15}")
     return 0
 
 
@@ -4588,7 +4626,7 @@ async def _cmd_policy_rollout_approval_approve(args: argparse.Namespace) -> int:
         print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
         return 1
 
-    context = _build_context(args.actor_id, args.permissions)
+    context = _build_context(args.actor_id, args.permissions, roles=args.roles)
 
     try:
         approval = await service.approve_step(
@@ -4629,7 +4667,7 @@ async def _cmd_policy_rollout_approval_reject(args: argparse.Namespace) -> int:
         print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
         return 1
 
-    context = _build_context(args.actor_id, args.permissions)
+    context = _build_context(args.actor_id, args.permissions, roles=args.roles)
 
     try:
         approval = await service.reject_step(
@@ -4652,6 +4690,37 @@ async def _cmd_policy_rollout_approval_reject(args: argparse.Namespace) -> int:
         return 1
 
     print(json.dumps(_approval_to_dict(approval), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_approval_expire(args: argparse.Namespace) -> int:
+    """Expire pending approvals past their expiration time."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        expired = await service.expire_approvals(context=context)
+    except Exception as exc:
+        print(f"Error expiring approvals: {exc}", file=sys.stderr)
+        return 1
+
+    if not expired:
+        print("No approvals expired.")
+        return 0
+
+    print(json.dumps([_approval_to_dict(a) for a in expired], indent=2, default=str))
     return 0
 
 

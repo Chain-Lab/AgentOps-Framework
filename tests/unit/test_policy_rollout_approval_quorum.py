@@ -3,6 +3,8 @@
 Phase 37 Task 4: Tests that the RolloutService uses decisions (not direct approve/reject)
 for the approval flow, supports quorum policies, self-approval blocking, role restrictions,
 expiration, and backward compatibility with SINGLE policy.
+
+Phase 37 Task 8: Tests for audit and change event emission during approval operations.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import pytest
 from conftest import _run_async
 
 from agent_app.core.context import RunContext
+from agent_app.governance.audit import InMemoryAuditLogger
 from agent_app.governance.policy_rollout import (
     RolloutPlan,
     RolloutPlanStatus,
@@ -591,3 +594,222 @@ class TestQuorumApprovalWorkflow:
                     reason="Try again",
                 )
             )
+
+
+# -- Audit event helpers --
+
+
+def _make_service_with_audit(approval_policy=None):
+    """Create a RolloutService with InMemory stores and an InMemoryAuditLogger."""
+    rollout_store = InMemoryRolloutPlanStore()
+    approval_store = InMemoryRolloutStepApprovalStore()
+    audit_logger = InMemoryAuditLogger()
+    service = RolloutService(
+        rollout_store=rollout_store,
+        release_service=None,
+        approval_store=approval_store,
+        audit_logger=audit_logger,
+        approval_policy=approval_policy,
+    )
+    return service, rollout_store, approval_store, audit_logger
+
+
+def _find_audit_events(audit_logger, event_type):
+    """Find audit events matching the given event_type."""
+    return [e for e in audit_logger._events if e.event_type == event_type]
+
+
+class TestApprovalAuditEvents:
+    """Tests for audit and change event emission during approval operations.
+
+    Phase 37 Task 8: Verify that RolloutService emits the correct audit
+    and change events for approval decisions, quorum milestones, policy
+    denials, and expiration.
+    """
+
+    def test_decision_recorded_event_on_quorum_pending(self):
+        """When first quorum approve keeps step blocked, a decision_recorded audit event is emitted."""
+        service, rollout_store, _, audit_logger = _make_service_with_audit()
+        ctx = _make_context()
+        plan = _make_plan(service, rollout_store, ctx)
+
+        quorum_policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.QUORUM,
+            required_approvals=2,
+        )
+        approval = _request_approval(service, plan, ctx, policy=quorum_policy)
+
+        # First approve — quorum not reached
+        ctx1 = _make_context(user_id="reviewer1")
+        _run_async(
+            service.approve_step(
+                approval_id=approval.approval_id,
+                approved_by="reviewer1",
+                context=ctx1,
+                reason="First",
+            )
+        )
+
+        # Should have a decision_recorded audit event
+        events = _find_audit_events(audit_logger, "policy.rollout.approval.decision_recorded")
+        assert len(events) == 1
+        data = events[0].data
+        assert data["approval_id"] == approval.approval_id
+        assert data["rollout_id"] == plan.rollout_id
+        assert data["step_id"] == "s1"
+        assert data["actor_id"] == "reviewer1"
+        assert data["decision_type"] == "approve"
+        assert data["required_approvals"] == 2
+        assert data["current_approvals"] == 1
+        assert data["policy_type"] == "quorum"
+
+    def test_quorum_reached_event(self):
+        """When second quorum approve reaches threshold, a quorum_reached event is emitted."""
+        service, rollout_store, _, audit_logger = _make_service_with_audit()
+        ctx = _make_context()
+        plan = _make_plan(service, rollout_store, ctx)
+
+        quorum_policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.QUORUM,
+            required_approvals=2,
+        )
+        approval = _request_approval(service, plan, ctx, policy=quorum_policy)
+
+        # First approve
+        ctx1 = _make_context(user_id="reviewer1")
+        _run_async(
+            service.approve_step(
+                approval_id=approval.approval_id,
+                approved_by="reviewer1",
+                context=ctx1,
+                reason="First",
+            )
+        )
+
+        # Second approve — quorum reached
+        ctx2 = _make_context(user_id="reviewer2")
+        _run_async(
+            service.approve_step(
+                approval_id=approval.approval_id,
+                approved_by="reviewer2",
+                context=ctx2,
+                reason="Second",
+            )
+        )
+
+        # Should have a quorum_reached audit event
+        events = _find_audit_events(audit_logger, "policy.rollout.approval.quorum_reached")
+        assert len(events) == 1
+        data = events[0].data
+        assert data["approval_id"] == approval.approval_id
+        assert data["rollout_id"] == plan.rollout_id
+        assert data["step_id"] == "s1"
+        assert data["actor_id"] == "reviewer2"
+        assert data["decision_type"] == "approve"
+        assert data["required_approvals"] == 2
+        assert data["current_approvals"] == 2
+        assert data["policy_type"] == "quorum"
+
+        # Should also have an approved event
+        approved_events = _find_audit_events(audit_logger, "policy.rollout.approval.approved")
+        assert len(approved_events) == 1
+
+    def test_policy_denied_event_on_self_approval(self):
+        """When self-approval is blocked by policy, a policy_denied event is emitted."""
+        service, rollout_store, _, audit_logger = _make_service_with_audit()
+        ctx = _make_context()
+        plan = _make_plan(service, rollout_store, ctx)
+
+        policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.SINGLE,
+            required_approvals=1,
+            prohibit_requester_approval=True,
+        )
+        approval = _request_approval(
+            service, plan, ctx, requested_by="requester1", policy=policy,
+        )
+
+        # Requester tries to approve their own request
+        ctx_self = _make_context(user_id="requester1")
+        with pytest.raises(ApprovalPolicyError, match="requester"):
+            _run_async(
+                service.approve_step(
+                    approval_id=approval.approval_id,
+                    approved_by="requester1",
+                    context=ctx_self,
+                    reason="Self-approve",
+                )
+            )
+
+        # Should have a policy_denied audit event
+        events = _find_audit_events(audit_logger, "policy.rollout.approval.policy_denied")
+        assert len(events) == 1
+        data = events[0].data
+        assert data["approval_id"] == approval.approval_id
+        assert data["rollout_id"] == plan.rollout_id
+        assert data["step_id"] == "s1"
+        assert data["actor_id"] == "requester1"
+        assert "requester" in data["denial_reason"]
+
+    def test_expired_event_on_expire(self):
+        """When expire_approvals runs, an expired event is emitted for each expired approval."""
+        service, rollout_store, _, audit_logger = _make_service_with_audit()
+        ctx = _make_context()
+        plan = _make_plan(service, rollout_store, ctx)
+
+        policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.SINGLE,
+            required_approvals=1,
+            expires_after_seconds=1,  # expires in 1 second
+        )
+        approval = _request_approval(service, plan, ctx, policy=policy)
+
+        # Wait for the approval to actually expire, then run expire_approvals
+        import time
+        time.sleep(1.5)
+
+        # Run expire_approvals — should find and expire the approval
+        expired = _run_async(service.expire_approvals(context=ctx))
+        assert len(expired) >= 1
+
+        # Should have an expired audit event
+        events = _find_audit_events(audit_logger, "policy.rollout.approval.expired")
+        assert len(events) >= 1
+        assert events[0].data["approval_id"] == approval.approval_id
+
+    def test_reject_emits_decision_recorded(self):
+        """Reject decision emits decision_recorded event."""
+        service, rollout_store, _, audit_logger = _make_service_with_audit()
+        ctx = _make_context()
+        plan = _make_plan(service, rollout_store, ctx)
+
+        policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType.SINGLE,
+            required_approvals=1,
+        )
+        approval = _request_approval(service, plan, ctx, policy=policy)
+
+        # Reject the approval
+        ctx_reject = _make_context(user_id="rejector1")
+        _run_async(
+            service.reject_step(
+                approval_id=approval.approval_id,
+                rejected_by="rejector1",
+                context=ctx_reject,
+                reason="Not ready",
+            )
+        )
+
+        # Should have a decision_recorded audit event
+        events = _find_audit_events(audit_logger, "policy.rollout.approval.decision_recorded")
+        assert len(events) == 1
+        data = events[0].data
+        assert data["approval_id"] == approval.approval_id
+        assert data["rollout_id"] == plan.rollout_id
+        assert data["step_id"] == "s1"
+        assert data["actor_id"] == "rejector1"
+        assert data["decision_type"] == "reject"
+
+        # Should also have a rejected audit event
+        rejected_events = _find_audit_events(audit_logger, "policy.rollout.approval.rejected")
+        assert len(rejected_events) == 1
