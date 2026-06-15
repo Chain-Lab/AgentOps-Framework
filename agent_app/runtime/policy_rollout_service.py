@@ -18,6 +18,10 @@ from agent_app.governance.policy_rollout import (
     RolloutStepStatus,
     RolloutStepType,
 )
+from agent_app.governance.policy_rollout_approval import (
+    RolloutStepApproval,
+    RolloutStepApprovalStatus,
+)
 from agent_app.governance.audit import AuditEvent
 
 
@@ -36,6 +40,8 @@ class RolloutService:
         audit_logger: Any | None = None,
         event_store: Any | None = None,
         permission_checker: Any | None = None,
+        approval_store: Any | None = None,
+        approval_require_reason: bool = False,
     ) -> None:
         self._rollout_store = rollout_store
         self._release_service = release_service
@@ -43,6 +49,8 @@ class RolloutService:
         self._audit_logger = audit_logger
         self._event_store = event_store
         self._permission_checker = permission_checker
+        self._approval_store = approval_store
+        self._approval_require_reason = approval_require_reason
 
     # --- Permission check ---
     async def _check_permission(
@@ -372,6 +380,286 @@ class RolloutService:
 
         return plan
 
+    # --- Approval workflow ---
+
+    async def _check_permission_any(
+        self,
+        permissions: list[PolicyReleasePermission],
+        context: RunContext,
+    ) -> None:
+        """Check that at least one of the given permissions is held."""
+        if self._permission_checker is None:
+            return
+        for permission in permissions:
+            allowed = await self._permission_checker.check(permission, context)
+            if allowed:
+                return
+        raise PermissionError(
+            f"Permission denied: one of {', '.join(p.value for p in permissions)} required"
+        )
+
+    async def request_step_approval(
+        self,
+        rollout_id: str,
+        step_id: str,
+        requested_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> RolloutStepApproval:
+        """Request approval for a rollout step that requires human sign-off."""
+        await self._check_permission_any(
+            [PolicyReleasePermission.ROLLOUT_APPROVAL_REQUEST, PolicyReleasePermission.ROLLOUT_EXECUTE],
+            context,
+        )
+
+        plan = await self._rollout_store.get(rollout_id)
+        if plan is None:
+            raise KeyError(f"Rollout plan '{rollout_id}' not found")
+
+        step = next((s for s in plan.steps if s.step_id == step_id), None)
+        if step is None:
+            raise KeyError(f"Step '{step_id}' not found in rollout plan '{rollout_id}'")
+
+        if not step.requires_approval:
+            raise ValueError(f"Step '{step_id}' does not require approval")
+
+        if step.status not in (RolloutStepStatus.BLOCKED, RolloutStepStatus.PENDING):
+            raise ValueError(
+                f"Step '{step_id}' is in status '{step.status.value}', "
+                f"must be BLOCKED or PENDING to request approval"
+            )
+
+        if self._approval_store is None:
+            raise RuntimeError("No approval store configured")
+
+        # Check for existing pending approval
+        existing = await self._approval_store.get_pending_for_step(rollout_id, step_id)
+        if existing is not None:
+            return existing
+
+        # Create new approval
+        approval = RolloutStepApproval(
+            approval_id=f"rsa_{uuid.uuid4().hex[:12]}",
+            rollout_id=rollout_id,
+            step_id=step_id,
+            bundle_id=plan.bundle_id,
+            environment=step.environment,
+            ring_name=step.ring_name,
+            requested_by=requested_by,
+            requested_reason=reason,
+            status=RolloutStepApprovalStatus.PENDING,
+            created_at=datetime.now(timezone.utc),
+        )
+        approval = await self._approval_store.create(approval)
+
+        # Update step status to BLOCKED
+        updated_steps = [
+            step.model_copy(update={
+                "status": RolloutStepStatus.BLOCKED,
+                "approval_id": approval.approval_id,
+                "error": {
+                    "type": "approval_required",
+                    "message": "Step requires approval",
+                    "approval_id": approval.approval_id,
+                },
+            })
+            if s.step_id == step_id else s
+            for s in plan.steps
+        ]
+        plan = plan.model_copy(update={
+            "steps": updated_steps,
+            "updated_at": datetime.now(timezone.utc),
+        })
+        await self._rollout_store.update(plan)
+
+        # Emit events
+        await self._write_audit(
+            "policy.rollout.approval.requested",
+            user_id=requested_by,
+            tenant_id=context.tenant_id,
+            data={
+                "rollout_id": rollout_id,
+                "step_id": step_id,
+                "approval_id": approval.approval_id,
+                "bundle_id": plan.bundle_id,
+                "environment": step.environment,
+            },
+        )
+        await self._emit_change_event(
+            PolicyChangeEventType.ROLLOUT_APPROVAL_REQUESTED,
+            environment=step.environment,
+            ring_name=step.ring_name,
+            bundle_id=plan.bundle_id,
+            actor_id=requested_by,
+            reason=reason,
+        )
+
+        return approval
+
+    async def approve_step(
+        self,
+        approval_id: str,
+        approved_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> RolloutStepApproval:
+        """Approve a pending rollout step approval."""
+        await self._check_permission(PolicyReleasePermission.ROLLOUT_APPROVAL_APPROVE, context)
+
+        approval = await self._approval_store.get(approval_id)
+        if approval is None:
+            raise KeyError(f"Approval '{approval_id}' not found")
+
+        if approval.status != RolloutStepApprovalStatus.PENDING:
+            raise ValueError(
+                f"Cannot approve: approval '{approval_id}' status is "
+                f"{approval.status.value}, expected PENDING"
+            )
+
+        if self._approval_require_reason and reason is None:
+            raise ValueError("Reason is required for approval")
+
+        # Mark approval as approved
+        approval = await self._approval_store.approve(approval_id, approved_by, reason)
+
+        # Find the rollout plan and step
+        plan = await self._rollout_store.get(approval.rollout_id)
+        if plan is not None:
+            step = next(
+                (s for s in plan.steps if s.step_id == approval.step_id), None
+            )
+            if step is not None and step.status == RolloutStepStatus.BLOCKED:
+                updated_steps = [
+                    s.model_copy(update={
+                        "status": RolloutStepStatus.PENDING,
+                        "error": None,
+                    })
+                    if s.step_id == approval.step_id else s
+                    for s in plan.steps
+                ]
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                await self._rollout_store.update(plan)
+
+        # Emit events
+        await self._write_audit(
+            "policy.rollout.approval.approved",
+            user_id=approved_by,
+            tenant_id=context.tenant_id,
+            data={
+                "rollout_id": approval.rollout_id,
+                "step_id": approval.step_id,
+                "approval_id": approval_id,
+                "bundle_id": approval.bundle_id,
+                "environment": approval.environment,
+            },
+        )
+        await self._emit_change_event(
+            PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED,
+            environment=approval.environment,
+            ring_name=approval.ring_name,
+            bundle_id=approval.bundle_id,
+            actor_id=approved_by,
+            reason=reason,
+        )
+
+        return approval
+
+    async def reject_step(
+        self,
+        approval_id: str,
+        rejected_by: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> RolloutStepApproval:
+        """Reject a pending rollout step approval."""
+        await self._check_permission(PolicyReleasePermission.ROLLOUT_APPROVAL_REJECT, context)
+
+        approval = await self._approval_store.get(approval_id)
+        if approval is None:
+            raise KeyError(f"Approval '{approval_id}' not found")
+
+        if approval.status != RolloutStepApprovalStatus.PENDING:
+            raise ValueError(
+                f"Cannot reject: approval '{approval_id}' status is "
+                f"{approval.status.value}, expected PENDING"
+            )
+
+        if self._approval_require_reason and reason is None:
+            raise ValueError("Reason is required for rejection")
+
+        # Mark approval as rejected
+        approval = await self._approval_store.reject(approval_id, rejected_by, reason)
+
+        # Find the rollout plan and step
+        plan = await self._rollout_store.get(approval.rollout_id)
+        if plan is not None:
+            step = next(
+                (s for s in plan.steps if s.step_id == approval.step_id), None
+            )
+            if step is not None:
+                updated_steps = [
+                    s.model_copy(update={
+                        "status": RolloutStepStatus.FAILED,
+                        "error": {
+                            "type": "approval_rejected",
+                            "message": f"Approval rejected by {rejected_by}",
+                        },
+                    })
+                    if s.step_id == approval.step_id else s
+                    for s in plan.steps
+                ]
+                new_plan_status = plan.status
+                if plan.status == RolloutPlanStatus.ACTIVE:
+                    new_plan_status = RolloutPlanStatus.FAILED
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "status": new_plan_status,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                await self._rollout_store.update(plan)
+
+        # Emit events
+        await self._write_audit(
+            "policy.rollout.approval.rejected",
+            user_id=rejected_by,
+            tenant_id=context.tenant_id,
+            data={
+                "rollout_id": approval.rollout_id,
+                "step_id": approval.step_id,
+                "approval_id": approval_id,
+                "bundle_id": approval.bundle_id,
+                "environment": approval.environment,
+            },
+        )
+        await self._emit_change_event(
+            PolicyChangeEventType.ROLLOUT_APPROVAL_REJECTED,
+            environment=approval.environment,
+            ring_name=approval.ring_name,
+            bundle_id=approval.bundle_id,
+            actor_id=rejected_by,
+            reason=reason,
+        )
+
+        return approval
+
+    async def list_step_approvals(
+        self,
+        status: RolloutStepApprovalStatus | None = None,
+        rollout_id: str | None = None,
+        context: RunContext | None = None,
+    ) -> list[RolloutStepApproval]:
+        """List rollout step approvals, optionally filtered."""
+        if context is not None:
+            await self._check_permission(PolicyReleasePermission.ROLLOUT_APPROVAL_VIEW, context)
+
+        if self._approval_store is None:
+            return []
+
+        return await self._approval_store.list(status, rollout_id)
+
     # --- Step execution ---
 
     def _find_next_runnable_step(self, plan: RolloutPlan) -> RolloutStep | None:
@@ -404,13 +692,56 @@ class RolloutService:
         })
 
         try:
-            # Check approval requirement first (MVP: block)
+            # Check approval requirement first
             if step.requires_approval:
-                return step.model_copy(update={
-                    "status": RolloutStepStatus.BLOCKED,
-                    "error": {"type": "approval_required", "message": "Step requires approval before execution"},
-                    "completed_at": datetime.now(timezone.utc),
-                })
+                if self._approval_store is not None:
+                    # Full approval workflow
+                    # Check for existing approval by step's approval_id first
+                    existing = None
+                    if step.approval_id:
+                        existing = await self._approval_store.get(step.approval_id)
+                    # Fall back to checking for pending approval
+                    if existing is None:
+                        existing = await self._approval_store.get_pending_for_step(plan.rollout_id, step.step_id)
+                    if existing is not None and existing.status == RolloutStepApprovalStatus.APPROVED:
+                        # Already approved — proceed with execution
+                        pass  # fall through to step type execution
+                    elif existing is not None and existing.status == RolloutStepApprovalStatus.REJECTED:
+                        return step.model_copy(update={
+                            "status": RolloutStepStatus.FAILED,
+                            "error": {"type": "approval_rejected", "message": "Approval was rejected"},
+                            "completed_at": datetime.now(timezone.utc),
+                        })
+                    else:
+                        # Create or reuse pending approval
+                        if existing is None:
+                            approval = RolloutStepApproval(
+                                approval_id=f"rsa_{uuid.uuid4().hex[:12]}",
+                                rollout_id=plan.rollout_id,
+                                step_id=step.step_id,
+                                bundle_id=plan.bundle_id,
+                                environment=step.environment,
+                                ring_name=step.ring_name,
+                                requested_by=actor_id,
+                                status=RolloutStepApprovalStatus.PENDING,
+                                created_at=datetime.now(timezone.utc),
+                            )
+                            approval = await self._approval_store.create(approval)
+                        else:
+                            approval = existing
+                        return step.model_copy(update={
+                            "status": RolloutStepStatus.BLOCKED,
+                            "approval_id": approval.approval_id,
+                            "error": {"type": "approval_required", "message": "Step requires approval before execution", "approval_id": approval.approval_id},
+                            "completed_at": datetime.now(timezone.utc),
+                        })
+                else:
+                    # Legacy MVP: block without approval store
+                    return step.model_copy(update={
+                        "status": RolloutStepStatus.BLOCKED,
+                        "error": {"type": "approval_required", "message": "Step requires approval before execution"},
+                        "completed_at": datetime.now(timezone.utc),
+                    })
 
             result_step: RolloutStep | None = None
 

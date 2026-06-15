@@ -20,6 +20,11 @@ from agent_app.governance.policy_rbac import PolicyReleasePermission
 from agent_app.governance.policy_change_event import PolicyChangeEventType
 from agent_app.governance.audit import AuditEvent
 from agent_app.core.context import RunContext
+from agent_app.governance.policy_rollout_approval import (
+    RolloutStepApproval,
+    RolloutStepApprovalStatus,
+)
+from agent_app.runtime.policy_rollout_approval_store import InMemoryRolloutStepApprovalStore
 from agent_app.runtime.policy_rollout_service import RolloutService
 
 
@@ -208,7 +213,8 @@ class _StubEvalRunner:
 
 
 def _make_service(
-    allowed=True, eval_runner=None, audit_logger=None, event_store=None
+    allowed=True, eval_runner=None, audit_logger=None, event_store=None,
+    approval_store=None, approval_require_reason=False,
 ):
     store = _StubRolloutStore()
     release_svc = _StubReleaseService()
@@ -222,6 +228,8 @@ def _make_service(
         audit_logger=logger,
         event_store=ev_store,
         permission_checker=checker,
+        approval_store=approval_store,
+        approval_require_reason=approval_require_reason,
     )
 
 
@@ -236,6 +244,10 @@ def _make_context(permissions=None):
             "policy.rollout.start",
             "policy.rollout.execute",
             "policy.rollout.cancel",
+            "policy.rollout.approval.request",
+            "policy.rollout.approval.approve",
+            "policy.rollout.approval.reject",
+            "policy.rollout.approval.view",
         ],
     )
 
@@ -864,3 +876,513 @@ class TestNotFoundErrors:
                 actor_id="user1",
                 context=ctx,
             )
+
+
+# -- Approval workflow helpers --
+
+
+def _make_approval_service(
+    allowed=True, audit_logger=None, event_store=None,
+    approval_require_reason=False,
+):
+    """Create a RolloutService with an InMemoryRolloutStepApprovalStore."""
+    approval_store = InMemoryRolloutStepApprovalStore()
+    return _make_service(
+        allowed=allowed,
+        audit_logger=audit_logger,
+        event_store=event_store,
+        approval_store=approval_store,
+        approval_require_reason=approval_require_reason,
+    ), approval_store
+
+
+async def _create_and_start_approval_plan(svc, ctx, steps=None):
+    """Create and start a rollout plan with approval steps."""
+    if steps is None:
+        steps = [
+            RolloutStep(
+                step_id="prod_activate",
+                step_type=RolloutStepType.ACTIVATE,
+                environment="prod",
+                ring_name="stable",
+                requires_approval=True,
+            ),
+        ]
+    plan = await svc.create_plan(
+        name="approval_test",
+        bundle_id="pb_test",
+        steps=steps,
+        created_by="user1",
+        context=ctx,
+    )
+    plan = await svc.start_plan(
+        rollout_id=plan.rollout_id,
+        started_by="user1",
+        context=ctx,
+    )
+    return plan
+
+
+class TestRolloutApprovalWorkflow:
+    """Tests for RolloutService approval workflow APIs."""
+
+    @pytest.mark.asyncio
+    async def test_request_approval_requires_permission(self):
+        """ROLLOUT_APPROVAL_REQUEST denied raises PermissionError."""
+        # Use a selective checker: allow everything except approval request
+        class _SelectiveChecker:
+            async def check(self, permission, context):
+                # Deny both approval request and execute as alternative
+                if permission in (
+                    PolicyReleasePermission.ROLLOUT_APPROVAL_REQUEST,
+                    PolicyReleasePermission.ROLLOUT_EXECUTE,
+                ):
+                    return False
+                return True
+        approval_store = InMemoryRolloutStepApprovalStore()
+        svc = RolloutService(
+            rollout_store=_StubRolloutStore(),
+            release_service=_StubReleaseService(),
+            audit_logger=_StubAuditLogger(),
+            event_store=_StubEventStore(),
+            permission_checker=_SelectiveChecker(),
+            approval_store=approval_store,
+        )
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+        with pytest.raises(PermissionError, match="policy.rollout.approval.request"):
+            await svc.request_step_approval(
+                rollout_id=plan.rollout_id,
+                step_id="prod_activate",
+                requested_by="user1",
+                context=ctx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_cannot_request_for_non_approval_step(self):
+        """Step with requires_approval=False raises ValueError."""
+        svc, _ = _make_approval_service()
+        ctx = _make_context()
+        steps = [
+            RolloutStep(
+                step_id="dev_activate",
+                step_type=RolloutStepType.ACTIVATE,
+                environment="dev",
+                ring_name="stable",
+                requires_approval=False,
+            ),
+        ]
+        plan = await _create_and_start_approval_plan(svc, ctx, steps=steps)
+        with pytest.raises(ValueError, match="does not require approval"):
+            await svc.request_step_approval(
+                rollout_id=plan.rollout_id,
+                step_id="dev_activate",
+                requested_by="user1",
+                context=ctx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_request_sets_step_blocked_and_approval_id(self):
+        """request_step_approval creates approval, sets step BLOCKED with approval_id."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+            reason="Need sign-off for prod",
+        )
+
+        assert approval.approval_id.startswith("rsa_")
+        assert approval.status == RolloutStepApprovalStatus.PENDING
+        assert approval.rollout_id == plan.rollout_id
+        assert approval.step_id == "prod_activate"
+        assert approval.requested_by == "approver1"
+        assert approval.requested_reason == "Need sign-off for prod"
+
+        # Verify step is now BLOCKED with approval_id
+        updated_plan = await svc._rollout_store.get(plan.rollout_id)
+        step = next(s for s in updated_plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.BLOCKED
+        assert step.approval_id == approval.approval_id
+        assert step.error is not None
+        assert step.error["type"] == "approval_required"
+        assert step.error["approval_id"] == approval.approval_id
+
+    @pytest.mark.asyncio
+    async def test_run_next_step_auto_creates_approval(self):
+        """run_next_step on requires_approval step creates pending approval and blocks."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        plan = await svc.run_next_step(
+            rollout_id=plan.rollout_id,
+            actor_id="user1",
+            context=ctx,
+        )
+
+        step = next(s for s in plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.BLOCKED
+        assert step.approval_id is not None
+        assert step.approval_id.startswith("rsa_")
+        assert step.error is not None
+        assert step.error["type"] == "approval_required"
+
+        # Verify approval was created in store
+        approvals = await approval_store.list()
+        assert len(approvals) == 1
+        assert approvals[0].approval_id == step.approval_id
+        assert approvals[0].status == RolloutStepApprovalStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_approved_step_becomes_pending(self):
+        """approve_step sets step status back to PENDING."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        # Request approval
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        # Approve it
+        approved = await svc.approve_step(
+            approval_id=approval.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="Looks good",
+        )
+        assert approved.status == RolloutStepApprovalStatus.APPROVED
+        assert approved.resolved_by == "admin1"
+        assert approved.resolved_reason == "Looks good"
+
+        # Verify step is now PENDING again
+        updated_plan = await svc._rollout_store.get(plan.rollout_id)
+        step = next(s for s in updated_plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.PENDING
+        assert step.error is None
+
+    @pytest.mark.asyncio
+    async def test_run_next_step_executes_approved_step(self):
+        """After approval, run_next_step can execute the step normally."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        # Run step — should block
+        plan = await svc.run_next_step(
+            rollout_id=plan.rollout_id,
+            actor_id="user1",
+            context=ctx,
+        )
+        step = next(s for s in plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.BLOCKED
+
+        # Approve
+        await svc.approve_step(
+            approval_id=step.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="Approved",
+        )
+
+        # Run again — should now execute
+        plan = await svc.run_next_step(
+            rollout_id=plan.rollout_id,
+            actor_id="user1",
+            context=ctx,
+        )
+        step = next(s for s in plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.SUCCEEDED
+        assert step.activation_id is not None
+
+    @pytest.mark.asyncio
+    async def test_rejected_approval_marks_step_and_plan_failed(self):
+        """Reject sets step FAILED and plan FAILED."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        # Request approval
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        # Reject it
+        rejected = await svc.reject_step(
+            approval_id=approval.approval_id,
+            rejected_by="admin1",
+            context=ctx,
+            reason="Not ready for prod",
+        )
+        assert rejected.status == RolloutStepApprovalStatus.REJECTED
+        assert rejected.resolved_by == "admin1"
+        assert rejected.resolved_reason == "Not ready for prod"
+
+        # Verify step is FAILED
+        updated_plan = await svc._rollout_store.get(plan.rollout_id)
+        step = next(s for s in updated_plan.steps if s.step_id == "prod_activate")
+        assert step.status == RolloutStepStatus.FAILED
+        assert step.error is not None
+        assert step.error["type"] == "approval_rejected"
+
+        # Verify plan is FAILED
+        assert updated_plan.status == RolloutPlanStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_reason_required_enforced(self):
+        """With approval_require_reason=True, missing reason raises ValueError on approve and reject."""
+        svc, _ = _make_approval_service(approval_require_reason=True)
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+            reason="Need sign-off",
+        )
+
+        # Approve without reason — should fail
+        with pytest.raises(ValueError, match="Reason is required for approval"):
+            await svc.approve_step(
+                approval_id=approval.approval_id,
+                approved_by="admin1",
+                context=ctx,
+                reason=None,
+            )
+
+        # Reject without reason — should fail
+        with pytest.raises(ValueError, match="Reason is required for rejection"):
+            await svc.reject_step(
+                approval_id=approval.approval_id,
+                rejected_by="admin1",
+                context=ctx,
+                reason=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_audit_events_emitted(self):
+        """Verify audit events for request, approve, reject."""
+        audit_logger = _StubAuditLogger()
+        svc, _ = _make_approval_service(audit_logger=audit_logger)
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        await svc.approve_step(
+            approval_id=approval.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="OK",
+        )
+
+        # Create a new plan for rejection test
+        plan2 = await _create_and_start_approval_plan(svc, ctx)
+        approval2 = await svc.request_step_approval(
+            rollout_id=plan2.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+        await svc.reject_step(
+            approval_id=approval2.approval_id,
+            rejected_by="admin2",
+            context=ctx,
+            reason="No",
+        )
+
+        event_types = [e.event_type for e in audit_logger.events]
+        assert "policy.rollout.approval.requested" in event_types
+        assert "policy.rollout.approval.approved" in event_types
+        assert "policy.rollout.approval.rejected" in event_types
+
+    @pytest.mark.asyncio
+    async def test_change_events_emitted(self):
+        """Verify change events for request, approve, reject."""
+        event_store = _StubEventStore()
+        svc, _ = _make_approval_service(event_store=event_store)
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+            reason="Need sign-off",
+        )
+
+        await svc.approve_step(
+            approval_id=approval.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="OK",
+        )
+
+        # Create a new plan for rejection test
+        plan2 = await _create_and_start_approval_plan(svc, ctx)
+        approval2 = await svc.request_step_approval(
+            rollout_id=plan2.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+        await svc.reject_step(
+            approval_id=approval2.approval_id,
+            rejected_by="admin2",
+            context=ctx,
+            reason="No",
+        )
+
+        event_types = [e.event_type for e in event_store.events]
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_REQUESTED in event_types
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED in event_types
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_REJECTED in event_types
+
+    @pytest.mark.asyncio
+    async def test_list_step_approvals(self):
+        """list returns approvals from store."""
+        svc, approval_store = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        approvals = await svc.list_step_approvals(context=ctx)
+        assert len(approvals) == 1
+        assert approvals[0].step_id == "prod_activate"
+
+        # Filter by status
+        pending = await svc.list_step_approvals(
+            status=RolloutStepApprovalStatus.PENDING, context=ctx,
+        )
+        assert len(pending) == 1
+
+        approved_list = await svc.list_step_approvals(
+            status=RolloutStepApprovalStatus.APPROVED, context=ctx,
+        )
+        assert len(approved_list) == 0
+
+    @pytest.mark.asyncio
+    async def test_approve_already_resolved_raises(self):
+        """Approving non-PENDING raises ValueError."""
+        svc, _ = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        # Approve once
+        await svc.approve_step(
+            approval_id=approval.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="OK",
+        )
+
+        # Try to approve again — should fail
+        with pytest.raises(ValueError, match="PENDING"):
+            await svc.approve_step(
+                approval_id=approval.approval_id,
+                approved_by="admin2",
+                context=ctx,
+                reason="Double approve",
+            )
+
+    @pytest.mark.asyncio
+    async def test_reject_already_resolved_raises(self):
+        """Rejecting non-PENDING raises ValueError."""
+        svc, _ = _make_approval_service()
+        ctx = _make_context()
+        plan = await _create_and_start_approval_plan(svc, ctx)
+
+        approval = await svc.request_step_approval(
+            rollout_id=plan.rollout_id,
+            step_id="prod_activate",
+            requested_by="approver1",
+            context=ctx,
+        )
+
+        # Approve first
+        await svc.approve_step(
+            approval_id=approval.approval_id,
+            approved_by="admin1",
+            context=ctx,
+            reason="OK",
+        )
+
+        # Try to reject — should fail
+        with pytest.raises(ValueError, match="PENDING"):
+            await svc.reject_step(
+                approval_id=approval.approval_id,
+                rejected_by="admin2",
+                context=ctx,
+                reason="Too late",
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_approval_store_backward_compat(self):
+        """Without approval_store, requires_approval still blocks (legacy MVP)."""
+        svc = _make_service()  # No approval_store
+        ctx = _make_context()
+        steps = [
+            RolloutStep(
+                step_id="prod_activate",
+                step_type=RolloutStepType.ACTIVATE,
+                environment="prod",
+                ring_name="stable",
+                requires_approval=True,
+            ),
+        ]
+        plan = await svc.create_plan(
+            name="test",
+            bundle_id="pb_test",
+            steps=steps,
+            created_by="user1",
+            context=ctx,
+        )
+        plan = await svc.start_plan(
+            rollout_id=plan.rollout_id,
+            started_by="user1",
+            context=ctx,
+        )
+        plan = await svc.run_next_step(
+            rollout_id=plan.rollout_id,
+            actor_id="user1",
+            context=ctx,
+        )
+        step = plan.steps[0]
+        assert step.status == RolloutStepStatus.BLOCKED
+        assert step.error is not None
+        assert step.error["type"] == "approval_required"
+        # No approval_id in legacy mode
+        assert step.approval_id is None
