@@ -2,6 +2,33 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.25.0 — Phase 37: Separation of Duties and Multi-Approver Approval Policies
+
+### Added
+- **RolloutApprovalPolicy model** — configurable SINGLE or QUORUM approval policies
+- **RolloutApprovalDecision model** — individual approve/reject decisions by actors
+- **RolloutApprovalPolicyEvaluator** — validates decisions against policy constraints (separation of duties, role/permission checks, expiration, duplicate prevention)
+- **Quorum approvals** — approvals requiring N independent approvers before unblocking steps
+- **Separation of duties** — prohibit_requester_approval, prohibit_creator_approval, prohibit_step_actor_approval
+- **Role and permission constraints** — allowed_approver_roles and allowed_approver_permissions on policies
+- **Approval expiration** — expires_after_seconds on policies, expire_pending() store method, expire CLI command
+- **EXPIRED status** — new RolloutStepApprovalStatus.EXPIRED for expired approvals
+- **Store add_decision/expire_pending** — new store methods for decision-based approval flow
+- **CLI --roles flag** — approve and reject commands accept --roles for role-based policy checks
+- **CLI expire command** — new `agentapp policy rollout approval expire` subcommand
+- **Console quorum display** — approval detail shows decisions table, progress, policy, expiration
+- **Audit events** — decision_recorded, quorum_reached, expired, policy_denied event types
+
+### Changed
+- **RolloutService approve_step/reject_step** — now use decision-based flow instead of direct status mutation
+- **_approval_to_dict** — extended with policy, decisions, expires_at, required_approvals, current_approvals
+- **_build_context** — accepts optional roles parameter
+
+### Backward Compatible
+- Default SINGLE policy preserves Phase 36 single-approval behavior
+- All existing Phase 36 approval tests pass unchanged
+- RolloutApprovalConfig without policy field still loads correctly
+
 ## v0.24.0 — Phase 36: Rollout Approval Workflow
 
 ### Added

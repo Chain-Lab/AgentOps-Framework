@@ -2400,3 +2400,102 @@ passed via form data.
 
 7. **Step approval is rollout-local only** — Approvals are scoped to a single
    rollout plan. There is no cross-rollout approval sharing or templating.
+
+---
+
+## Phase 37: Separation of Duties and Multi-Approver Approval Policies
+
+Phase 37 extends the Phase 36 single-approval lifecycle with configurable approval policies:
+
+### Approval Policies
+
+Rollout approvals can now use **SINGLE** (default, one approver) or **QUORUM** (multiple approvers) policies:
+
+```yaml
+governance:
+  policy_release:
+    rollouts:
+      approvals:
+        type: sqlite
+        path: .agent_app/policy_rollout_approvals.db
+        policy:
+          policy_type: quorum
+          required_approvals: 2
+          allowed_approver_roles:
+            - release_reviewer
+          allowed_approver_permissions:
+            - policy.rollout.approval.approve
+          prohibit_requester_approval: true
+          prohibit_creator_approval: true
+          expires_after_seconds: 86400
+```
+
+### Multi-Approver Quorum
+
+With `policy_type: quorum` and `required_approvals: N`:
+- An approval stays PENDING until N independent approve decisions are recorded
+- Any reject immediately rejects the approval
+- The step only unblocks from BLOCKED → PENDING when the approval is fully APPROVED
+
+### Separation of Duties
+
+- **prohibit_requester_approval**: The person who requested the approval cannot approve it themselves
+- **prohibit_creator_approval**: The person who created the rollout plan cannot approve steps in it
+- **prohibit_step_actor_approval**: The person who would execute the step cannot approve it
+
+### Role and Permission Constraints
+
+- **allowed_approver_roles**: Only actors with at least one of these roles can approve
+- **allowed_approver_permissions**: Only actors with at least one of these permissions can approve
+- Roles and permissions are supplied via `RunContext.roles` and `RunContext.permissions`, or via the CLI `--roles` flag
+
+### Approval Expiration
+
+- **expires_after_seconds**: If set, approvals automatically expire after this duration
+- Expired approvals cannot receive decisions
+- Use `agentapp policy rollout approval expire --config agentapp.yaml` to manually expire past-due approvals
+- Expiration is checked at decision time and via the explicit expire command
+
+### CLI Support
+
+```bash
+# Approve with roles
+agentapp policy rollout approval approve \
+  --config agentapp.yaml \
+  --approval-id rsa_xxx \
+  --actor-id reviewer1 \
+  --roles release_reviewer \
+  --permissions policy.rollout.approval.approve \
+  --reason "Looks good"
+
+# Expire past-due approvals
+agentapp policy rollout approval expire \
+  --config agentapp.yaml \
+  --actor-id admin
+```
+
+### Console Support
+
+The approval detail page now shows:
+- Policy type and required approvals
+- Current approval progress (X/Y)
+- Decisions table with actor, type, reason, roles, timestamp
+- Expiration time
+- Pending message with remaining approval count
+
+### Audit Events
+
+New event types:
+- `policy.rollout.approval.decision_recorded` — a decision was recorded (approve or reject)
+- `policy.rollout.approval.quorum_reached` — quorum threshold was met
+- `policy.rollout.approval.expired` — an approval expired
+- `policy.rollout.approval.policy_denied` — a policy constraint blocked a decision
+
+### Known Limitations
+
+- Roles are supplied via RunContext / CLI, not from external identity providers
+- No external directory integration (LDAP, OIDC, etc.)
+- No Slack/Jira notifications
+- No cryptographic signatures on decisions
+- No delegated approval or approval groups
+- No recurring scheduled expiration worker; expiration is checked during action or explicit expire command
