@@ -535,6 +535,7 @@ class TestPhase37ApprovalCLIPolicyFields:
             RolloutApprovalDecision,
             RolloutApprovalDecisionType,
             RolloutApprovalPolicy,
+            RolloutApprovalPolicyType,
             RolloutStepApproval,
             RolloutStepApprovalStatus,
         )
