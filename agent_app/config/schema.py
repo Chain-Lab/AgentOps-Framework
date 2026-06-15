@@ -386,12 +386,26 @@ class PolicyReloadConfig(BaseModel):
     )
 
 
+class RolloutApprovalPolicyConfig(BaseModel):
+    """Configuration for approval policy (Phase 37)."""
+
+    policy_type: Literal["single", "quorum"] = "single"
+    required_approvals: int = 1
+    allowed_approver_roles: list[str] = Field(default_factory=list)
+    allowed_approver_permissions: list[str] = Field(default_factory=list)
+    prohibit_requester_approval: bool = True
+    prohibit_creator_approval: bool = False
+    expires_after_seconds: int | None = None
+    require_reason: bool = False
+
+
 class RolloutApprovalConfig(BaseModel):
-    """Configuration for rollout step approval store (Phase 36)."""
+    """Configuration for rollout step approval store (Phase 36, extended Phase 37)."""
 
     type: Literal["memory", "sqlite"] = "memory"
     path: str | None = None
     require_reason: bool = False
+    policy: RolloutApprovalPolicyConfig | None = None
 
 
 class RolloutStoreConfig(BaseModel):

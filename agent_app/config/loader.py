@@ -588,6 +588,7 @@ def build_app(
             # Phase 36: Approval store for rollout step approvals
             approval_store = None
             approval_require_reason = False
+            approval_policy = None
             if release_config.rollouts.approvals is not None:
                 from agent_app.runtime.policy_rollout_approval_store import create_rollout_step_approval_store
                 apv_cfg = release_config.rollouts.approvals
@@ -597,6 +598,27 @@ def build_app(
                 )
                 approval_require_reason = apv_cfg.require_reason
                 rollout_approval_store = approval_store
+                # Phase 37: Build approval policy from config
+                if apv_cfg.policy is not None:
+                    from agent_app.governance.policy_rollout_approval import (
+                        RolloutApprovalPolicy,
+                        RolloutApprovalPolicyType,
+                    )
+                    policy_cfg = apv_cfg.policy
+                    # Map require_reason from parent config if not explicitly set in policy
+                    require_reason = policy_cfg.require_reason
+                    if not require_reason and apv_cfg.require_reason:
+                        require_reason = True
+                    approval_policy = RolloutApprovalPolicy(
+                        policy_type=RolloutApprovalPolicyType(policy_cfg.policy_type),
+                        required_approvals=policy_cfg.required_approvals,
+                        allowed_approver_roles=policy_cfg.allowed_approver_roles,
+                        allowed_approver_permissions=policy_cfg.allowed_approver_permissions,
+                        prohibit_requester_approval=policy_cfg.prohibit_requester_approval,
+                        prohibit_creator_approval=policy_cfg.prohibit_creator_approval,
+                        expires_after_seconds=policy_cfg.expires_after_seconds,
+                        require_reason=require_reason,
+                    )
             rollout_service = RolloutService(
                 rollout_store=rollout_store,
                 release_service=release_service,
@@ -605,6 +627,7 @@ def build_app(
                 permission_checker=permission_checker,
                 approval_store=approval_store,
                 approval_require_reason=approval_require_reason,
+                approval_policy=approval_policy,
             )
         app._rollout_store = rollout_store
         app._rollout_service = rollout_service
