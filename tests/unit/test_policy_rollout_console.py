@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from datetime import datetime, timezone
 
+from conftest import _run_async
+
 from agent_app.config.schema import PolicyConsoleConfig
 from agent_app.governance.policy_rollout import (
     RolloutPlan,
@@ -91,8 +93,7 @@ class TestRolloutConsoleRouter:
 
         store = InMemoryRolloutPlanStore()
         plan = self._make_plan("ro_detail_test")
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(store.create(plan))
+        _run_async(store.create(plan))
 
         router = build_policy_console_router(
             store=None,
@@ -148,8 +149,7 @@ class TestRolloutConsoleRouter:
         })
         assert resp.status_code == 200
         # The plan should have been created in the store
-        import asyncio
-        plans = asyncio.get_event_loop().run_until_complete(store.list())
+        plans = _run_async(store.list())
         assert len(plans) == 1
         assert plans[0].name == "test-plan"
 
@@ -161,8 +161,7 @@ class TestRolloutConsoleRouter:
 
         store = InMemoryRolloutPlanStore()
         plan = self._make_plan("ro_start_test", status=RolloutPlanStatus.DRAFT)
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(store.create(plan))
+        _run_async(store.create(plan))
 
         service = RolloutService(
             rollout_store=store,
@@ -182,7 +181,7 @@ class TestRolloutConsoleRouter:
         })
         assert resp.status_code == 200
         # Verify the plan is now ACTIVE
-        updated = asyncio.get_event_loop().run_until_complete(store.get("ro_start_test"))
+        updated = _run_async(store.get("ro_start_test"))
         assert updated.status == RolloutPlanStatus.ACTIVE
 
     def test_rollout_run_next_post(self):
@@ -193,8 +192,7 @@ class TestRolloutConsoleRouter:
 
         store = InMemoryRolloutPlanStore()
         plan = self._make_plan("ro_runnext_test", status=RolloutPlanStatus.ACTIVE)
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(store.create(plan))
+        _run_async(store.create(plan))
 
         # Need a release_service for step execution — use a stub
         service = RolloutService(
@@ -223,8 +221,7 @@ class TestRolloutConsoleRouter:
 
         store = InMemoryRolloutPlanStore()
         plan = self._make_plan("ro_cancel_test", status=RolloutPlanStatus.ACTIVE)
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(store.create(plan))
+        _run_async(store.create(plan))
 
         service = RolloutService(
             rollout_store=store,
@@ -245,7 +242,7 @@ class TestRolloutConsoleRouter:
         })
         assert resp.status_code == 200
         # Verify the plan is now CANCELLED
-        updated = asyncio.get_event_loop().run_until_complete(store.get("ro_cancel_test"))
+        updated = _run_async(store.get("ro_cancel_test"))
         assert updated.status == RolloutPlanStatus.CANCELLED
 
 

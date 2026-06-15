@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -40,14 +41,8 @@ class MockStateStore:
             run_id=run_id,
             owner_id=existing.owner_id,
             acquired_at=existing.acquired_at,
-            expires_at=asyncio.get_event_loop().run_until_complete(
-                asyncio.sleep(0)  # just to get a time
-            ) and __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ) + __import__("datetime").timedelta(seconds=policy.ttl_seconds),
-            renewed_at=__import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=policy.ttl_seconds),
+            renewed_at=datetime.now(timezone.utc),
             version=existing.version + 1,
         )
         self.leases[run_id] = renewed

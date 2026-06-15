@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from datetime import datetime, timezone
 
+from conftest import _run_async
+
 from agent_app.config.schema import PolicyConsoleConfig
 from agent_app.governance.policy_rollout import (
     RolloutPlan,
@@ -119,8 +121,7 @@ class TestRolloutApprovalConsoleRouter:
 
         approval_store = InMemoryRolloutStepApprovalStore()
         approval = self._make_approval("rsa_detail_test")
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(approval_store.create(approval))
+        _run_async(approval_store.create(approval))
 
         router = build_policy_console_router(
             store=None,
@@ -163,8 +164,7 @@ class TestRolloutApprovalConsoleRouter:
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(rollout_store.create(plan))
+        _run_async(rollout_store.create(plan))
 
         service = RolloutService(
             rollout_store=rollout_store,
@@ -188,7 +188,7 @@ class TestRolloutApprovalConsoleRouter:
         })
         assert resp.status_code == 200
         # Verify approval was created
-        approvals = asyncio.get_event_loop().run_until_complete(approval_store.list())
+        approvals = _run_async(approval_store.list())
         assert len(approvals) == 1
         assert approvals[0].rollout_id == "ro_req_appr"
 
@@ -205,9 +205,8 @@ class TestRolloutApprovalConsoleRouter:
 
         plan = self._make_plan_with_approval_step("ro_approve_test")
         approval = self._make_approval("rsa_approve_test")
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(rollout_store.create(plan))
-        asyncio.get_event_loop().run_until_complete(approval_store.create(approval))
+        _run_async(rollout_store.create(plan))
+        _run_async(approval_store.create(approval))
 
         service = RolloutService(
             rollout_store=rollout_store,
@@ -231,7 +230,7 @@ class TestRolloutApprovalConsoleRouter:
         })
         assert resp.status_code == 200
         # Verify approval was approved
-        updated = asyncio.get_event_loop().run_until_complete(approval_store.get("rsa_approve_test"))
+        updated = _run_async(approval_store.get("rsa_approve_test"))
         assert updated.status == RolloutStepApprovalStatus.APPROVED
 
     # --- Test 5: Reject POST ---
@@ -247,9 +246,8 @@ class TestRolloutApprovalConsoleRouter:
 
         plan = self._make_plan_with_approval_step("ro_reject_test")
         approval = self._make_approval("rsa_reject_test")
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(rollout_store.create(plan))
-        asyncio.get_event_loop().run_until_complete(approval_store.create(approval))
+        _run_async(rollout_store.create(plan))
+        _run_async(approval_store.create(approval))
 
         service = RolloutService(
             rollout_store=rollout_store,
@@ -273,7 +271,7 @@ class TestRolloutApprovalConsoleRouter:
         })
         assert resp.status_code == 200
         # Verify approval was rejected
-        updated = asyncio.get_event_loop().run_until_complete(approval_store.get("rsa_reject_test"))
+        updated = _run_async(approval_store.get("rsa_reject_test"))
         assert updated.status == RolloutStepApprovalStatus.REJECTED
 
     # --- Test 6: Rollout detail shows approval state for blocked steps ---
@@ -285,8 +283,7 @@ class TestRolloutApprovalConsoleRouter:
 
         rollout_store = InMemoryRolloutPlanStore()
         plan = self._make_plan_with_approval_step("ro_appr_detail")
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(rollout_store.create(plan))
+        _run_async(rollout_store.create(plan))
 
         router = build_policy_console_router(
             store=None,

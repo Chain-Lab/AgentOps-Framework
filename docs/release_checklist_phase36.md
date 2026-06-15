@@ -67,3 +67,14 @@
 
 - [ ] All checklist items passing
 - [ ] Ready for merge
+
+## Phase 36.5: Test Isolation Hardening
+
+- [x] Full policy console test suite passes in batch mode (0 failures)
+- [x] Console TestClient isolation verified (no shared state between apps)
+- [x] `asyncio.get_event_loop()` replaced with `_run_async()` helper in all console tests
+- [x] Lease renewer test fixed (removed nested `asyncio.get_event_loop` in async context)
+- [x] Regression test `test_console_isolation.py` added (3 tests)
+- [x] `_run_async()` helper added to `tests/conftest.py`
+- [x] `policy_console_app` fixture added to `tests/conftest.py`
+- [x] 2513 tests pass in full batch mode
