@@ -530,6 +530,55 @@ def main() -> int:
     routing_simulate_parser.add_argument("--permissions", action="append", default=[])
     routing_simulate_parser.add_argument("--json", action="store_true")
 
+    # Phase 35: rollout commands
+    rollout_parser = policy_sub.add_parser("rollout", help="Rollout plan management (Phase 35)")
+    rollout_sub = rollout_parser.add_subparsers(dest="rollout_command")
+
+    rollout_create = rollout_sub.add_parser("create", help="Create a rollout plan")
+    rollout_create.add_argument("--config", required=True, help="Config file path")
+    rollout_create.add_argument("--name", required=True, help="Rollout plan name")
+    rollout_create.add_argument("--bundle-id", required=True, help="Bundle ID to roll out")
+    rollout_create.add_argument("--steps-file", required=True, help="YAML file with rollout steps")
+    rollout_create.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_create.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+    rollout_create.add_argument("--reason", default=None, help="Reason for creating rollout")
+
+    rollout_list = rollout_sub.add_parser("list", help="List rollout plans")
+    rollout_list.add_argument("--config", required=True, help="Config file path")
+    rollout_list.add_argument("--status", default=None, help="Filter by status")
+    rollout_list.add_argument("--bundle-id", default=None, help="Filter by bundle ID")
+    rollout_list.add_argument("--json", action="store_true", help="Output as JSON")
+
+    rollout_show = rollout_sub.add_parser("show", help="Show rollout plan details")
+    rollout_show.add_argument("--config", required=True, help="Config file path")
+    rollout_show.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_show.add_argument("--json", action="store_true", help="Output as JSON")
+
+    rollout_start = rollout_sub.add_parser("start", help="Start a rollout plan")
+    rollout_start.add_argument("--config", required=True, help="Config file path")
+    rollout_start.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_start.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_start.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+
+    rollout_next = rollout_sub.add_parser("run-next", help="Run next step in rollout plan")
+    rollout_next.add_argument("--config", required=True, help="Config file path")
+    rollout_next.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_next.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_next.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+
+    rollout_all = rollout_sub.add_parser("run-all", help="Run all available steps in rollout plan")
+    rollout_all.add_argument("--config", required=True, help="Config file path")
+    rollout_all.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_all.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_all.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+
+    rollout_cancel = rollout_sub.add_parser("cancel", help="Cancel a rollout plan")
+    rollout_cancel.add_argument("--config", required=True, help="Config file path")
+    rollout_cancel.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_cancel.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_cancel.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+    rollout_cancel.add_argument("--reason", default=None, help="Reason for cancellation")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -784,6 +833,23 @@ def main() -> int:
     if args.command == "policy" and args.policy_command == "routing":
         if args.routing_command == "simulate":
             return asyncio.run(_cmd_policy_routing_simulate(args))
+
+    # Phase 35: policy rollout subcommands
+    if args.command == "policy" and args.policy_command == "rollout":
+        if args.rollout_command == "create":
+            return asyncio.run(_cmd_policy_rollout_create(args))
+        if args.rollout_command == "list":
+            return asyncio.run(_cmd_policy_rollout_list(args))
+        if args.rollout_command == "show":
+            return asyncio.run(_cmd_policy_rollout_show(args))
+        if args.rollout_command == "start":
+            return asyncio.run(_cmd_policy_rollout_start(args))
+        if args.rollout_command == "run-next":
+            return asyncio.run(_cmd_policy_rollout_run_next(args))
+        if args.rollout_command == "run-all":
+            return asyncio.run(_cmd_policy_rollout_run_all(args))
+        if args.rollout_command == "cancel":
+            return asyncio.run(_cmd_policy_rollout_cancel(args))
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -3882,6 +3948,461 @@ async def _cmd_policy_routing_simulate(args: argparse.Namespace) -> int:
             print(f"  Canary %:         {result['canary_percentage']}")
         if result.get("reason"):
             print(f"  Reason:           {result['reason']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 35: Rollout helpers
+# ---------------------------------------------------------------------------
+
+def _parse_steps_file(steps_file: str) -> list[dict]:
+    """Parse a YAML steps file and return the raw step dicts."""
+    import yaml
+
+    with open(steps_file) as f:
+        data = yaml.safe_load(f)
+    return data.get("steps", [])
+
+
+def _get_rollout_service(app: Any) -> Any:
+    """Get the rollout service from the app, or None if not configured.
+
+    If the service was created with a DefaultPermissionChecker (which has
+    a mismatched ``check`` signature for PolicyReleasePermission), replace
+    it with a PolicyReleasePermissionChecker so that the service's
+    ``_check_permission`` calls work correctly.
+    """
+    service = getattr(app, "rollout_service", None) or getattr(app, "_rollout_service", None)
+    if service is None:
+        return None
+    # Ensure the permission_checker is compatible with PolicyReleasePermission
+    from agent_app.governance.permission import DefaultPermissionChecker
+    if isinstance(service._permission_checker, DefaultPermissionChecker):
+        from agent_app.governance.policy_rbac import PolicyReleasePermissionChecker
+        service._permission_checker = PolicyReleasePermissionChecker()
+    return service
+
+
+async def _cmd_policy_rollout_create(args: argparse.Namespace) -> int:
+    """Create a rollout plan from a steps file."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout import RolloutStep, RolloutStepType
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    # Parse steps file
+    try:
+        raw_steps = _parse_steps_file(args.steps_file)
+    except Exception as exc:
+        print(f"Error parsing steps file: {exc}", file=sys.stderr)
+        return 1
+
+    if not raw_steps:
+        print("Steps file must contain at least one step.", file=sys.stderr)
+        return 1
+
+    # Convert raw dicts to RolloutStep objects
+    steps: list[RolloutStep] = []
+    for raw in raw_steps:
+        step_type_str = raw.get("step_type", "activate")
+        try:
+            step_type = RolloutStepType(step_type_str)
+        except ValueError:
+            print(f"Invalid step_type '{step_type_str}' in step '{raw.get('step_id', '?')}'", file=sys.stderr)
+            return 1
+        steps.append(RolloutStep(
+            step_id=raw.get("step_id", f"s{len(steps)+1}"),
+            step_type=step_type,
+            environment=raw.get("environment", "default"),
+            ring_name=raw.get("ring_name"),
+            from_ring=raw.get("from_ring"),
+            to_ring=raw.get("to_ring"),
+            required_gate_status=raw.get("required_gate_status"),
+            eval_suite=raw.get("eval_suite"),
+            requires_approval=raw.get("requires_approval", False),
+            require_previous_step=raw.get("require_previous_step"),
+        ))
+
+    try:
+        plan = await service.create_plan(
+            name=args.name,
+            bundle_id=args.bundle_id,
+            steps=steps,
+            created_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error creating rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    data = {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "bundle_id": plan.bundle_id,
+        "status": plan.status.value if hasattr(plan.status, "value") else plan.status,
+        "step_count": len(plan.steps),
+        "created_by": plan.created_by,
+        "created_at": str(plan.created_at),
+    }
+    print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_list(args: argparse.Namespace) -> int:
+    """List rollout plans."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout import RolloutPlanStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    rollout_store = getattr(app, "rollout_store", None) or getattr(app, "_rollout_store", None)
+    if rollout_store is None:
+        print("Rollout store not configured.", file=sys.stderr)
+        return 1
+
+    status_filter = None
+    if args.status:
+        try:
+            status_filter = RolloutPlanStatus(args.status)
+        except ValueError:
+            print(f"Invalid status '{args.status}'. Valid values: {[s.value for s in RolloutPlanStatus]}", file=sys.stderr)
+            return 1
+
+    try:
+        plans = await rollout_store.list(status=status_filter, bundle_id=args.bundle_id)
+    except Exception as exc:
+        print(f"Error listing rollout plans: {exc}", file=sys.stderr)
+        return 1
+
+    if not plans:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No rollout plans found.")
+        return 0
+
+    if args.json:
+        data = []
+        for p in plans:
+            data.append({
+                "rollout_id": p.rollout_id,
+                "name": p.name,
+                "bundle_id": p.bundle_id,
+                "status": p.status.value if hasattr(p.status, "value") else p.status,
+                "step_count": len(p.steps),
+                "created_by": p.created_by,
+                "created_at": str(p.created_at),
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(f"{'Rollout ID':<20} {'Name':<20} {'Status':<12} {'Steps':<8} {'Created By':<15}")
+        print("-" * 80)
+        for p in plans:
+            status_str = p.status.value if hasattr(p.status, "value") else p.status
+            print(f"{p.rollout_id:<20} {p.name:<20} {status_str:<12} {len(p.steps):<8} {p.created_by:<15}")
+    return 0
+
+
+async def _cmd_policy_rollout_show(args: argparse.Namespace) -> int:
+    """Show a specific rollout plan."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    rollout_store = getattr(app, "rollout_store", None) or getattr(app, "_rollout_store", None)
+    if rollout_store is None:
+        print("Rollout store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        plan = await rollout_store.get(args.rollout_id)
+    except Exception as exc:
+        print(f"Error fetching rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    if plan is None:
+        print(f"Rollout plan '{args.rollout_id}' not found.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "rollout_id": plan.rollout_id,
+            "name": plan.name,
+            "bundle_id": plan.bundle_id,
+            "status": plan.status.value if hasattr(plan.status, "value") else plan.status,
+            "steps": [
+                {
+                    "step_id": s.step_id,
+                    "step_type": s.step_type.value if hasattr(s.step_type, "value") else s.step_type,
+                    "environment": s.environment,
+                    "ring_name": s.ring_name,
+                    "status": s.status.value if hasattr(s.status, "value") else s.status,
+                    "activation_id": s.activation_id,
+                    "assignment_id": s.assignment_id,
+                    "error": s.error,
+                }
+                for s in plan.steps
+            ],
+            "created_by": plan.created_by,
+            "reason": plan.reason,
+            "created_at": str(plan.created_at),
+            "updated_at": str(plan.updated_at),
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        status_str = plan.status.value if hasattr(plan.status, "value") else plan.status
+        print(f"Rollout Plan: {plan.name}")
+        print(f"  ID:         {plan.rollout_id}")
+        print(f"  Bundle:     {plan.bundle_id}")
+        print(f"  Status:     {status_str}")
+        print(f"  Created By: {plan.created_by}")
+        if plan.reason:
+            print(f"  Reason:     {plan.reason}")
+        print(f"  Steps ({len(plan.steps)}):")
+        for s in plan.steps:
+            s_status = s.status.value if hasattr(s.status, "value") else s.status
+            s_type = s.step_type.value if hasattr(s.step_type, "value") else s.step_type
+            print(f"    {s.step_id}: [{s_type}] env={s.environment} ring={s.ring_name or '-'} status={s_status}")
+            if s.error:
+                print(f"      Error: {s.error}")
+    return 0
+
+
+async def _cmd_policy_rollout_start(args: argparse.Namespace) -> int:
+    """Start a rollout plan (transition from DRAFT to ACTIVE)."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        plan = await service.start_plan(
+            rollout_id=args.rollout_id,
+            started_by=args.actor_id,
+            context=context,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error starting rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = plan.status.value if hasattr(plan.status, "value") else plan.status
+    data = {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "status": status_str,
+        "updated_at": str(plan.updated_at),
+    }
+    print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_run_next(args: argparse.Namespace) -> int:
+    """Run the next step in a rollout plan."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        plan = await service.run_next_step(
+            rollout_id=args.rollout_id,
+            actor_id=args.actor_id,
+            context=context,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running next step: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = plan.status.value if hasattr(plan.status, "value") else plan.status
+    data = {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "status": status_str,
+        "steps": [
+            {
+                "step_id": s.step_id,
+                "step_type": s.step_type.value if hasattr(s.step_type, "value") else s.step_type,
+                "status": s.status.value if hasattr(s.status, "value") else s.status,
+                "error": s.error,
+            }
+            for s in plan.steps
+        ],
+        "updated_at": str(plan.updated_at),
+    }
+    print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_run_all(args: argparse.Namespace) -> int:
+    """Run all available steps in a rollout plan."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        plan = await service.run_all_available(
+            rollout_id=args.rollout_id,
+            actor_id=args.actor_id,
+            context=context,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running all available steps: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = plan.status.value if hasattr(plan.status, "value") else plan.status
+    data = {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "status": status_str,
+        "steps": [
+            {
+                "step_id": s.step_id,
+                "step_type": s.step_type.value if hasattr(s.step_type, "value") else s.step_type,
+                "status": s.status.value if hasattr(s.status, "value") else s.status,
+                "error": s.error,
+            }
+            for s in plan.steps
+        ],
+        "updated_at": str(plan.updated_at),
+    }
+    print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_rollout_cancel(args: argparse.Namespace) -> int:
+    """Cancel a rollout plan."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_service(app)
+    if service is None:
+        print("Rollout service not configured. Enable rollouts in policy_release config.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        plan = await service.cancel_plan(
+            rollout_id=args.rollout_id,
+            cancelled_by=args.actor_id,
+            context=context,
+            reason=args.reason,
+        )
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"Not found: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error cancelling rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = plan.status.value if hasattr(plan.status, "value") else plan.status
+    data = {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "status": status_str,
+        "updated_at": str(plan.updated_at),
+    }
+    print(json.dumps(data, indent=2, default=str))
     return 0
 
 
