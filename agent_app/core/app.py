@@ -105,6 +105,8 @@ class AgentApp:
         # Phase 35: Rollout store and service
         self._rollout_store: Any = None
         self._rollout_service: Any = None
+        # Phase 36: Rollout approval store
+        self._rollout_approval_store: Any = None
         # Phase 17: Recovery config for auto-recovery policy
         self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
@@ -129,6 +131,11 @@ class AgentApp:
     def rollout_service(self) -> Any:
         """Phase 35: Return the rollout service, if configured."""
         return self._rollout_service
+
+    @property
+    def rollout_approval_store(self) -> Any:
+        """Phase 36: Return the rollout approval store, if configured."""
+        return self._rollout_approval_store
 
     # ------------------------------------------------------------------
     # Registration helpers

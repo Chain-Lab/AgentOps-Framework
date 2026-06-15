@@ -577,6 +577,7 @@ def build_app(
         # Phase 35: Rollout store and service
         rollout_store = None
         rollout_service = None
+        rollout_approval_store = None
         if release_config.rollouts is not None:
             from agent_app.runtime.policy_rollout_store import create_rollout_plan_store
             from agent_app.runtime.policy_rollout_service import RolloutService
@@ -584,15 +585,30 @@ def build_app(
                 store_type=release_config.rollouts.type,
                 db_path=release_config.rollouts.path,
             )
+            # Phase 36: Approval store for rollout step approvals
+            approval_store = None
+            approval_require_reason = False
+            if release_config.rollouts.approvals is not None:
+                from agent_app.runtime.policy_rollout_approval_store import create_rollout_step_approval_store
+                apv_cfg = release_config.rollouts.approvals
+                approval_store = create_rollout_step_approval_store(
+                    store_type=apv_cfg.type,
+                    db_path=apv_cfg.path,
+                )
+                approval_require_reason = apv_cfg.require_reason
+                rollout_approval_store = approval_store
             rollout_service = RolloutService(
                 rollout_store=rollout_store,
                 release_service=release_service,
                 audit_logger=audit_logger,
                 event_store=event_store,
                 permission_checker=permission_checker,
+                approval_store=approval_store,
+                approval_require_reason=approval_require_reason,
             )
         app._rollout_store = rollout_store
         app._rollout_service = rollout_service
+        app._rollout_approval_store = rollout_approval_store
     app._release_config = release_config
     return app
 

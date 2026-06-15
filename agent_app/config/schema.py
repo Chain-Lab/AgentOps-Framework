@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -386,6 +386,14 @@ class PolicyReloadConfig(BaseModel):
     )
 
 
+class RolloutApprovalConfig(BaseModel):
+    """Configuration for rollout step approval store (Phase 36)."""
+
+    type: Literal["memory", "sqlite"] = "memory"
+    path: str | None = None
+    require_reason: bool = False
+
+
 class RolloutStoreConfig(BaseModel):
     """Configuration for rollout plan store (Phase 35)."""
 
@@ -396,6 +404,10 @@ class RolloutStoreConfig(BaseModel):
     path: str | None = Field(
         default=None,
         description="SQLite database path (required when type=sqlite)",
+    )
+    approvals: RolloutApprovalConfig | None = Field(
+        default=None,
+        description="Rollout step approval store config (Phase 36)",
     )
 
 
