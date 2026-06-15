@@ -44,6 +44,8 @@ def build_policy_console_router(
     event_store: Any = None,
     reload_manager: Any = None,
     ring_router: Any = None,
+    rollout_store: Any = None,
+    rollout_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -63,6 +65,8 @@ def build_policy_console_router(
         event_store: Optional policy event store (Phase 34).
         reload_manager: Optional policy reload manager (Phase 34).
         ring_router: Optional ring router for routing simulation (Phase 34).
+        rollout_store: Optional rollout plan store (Phase 35).
+        rollout_service: Optional rollout service (Phase 35).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -1685,12 +1689,363 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 35 Task 8: Rollout plan pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/rollouts", response_class=HTMLResponse)
+    async def rollout_list(request: Request):
+        """Rollout plans list page."""
+        plans: list[dict] = []
+        if rollout_store is not None:
+            all_plans = await rollout_store.list()
+            for p in all_plans:
+                plans.append(_rollout_to_row(p))
+        return templates.TemplateResponse(
+            request,
+            "policy_rollouts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plans": plans,
+                "store_available": rollout_store is not None,
+            },
+        )
+
+    @router.get("/rollouts/{rollout_id}", response_class=HTMLResponse)
+    async def rollout_detail(request: Request, rollout_id: str):
+        """Single rollout plan detail page."""
+        if rollout_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "plan": None,
+                    "error": "Rollout store not configured.",
+                },
+            )
+        plan = await rollout_store.get(rollout_id)
+        if plan is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "plan": None,
+                    "error": f"Rollout plan '{rollout_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "plan": _rollout_to_detail(plan),
+                "error": None,
+            },
+        )
+
+    @router.get("/rollouts/new", response_class=HTMLResponse)
+    async def rollout_new(request: Request):
+        """Create rollout plan form page."""
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_create.html",
+            {
+                "title": title,
+                "base_path": base_path,
+            },
+        )
+
+    @router.post("/rollouts")
+    async def rollout_create(request: Request):
+        """Create a new rollout plan."""
+        message = None
+        plans: list[dict] = []
+
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                name = form.get("name", "")
+                bundle_id = form.get("bundle_id", "")
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                steps_yaml = form.get("steps_yaml", "")
+
+                if not name or not bundle_id or not actor_id:
+                    message = "name, bundle_id, and actor_id are required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    # Parse steps from YAML
+                    steps = _parse_rollout_steps(steps_yaml)
+                    created = await rollout_service.create_plan(
+                        name=name,
+                        bundle_id=bundle_id,
+                        steps=steps,
+                        created_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Rollout plan '{created.rollout_id}' created."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render list page
+        if rollout_store is not None:
+            all_plans = await rollout_store.list()
+            for p in all_plans:
+                plans.append(_rollout_to_row(p))
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollouts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plans": plans,
+                "store_available": rollout_store is not None,
+                "message": message,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/start")
+    async def rollout_start(request: Request, rollout_id: str):
+        """Start a rollout plan (transition from DRAFT to ACTIVE)."""
+        message = None
+        plan_detail = None
+
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    started = await rollout_service.start_plan(
+                        rollout_id=rollout_id,
+                        started_by=actor_id,
+                        context=context,
+                    )
+                    message = f"Rollout plan '{rollout_id}' started."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        if rollout_store is not None:
+            plan = await rollout_store.get(rollout_id)
+            if plan is not None:
+                plan_detail = _rollout_to_detail(plan)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": rollout_store is not None,
+                "plan": plan_detail,
+                "message": message,
+                "error": None if plan_detail else message,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/run-next")
+    async def rollout_run_next(request: Request, rollout_id: str):
+        """Execute the next runnable step in a rollout plan."""
+        message = None
+        plan_detail = None
+
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    result = await rollout_service.run_next_step(
+                        rollout_id=rollout_id,
+                        actor_id=actor_id,
+                        context=context,
+                    )
+                    message = f"Next step executed for rollout '{rollout_id}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        if rollout_store is not None:
+            plan = await rollout_store.get(rollout_id)
+            if plan is not None:
+                plan_detail = _rollout_to_detail(plan)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": rollout_store is not None,
+                "plan": plan_detail,
+                "message": message,
+                "error": None if plan_detail else message,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/run-all")
+    async def rollout_run_all(request: Request, rollout_id: str):
+        """Run all available steps in a rollout plan."""
+        message = None
+        plan_detail = None
+
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    result = await rollout_service.run_all_available(
+                        rollout_id=rollout_id,
+                        actor_id=actor_id,
+                        context=context,
+                    )
+                    message = f"All available steps executed for rollout '{rollout_id}'."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        if rollout_store is not None:
+            plan = await rollout_store.get(rollout_id)
+            if plan is not None:
+                plan_detail = _rollout_to_detail(plan)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": rollout_store is not None,
+                "plan": plan_detail,
+                "message": message,
+                "error": None if plan_detail else message,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/cancel")
+    async def rollout_cancel(request: Request, rollout_id: str):
+        """Cancel a rollout plan."""
+        message = None
+        plan_detail = None
+
+        if rollout_service is None:
+            message = "Rollout service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                reason = form.get("reason") or None
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    from agent_app.core.context import RunContext
+                    context = RunContext(
+                        run_id=f"console_{actor_id}",
+                        user_id=actor_id,
+                        tenant_id=form.get("tenant_id") or "default",
+                        permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                    )
+                    cancelled = await rollout_service.cancel_plan(
+                        rollout_id=rollout_id,
+                        cancelled_by=actor_id,
+                        context=context,
+                        reason=reason,
+                    )
+                    message = f"Rollout plan '{rollout_id}' cancelled."
+            except PermissionError as exc:
+                message = f"Permission denied: {exc}"
+            except (KeyError, ValueError) as exc:
+                message = str(exc)
+            except Exception as exc:
+                message = str(exc)
+
+        # Re-render detail page
+        if rollout_store is not None:
+            plan = await rollout_store.get(rollout_id)
+            if plan is not None:
+                plan_detail = _rollout_to_detail(plan)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": rollout_store is not None,
+                "plan": plan_detail,
+                "message": message,
+                "error": None if plan_detail else message,
+            },
+        )
+
     return router
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _get_templates_dir() -> str:
     """Return the templates directory path."""
@@ -1987,3 +2342,99 @@ def _paginate(offset: int, limit: int, total: int) -> dict:
         "prev_offset": max(0, offset - limit),
         "next_offset": offset + limit,
     }
+
+
+# Phase 35: rollout helpers
+def _rollout_to_row(plan: Any) -> dict:
+    """Convert RolloutPlan to a table row dict."""
+    return {
+        "rollout_id": plan.rollout_id,
+        "name": plan.name,
+        "bundle_id": plan.bundle_id,
+        "status": plan.status,
+        "step_count": len(plan.steps),
+        "created_by": plan.created_by,
+        "created_at": plan.created_at.isoformat()[:19] if plan.created_at else "",
+    }
+
+
+def _rollout_to_detail(plan: Any) -> dict:
+    """Convert RolloutPlan to a detail page dict."""
+    row = _rollout_to_row(plan)
+    row["steps"] = [_step_to_row(s) for s in plan.steps]
+    row["reason"] = plan.reason
+    return row
+
+
+def _step_to_row(step: Any) -> dict:
+    """Convert RolloutStep to a table row dict."""
+    return {
+        "step_id": step.step_id,
+        "step_type": step.step_type,
+        "environment": step.environment,
+        "ring_name": step.ring_name or "",
+        "status": step.status,
+        "error": step.error,
+        "activation_id": step.activation_id or "",
+    }
+
+
+def _parse_rollout_steps(steps_yaml: str) -> list:
+    """Parse rollout steps from YAML text.
+
+    Accepts a simple YAML format like:
+        - step_id: s1
+          step_type: activate
+          environment: prod
+        - step_id: s2
+          step_type: assign_ring
+          environment: prod
+          ring_name: canary
+
+    Falls back to creating a single activate step if parsing fails.
+    """
+    from agent_app.governance.policy_rollout import RolloutStep, RolloutStepType
+
+    if not steps_yaml or not steps_yaml.strip():
+        # Default: single activate step
+        return [RolloutStep(
+            step_id="s1",
+            step_type=RolloutStepType.ACTIVATE,
+            environment="prod",
+        )]
+
+    try:
+        import yaml
+        parsed = yaml.safe_load(steps_yaml)
+        if not isinstance(parsed, list):
+            raise ValueError("Steps YAML must be a list")
+        steps = []
+        for item in parsed:
+            step_type_str = item.get("step_type", "activate")
+            try:
+                step_type = RolloutStepType(step_type_str)
+            except ValueError:
+                step_type = RolloutStepType.ACTIVATE
+            steps.append(RolloutStep(
+                step_id=item.get("step_id", f"s{len(steps) + 1}"),
+                step_type=step_type,
+                environment=item.get("environment", "prod"),
+                ring_name=item.get("ring_name"),
+                from_ring=item.get("from_ring"),
+                to_ring=item.get("to_ring"),
+                required_gate_status=item.get("required_gate_status"),
+                eval_suite=item.get("eval_suite"),
+                requires_approval=item.get("requires_approval", False),
+                require_previous_step=item.get("require_previous_step"),
+            ))
+        return steps
+    except ImportError:
+        # If PyYAML not available, create default step
+        return [RolloutStep(
+            step_id="s1",
+            step_type=RolloutStepType.ACTIVATE,
+            environment="prod",
+        )]
+    except Exception:
+        # If YAML parsing fails, re-raise with clear message
+        raise

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout Plans</h2>
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+
+{% if plans %}
+<table>
+  <tr><th>ID</th><th>Name</th><th>Bundle</th><th>Status</th><th>Steps</th><th>Created By</th><th>Created At</th></tr>
+  {% for p in plans %}
+  <tr>
+    <td><a href="/policy-console/rollouts/{{ p.rollout_id }}">{{ p.rollout_id }}</a></td>
+    <td>{{ p.name }}</td>
+    <td>{{ p.bundle_id }}</td>
+    <td>{{ p.status }}</td>
+    <td>{{ p.step_count }}</td>
+    <td>{{ p.created_by }}</td>
+    <td>{{ p.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No rollout plans found.</p>
+{% endif %}
+
+<p><a href="/policy-console/rollouts/new">Create New Rollout Plan</a></p>
+{% endblock %}

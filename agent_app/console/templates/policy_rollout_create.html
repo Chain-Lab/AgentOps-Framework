@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create Rollout Plan</h2>
+
+<form method="POST" action="/policy-console/rollouts">
+  <div>
+    <label>Name:</label>
+    <input name="name" placeholder="Rollout plan name" required>
+  </div>
+  <div>
+    <label>Bundle ID:</label>
+    <input name="bundle_id" placeholder="e.g. pb_001" required>
+  </div>
+  <div>
+    <label>Steps YAML:</label>
+    <textarea name="steps_yaml" rows="8" cols="50" placeholder="- step_id: s1
+  step_type: activate
+  environment: prod
+- step_id: s2
+  step_type: assign_ring
+  environment: prod
+  ring_name: canary"></textarea>
+  </div>
+  <div>
+    <label>Actor ID:</label>
+    <input name="actor_id" placeholder="Your user ID" required>
+  </div>
+  <div>
+    <label>Reason:</label>
+    <input name="reason" placeholder="Reason for rollout">
+  </div>
+  <div>
+    <input name="permissions" value="policy.rollout.create" type="hidden">
+  </div>
+  <button type="submit">Create Rollout Plan</button>
+</form>
+
+<p><a href="/policy-console/rollouts">Back to Rollout Plans</a></p>
+{% endblock %}

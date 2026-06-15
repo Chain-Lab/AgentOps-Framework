@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+{% if plan %}
+<h2>Rollout Plan: {{ plan.name }}</h2>
+
+<table>
+  <tr><th>ID</th><td>{{ plan.rollout_id }}</td></tr>
+  <tr><th>Name</th><td>{{ plan.name }}</td></tr>
+  <tr><th>Bundle</th><td>{{ plan.bundle_id }}</td></tr>
+  <tr><th>Status</th><td>{{ plan.status }}</td></tr>
+  <tr><th>Reason</th><td>{{ plan.reason or "—" }}</td></tr>
+  <tr><th>Created By</th><td>{{ plan.created_by }}</td></tr>
+  <tr><th>Created At</th><td>{{ plan.created_at }}</td></tr>
+</table>
+
+<h3>Steps</h3>
+{% if plan.steps %}
+<table>
+  <tr><th>Step ID</th><th>Type</th><th>Environment</th><th>Ring</th><th>Status</th><th>Error</th></tr>
+  {% for s in plan.steps %}
+  <tr>
+    <td>{{ s.step_id }}</td>
+    <td>{{ s.step_type }}</td>
+    <td>{{ s.environment }}</td>
+    <td>{{ s.ring_name }}</td>
+    <td>{{ s.status }}</td>
+    <td>{{ s.error or "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No steps defined.</p>
+{% endif %}
+
+<h3>Actions</h3>
+{% if plan.status == "draft" %}
+<form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/start">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" value="policy.rollout.start">
+  <button type="submit">Start Rollout</button>
+</form>
+{% endif %}
+
+{% if plan.status == "active" %}
+<form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/run-next" style="display:inline">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" value="policy.rollout.execute">
+  <button type="submit">Run Next Step</button>
+</form>
+
+<form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/run-all" style="display:inline">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" value="policy.rollout.execute">
+  <button type="submit">Run All Available</button>
+</form>
+
+<form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/cancel" style="display:inline">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="reason" placeholder="Reason">
+  <input name="permissions" value="policy.rollout.cancel">
+  <button type="submit">Cancel</button>
+</form>
+{% endif %}
+
+{% elif error %}
+<h2>Rollout Plan</h2>
+<p class="error">{{ error }}</p>
+
+{% else %}
+<h2>Rollout Plan</h2>
+<p>Rollout store not configured or plan does not exist.</p>
+{% endif %}
+
+{% if message %}
+<p class="message">{{ message }}</p>
+{% endif %}
+{% endblock %}
