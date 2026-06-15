@@ -16,7 +16,7 @@ class TestPolicyChangeEventType:
     """Tests for PolicyChangeEventType enum."""
 
     def test_all_event_types_valid(self) -> None:
-        """All 18 enum values are valid strings with expected dot-notation."""
+        """All 21 enum values are valid strings with expected dot-notation."""
         expected = {
             "policy.bundle.created",
             "policy.gate.completed",
@@ -36,13 +36,16 @@ class TestPolicyChangeEventType:
             "policy.rollout.completed",
             "policy.rollout.failed",
             "policy.rollout.cancelled",
+            "policy.rollout.approval.requested",
+            "policy.rollout.approval.approved",
+            "policy.rollout.approval.rejected",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 18 enum members defined."""
-        assert len(PolicyChangeEventType) == 18
+        """Exactly 21 enum members defined."""
+        assert len(PolicyChangeEventType) == 21
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""
@@ -173,3 +176,19 @@ class TestRolloutEventTypesPhase35:
         assert event.ring_name == "canary"
         assert event.bundle_id == "pb_042"
         assert event.data == {"steps": 5}
+
+
+class TestRolloutApprovalEventTypesPhase36:
+    """Tests for the three rollout approval event types added in Phase 36."""
+
+    def test_rollout_approval_event_types_exist(self) -> None:
+        """All three rollout approval event types exist as enum members."""
+        assert hasattr(PolicyChangeEventType, "ROLLOUT_APPROVAL_REQUESTED")
+        assert hasattr(PolicyChangeEventType, "ROLLOUT_APPROVAL_APPROVED")
+        assert hasattr(PolicyChangeEventType, "ROLLOUT_APPROVAL_REJECTED")
+
+    def test_rollout_approval_event_types_have_correct_values(self) -> None:
+        """Rollout approval event types have the correct string values."""
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_REQUESTED == "policy.rollout.approval.requested"
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_APPROVED == "policy.rollout.approval.approved"
+        assert PolicyChangeEventType.ROLLOUT_APPROVAL_REJECTED == "policy.rollout.approval.rejected"

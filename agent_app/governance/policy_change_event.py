@@ -30,6 +30,9 @@ class PolicyChangeEventType(StrEnum):
     ROLLOUT_COMPLETED = "policy.rollout.completed"
     ROLLOUT_FAILED = "policy.rollout.failed"
     ROLLOUT_CANCELLED = "policy.rollout.cancelled"
+    ROLLOUT_APPROVAL_REQUESTED = "policy.rollout.approval.requested"
+    ROLLOUT_APPROVAL_APPROVED = "policy.rollout.approval.approved"
+    ROLLOUT_APPROVAL_REJECTED = "policy.rollout.approval.rejected"
 
 
 class PolicyChangeEvent(BaseModel):
