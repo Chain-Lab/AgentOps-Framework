@@ -102,6 +102,9 @@ class AgentApp:
         self._policy_resolver = policy_resolver
         # Phase 34: Ring router for ring-aware policy resolution
         self._ring_router = ring_router
+        # Phase 35: Rollout store and service
+        self._rollout_store: Any = None
+        self._rollout_service: Any = None
         # Phase 17: Recovery config for auto-recovery policy
         self._recovery_config: dict[str, Any] | None = None
         self._runner: AppRunner | None = None
@@ -116,6 +119,16 @@ class AgentApp:
     def ring_router(self) -> Any:
         """Phase 34: Return the ring router, if configured."""
         return getattr(self, "_ring_router", None)
+
+    @property
+    def rollout_store(self) -> Any:
+        """Phase 35: Return the rollout plan store, if configured."""
+        return self._rollout_store
+
+    @property
+    def rollout_service(self) -> Any:
+        """Phase 35: Return the rollout service, if configured."""
+        return self._rollout_service
 
     # ------------------------------------------------------------------
     # Registration helpers

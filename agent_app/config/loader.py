@@ -211,6 +211,9 @@ def build_app(
     else:
         audit_logger = InMemoryAuditLogger()
 
+    # -- Governance: permission checker --
+    permission_checker: Any = DefaultPermissionChecker() if gov else None
+
     # -- Governance: rate limiter (Phase 21) --
     rate_limiter: Any = None
     if gov and getattr(gov, "rate_limit", None):
@@ -337,9 +340,7 @@ def build_app(
         tool_registry,
         approval_store=approval_store,
         audit_logger=audit_logger,
-        permission_checker=(
-            DefaultPermissionChecker() if gov else None
-        ),
+        permission_checker=permission_checker,
         rate_limiter=rate_limiter,
     )
 
@@ -572,6 +573,26 @@ def build_app(
             app._event_store = event_store
         if reload_manager is not None:
             app._reload_manager = reload_manager
+
+        # Phase 35: Rollout store and service
+        rollout_store = None
+        rollout_service = None
+        if release_config.rollouts is not None:
+            from agent_app.runtime.policy_rollout_store import create_rollout_plan_store
+            from agent_app.runtime.policy_rollout_service import RolloutService
+            rollout_store = create_rollout_plan_store(
+                store_type=release_config.rollouts.type,
+                db_path=release_config.rollouts.path,
+            )
+            rollout_service = RolloutService(
+                rollout_store=rollout_store,
+                release_service=release_service,
+                audit_logger=audit_logger,
+                event_store=event_store,
+                permission_checker=permission_checker,
+            )
+        app._rollout_store = rollout_store
+        app._rollout_service = rollout_service
     app._release_config = release_config
     return app
 

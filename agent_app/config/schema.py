@@ -386,6 +386,19 @@ class PolicyReloadConfig(BaseModel):
     )
 
 
+class RolloutStoreConfig(BaseModel):
+    """Configuration for rollout plan store (Phase 35)."""
+
+    type: str = Field(
+        default="memory",
+        description="Store backend: memory | sqlite",
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite database path (required when type=sqlite)",
+    )
+
+
 class PolicyReleaseRuntimeConfig(BaseModel):
     """Runtime policy activation configuration (Phase 31)."""
 
@@ -450,6 +463,10 @@ class PolicyReleaseConfig(BaseModel):
     reload: PolicyReloadConfig | None = Field(
         default=None,
         description="Policy reload manager config (Phase 34)",
+    )
+    rollouts: RolloutStoreConfig | None = Field(
+        default=None,
+        description="Rollout plan store config (Phase 35)",
     )
     rules: list[PolicyGateRuleConfig] = Field(
         default_factory=list,
