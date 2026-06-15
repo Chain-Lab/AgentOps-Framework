@@ -2,6 +2,33 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.24.0 — Phase 36: Rollout Approval Workflow
+
+### Added
+
+- RolloutStepApproval model with PENDING/APPROVED/REJECTED/CANCELLED status lifecycle
+- RolloutStepApprovalStore (Protocol + InMemory + SQLite + factory)
+- RolloutService approval APIs: request_step_approval, approve_step, reject_step, list_step_approvals
+- Automatic approval creation for requires_approval steps in run_next_step
+- Approved steps unblock and execute normally; rejected approvals fail step/plan
+- ROLLOUT_APPROVAL_REQUEST/APPROVE/REJECT/VIEW RBAC permissions
+- ROLLOUT_APPROVAL_REQUESTED/APPROVED/REJECTED change event types
+- RolloutApprovalConfig with require_reason support
+- CLI commands: policy rollout approval list/request/approve/reject
+- Console pages: approval list, detail, request, approve, reject
+- Rollout detail page shows approval state for blocked steps
+- Approval reason policy enforcement (require_reason config)
+
+### Known limitations
+
+- No multi-party approval
+- No separation-of-duties enforcement
+- No external identity integration
+- No notification system
+- No approval expiration
+- No cryptographic signing
+- Step approval is rollout-local only
+
 ## v0.23.0 — Phase 35: Multi-Environment Rollout Orchestration
 
 ### Added

@@ -2070,3 +2070,333 @@ in `RunContext.permissions`, consistent with other destructive operations.
 6. **Rollout execution is local command/API driven** — Steps execute
    synchronously within the calling process. There is no background worker,
    task queue, or distributed execution engine.
+
+---
+
+# Phase 36: Rollout Approval Workflow
+
+## Overview
+
+**Phase 36** upgrades the Phase 35 rollout system from MVP approval blocking
+(stall-only) to a full approval resolution workflow. It provides:
+
+1. **RolloutStepApproval Model** — Approval records with PENDING → APPROVED/REJECTED/CANCELLED lifecycle
+2. **RolloutStepApprovalStore** — Protocol + InMemory + SQLite persistence with factory
+3. **RolloutService Approval APIs** — `request_step_approval()`, `approve_step()`, `reject_step()`, `list_step_approvals()`
+4. **Automatic Approval Creation** — `requires_approval` steps in `run_next_step()` automatically create PENDING approvals and set step to BLOCKED
+5. **Approval Resolution Flow** — Approved steps unblock and execute normally; rejected approvals fail the step and plan
+6. **RBAC Permissions** — 4 rollout approval permissions (ROLLOUT_APPROVAL_REQUEST, ROLLOUT_APPROVAL_APPROVE, ROLLOUT_APPROVAL_REJECT, ROLLOUT_APPROVAL_VIEW)
+7. **Change Events** — ROLLOUT_APPROVAL_REQUESTED, ROLLOUT_APPROVAL_APPROVED, ROLLOUT_APPROVAL_REJECTED
+8. **Approval Reason Policy** — `RolloutApprovalConfig.require_reason` enforces non-empty reason on approve/reject
+9. **CLI Commands** — `agentapp policy rollout approval list/request/approve/reject`
+10. **Console Pages** — Approval list, detail, request, approve, reject; rollout detail shows approval state
+
+## RolloutStepApproval Model
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `approval_id` | `str` | required | Unique ID (`rsa_` prefix) |
+| `rollout_id` | `str` | required | Parent rollout plan ID |
+| `step_id` | `str` | required | Target rollout step ID |
+| `status` | `RolloutStepApprovalStatus` | `PENDING` | Approval lifecycle status |
+| `requested_by` | `str` | required | Who requested the approval |
+| `reason` | `str \| None` | `None` | Why approval was requested |
+| `approved_by` | `str \| None` | `None` | Who approved |
+| `approved_reason` | `str \| None` | `None` | Why it was approved |
+| `rejected_by` | `str \| None` | `None` | Who rejected |
+| `rejected_reason` | `str \| None` | `None` | Why it was rejected |
+| `created_at` | `datetime` | `datetime.now(timezone.utc)` | Creation timestamp |
+| `resolved_at` | `datetime \| None` | `None` | Resolution timestamp |
+
+**Approval lifecycle:**
+- **PENDING** — Awaiting approval; step is BLOCKED
+- **APPROVED** — Approval granted; step unblocks and can execute
+- **REJECTED** — Approval denied; step and plan transition to FAILED
+- **CANCELLED** — Plan cancelled; pending approvals are cancelled
+
+## RolloutStepApprovalStore
+
+Protocol + InMemory + SQLite persistence, following the same pattern as
+all other stores in the framework:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create()` | `create(approval: RolloutStepApproval) -> RolloutStepApproval` | Create a new approval record |
+| `get()` | `get(approval_id: str) -> RolloutStepApproval \| None` | Get by approval ID |
+| `list()` | `list(rollout_id=None, step_id=None, status=None) -> list[RolloutStepApproval]` | List with optional filters |
+| `update()` | `update(approval: RolloutStepApproval) -> RolloutStepApproval` | Update an existing approval |
+| `delete()` | `delete(approval_id: str) -> None` | Delete an approval record |
+
+**Factory:** `create_rollout_step_approval_store(store_type, db_path)` supports
+`"memory"` and `"sqlite"` types.
+
+**SQLite schema:** `policy_rollout_step_approvals` table with `approval_id`
+as primary key and indexes on `rollout_id` and `step_id`.
+
+## Approval Lifecycle Flow
+
+### Blocked → Approved → Pending → Executed
+
+When a rollout step has `requires_approval=True`:
+
+1. **`run_next_step()` encounters the step** — Automatically creates a
+   `RolloutStepApproval` with status PENDING via `request_step_approval()`
+2. **Step transitions to BLOCKED** — The step status is set to BLOCKED and
+   the plan remains ACTIVE but cannot progress past this step
+3. **Approver reviews** — Via CLI or console, the approver calls
+   `approve_step()` or `reject_step()`
+4. **If approved** — Approval status transitions to APPROVED; step status
+   transitions back to PENDING; `run_next_step()` can now execute the step
+5. **If rejected** — Approval status transitions to REJECTED; step status
+   transitions to FAILED; plan status transitions to FAILED; remaining
+   PENDING steps are set to SKIPPED
+
+### Rejection Failure Behavior
+
+When an approval is rejected:
+
+1. The approval record is updated with `rejected_by`, `rejected_reason`,
+   and `resolved_at`
+2. The step status transitions to FAILED with error message:
+   `"Step approval rejected by {rejected_by}: {rejected_reason}"`
+3. The plan status transitions to FAILED
+4. All remaining PENDING steps are set to SKIPPED
+5. Audit events are emitted: `policy.rollout.approval_rejected` and
+   `policy.rollout.step_failed`
+6. No further steps can be executed on the plan
+
+## RolloutService Approval APIs
+
+### `request_step_approval(rollout_id, step_id, requested_by, context=None, reason=None)`
+
+Creates a PENDING approval for a rollout step. Requires
+`ROLLOUT_APPROVAL_REQUEST` permission. Validates that the step exists
+and belongs to the rollout. Emits `ROLLOUT_APPROVAL_REQUESTED` change
+event and `policy.rollout.approval_requested` audit event.
+
+### `approve_step(approval_id, approved_by, context=None, reason=None)`
+
+Transitions an approval from PENDING to APPROVED. Requires
+`ROLLOUT_APPROVAL_APPROVE` permission. If `require_reason=True` in
+`RolloutApprovalConfig`, a non-empty reason is mandatory. Sets the step
+status back to PENDING so `run_next_step()` can execute it. Emits
+`ROLLOUT_APPROVAL_APPROVED` change event and `policy.rollout.approval_approved`
+audit event.
+
+### `reject_step(approval_id, rejected_by, context=None, reason=None)`
+
+Transitions an approval from PENDING to REJECTED. Requires
+`ROLLOUT_APPROVAL_REJECT` permission. If `require_reason=True` in
+`RolloutApprovalConfig`, a non-empty reason is mandatory. Sets the step
+status to FAILED and the plan status to FAILED. Emits
+`ROLLOUT_APPROVAL_REJECTED` change event and `policy.rollout.approval_rejected`
+audit event.
+
+### `list_step_approvals(rollout_id=None, step_id=None, status=None)`
+
+Lists approval records with optional filters. Requires
+`ROLLOUT_APPROVAL_VIEW` permission (default-allowed).
+
+## RolloutApprovalConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `require_reason` | `bool` | `False` | Whether approve/reject require a non-empty reason |
+
+When `require_reason=True`, calling `approve_step()` or `reject_step()`
+without a non-empty `reason` parameter raises `ValueError`. This ensures
+audit trails capture justification for every approval decision.
+
+## RBAC Permissions (Phase 36 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ROLLOUT_APPROVAL_REQUEST` | `policy.rollout.approval.request` | Requires grant |
+| `ROLLOUT_APPROVAL_APPROVE` | `policy.rollout.approval.approve` | Requires grant |
+| `ROLLOUT_APPROVAL_REJECT` | `policy.rollout.approval.reject` | Requires grant |
+| `ROLLOUT_APPROVAL_VIEW` | `policy.rollout.approval.view` | Allowed |
+
+`ROLLOUT_APPROVAL_VIEW` is default-allowed alongside `ROLLOUT_VIEW` and
+other read-only permissions. All other approval permissions require explicit
+grants in `RunContext.permissions`, consistent with other mutation operations.
+
+## Change Events (Phase 36 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `ROLLOUT_APPROVAL_REQUESTED` | Approval requested for a rollout step |
+| `ROLLOUT_APPROVAL_APPROVED` | Step approval granted |
+| `ROLLOUT_APPROVAL_REJECTED` | Step approval denied |
+
+## Config Schema (Phase 36 additions)
+
+```yaml
+governance:
+  policy_release:
+    bundles:
+      type: sqlite
+      path: .agent_app/policy_bundles.db
+    gates:
+      type: sqlite
+      path: .agent_app/policy_gates.db
+    promotions:
+      type: sqlite
+      path: .agent_app/policy_promotions.db
+    activations:
+      type: sqlite
+      path: .agent_app/policy_activations.db
+    environments:
+      type: sqlite
+      path: .agent_app/policy_environments.db
+    rings:
+      type: sqlite
+      path: .agent_app/policy_release_rings.db
+    ring_assignments:
+      type: sqlite
+      path: .agent_app/policy_ring_activation_assignments.db
+    change_events:
+      type: sqlite
+      path: .agent_app/policy_change_events.db
+      strict: false
+    reload:
+      enabled: true
+    routing:
+      enabled: false
+      canary_percentage: 0
+      canary_ring: canary
+      stable_ring: stable
+      hash_key: actor_id
+    rollouts:
+      type: sqlite
+      path: .agent_app/policy_rollouts.db
+    rollout_approvals:                    # Phase 36
+      type: sqlite
+      path: .agent_app/policy_rollout_approvals.db
+    rollout_approval_config:              # Phase 36
+      require_reason: false
+    require_promotion_approval: true
+    allow_gate_bypass: false
+    runtime:
+      environment: prod
+      require_active_policy: false
+      cache_ttl_seconds: 300
+      ring: null
+    rules:
+      - name: safe_default
+        max_changed_ratio: 0.10
+        max_failed_replays: 0
+```
+
+New config sections:
+- `rollout_approvals` — Optional rollout step approval store config (default: `None`, backward compatible)
+- `rollout_approval_config` — `RolloutApprovalConfig` with `require_reason` flag
+
+## CLI Commands (Phase 36 additions)
+
+```bash
+# List approvals for a rollout
+agentapp policy rollout approval list --config <path> --rollout-id <id> [--status <status>] [--json]
+
+# Request approval for a specific step
+agentapp policy rollout approval request --config <path> --rollout-id <id> \
+  --step-id <id> --requested-by <who> [--reason <text>] \
+  [--actor-id <id>] [--permissions <list>]
+
+# Approve a pending approval
+agentapp policy rollout approval approve --config <path> --approval-id <id> \
+  --approved-by <who> [--reason <text>] \
+  [--actor-id <id>] [--permissions <list>]
+
+# Reject a pending approval
+agentapp policy rollout approval reject --config <path> --approval-id <id> \
+  --rejected-by <who> [--reason <text>] \
+  [--actor-id <id>] [--permissions <list>]
+```
+
+All approval commands support `--actor-id` and `--permissions` for RBAC
+testing, consistent with Phase 30+ commands.
+
+## Console Pages (Phase 36 additions)
+
+| Route | Template | Method | Description |
+|-------|----------|--------|-------------|
+| `GET /rollouts/{rollout_id}/approvals` | `policy_rollout_approvals.html` | GET | List approvals for a rollout |
+| `GET /rollouts/{rollout_id}/approvals/{approval_id}` | `policy_rollout_approval_detail.html` | GET | Approval detail with action forms |
+| `POST /rollouts/{rollout_id}/approvals` | `policy_rollout_approvals.html` | POST | Request new approval |
+| `POST /rollouts/{rollout_id}/approvals/{approval_id}/approve` | `policy_rollout_approval_detail.html` | POST | Approve a pending approval |
+| `POST /rollouts/{rollout_id}/approvals/{approval_id}/reject` | `policy_rollout_approval_detail.html` | POST | Reject a pending approval |
+
+The rollout detail page (`/rollouts/{rollout_id}`) now shows approval
+state for BLOCKED steps, including the approval ID, requested_by, and
+status. This provides visibility into which steps are blocked and why.
+
+Console actions require a `RolloutService` with appropriate permissions
+passed via form data.
+
+## Audit Events (Phase 36 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.rollout.approval_requested` | Approval requested for a rollout step |
+| `policy.rollout.approval_approved` | Step approval granted |
+| `policy.rollout.approval_rejected` | Step approval denied |
+| `policy.rollout.approval_require_reason` | Approve/reject called without required reason |
+
+## Design Decisions
+
+1. **Automatic approval creation in run_next_step** — When `run_next_step()`
+   encounters a step with `requires_approval=True`, it automatically creates
+   a PENDING approval and sets the step to BLOCKED. This replaces the Phase 35
+   MVP behavior where BLOCKED steps stalled with no resolution path.
+
+2. **Approved steps return to PENDING** — When an approval is approved, the
+   step status transitions from BLOCKED back to PENDING, making it eligible
+   for normal execution by `run_next_step()`. This reuses the existing step
+   execution logic rather than introducing a separate approved-execution path.
+
+3. **Rejection fails the plan** — Rejected approvals cause the step to fail
+   and the plan to transition to FAILED, consistent with Phase 35 step failure
+   behavior. This prevents silent continuation after denial.
+
+4. **Separate approval store** — Approvals are stored in a dedicated
+   `RolloutStepApprovalStore` rather than embedded in the rollout plan. This
+   enables independent lifecycle management, querying, and persistence.
+
+5. **ROLLOUT_APPROVAL_VIEW is default-allowed** — Viewing approval state is
+   a read-only operation, consistent with `ROLLOUT_VIEW` and other view
+   permissions. Request, approve, and reject require explicit grants.
+
+6. **require_reason is opt-in** — The `require_reason` config defaults to
+   `False` for backward compatibility. When enabled, it enforces non-empty
+   reason strings on approve/reject, ensuring audit trail completeness.
+
+7. **Backward-compatible optional store** — `rollout_approvals` store config
+   defaults to `None`. Existing Phase 35 configs without an approval store
+   section continue to work; steps with `requires_approval=True` fall back
+   to the Phase 35 MVP block-only behavior.
+
+## Known Limitations
+
+1. **No multi-party approval** — Each step requires only a single approval.
+   There is no support for requiring N-of-M approvers or approval chains.
+
+2. **No separation-of-duties enforcement** — The same user who requested an
+   approval can also approve it. There is no constraint preventing
+   self-approval.
+
+3. **No external identity integration** — Approval identities are simple
+   strings. There is no integration with LDAP, SAML, OIDC, or other
+   identity providers for approval authorization.
+
+4. **No notification system** — When an approval is requested, there is no
+   email, Slack, webhook, or other notification to approvers. Operators
+   must poll the approval list or check the console.
+
+5. **No approval expiration** — Pending approvals remain PENDING indefinitely.
+   There is no TTL or auto-expiration mechanism for stale approvals.
+
+6. **No cryptographic signing** — Approval decisions are not cryptographically
+   signed. Audit trail integrity relies on store-level access controls.
+
+7. **Step approval is rollout-local only** — Approvals are scoped to a single
+   rollout plan. There is no cross-rollout approval sharing or templating.

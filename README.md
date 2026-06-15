@@ -1248,3 +1248,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - v0.21 — Release rings, canary evaluation, and ring-aware policy resolution ✅ (Phase 33)
 - v0.22 — Runtime Reload Hooks, Cache Invalidation, and Deterministic Canary Routing ✅ (Phase 34)
 - **Phase 35**: Multi-Environment Rollout Orchestration — rollout plans, step-by-step execution, gate/eval checks, approval blocking
+- **Phase 36** — Rollout Approval Workflow
