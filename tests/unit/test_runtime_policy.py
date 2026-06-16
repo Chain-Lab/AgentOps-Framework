@@ -190,3 +190,165 @@ class TestRuntimePolicyRule:
             status=RuntimePolicyRuleStatus.DISABLED,
         )
         assert rule.status == RuntimePolicyRuleStatus.DISABLED
+
+
+# ---------------------------------------------------------------------------
+# Phase 38 Task 2: RuntimePolicyStore tests
+# ---------------------------------------------------------------------------
+
+from tests.conftest import _run_async
+from agent_app.runtime.runtime_policy_store import (
+    InMemoryRuntimePolicyStore,
+    SQLiteRuntimePolicyStore,
+    create_runtime_policy_store,
+)
+
+
+def _sample_rule(rule_id: str = "rpr_store_001", **overrides) -> RuntimePolicyRule:
+    """Build a sample RuntimePolicyRule for store tests."""
+    defaults = dict(
+        rule_id=rule_id,
+        name=f"rule_{rule_id}",
+        action_type=PolicyActionType.TOOL_EXECUTE,
+        effect=RuntimePolicyEffect.DENY,
+        tool_name="data.delete",
+        risk_level="high",
+        required_permissions=["data:delete"],
+        required_roles=["admin"],
+        reason="deny by default",
+        metadata={"source": "test"},
+    )
+    defaults.update(overrides)
+    return RuntimePolicyRule(**defaults)
+
+
+class TestInMemoryRuntimePolicyStore:
+
+    def test_create_and_get(self):
+        store = InMemoryRuntimePolicyStore()
+        rule = _sample_rule()
+        created = _run_async(store.create(rule))
+        assert created.rule_id == "rpr_store_001"
+        fetched = _run_async(store.get("rpr_store_001"))
+        assert fetched is not None
+        assert fetched.name == rule.name
+        assert fetched.effect == rule.effect
+
+    def test_create_duplicate_raises(self):
+        store = InMemoryRuntimePolicyStore()
+        rule = _sample_rule()
+        _run_async(store.create(rule))
+        with pytest.raises(ValueError, match="already exists"):
+            _run_async(store.create(rule))
+
+    def test_get_nonexistent_returns_none(self):
+        store = InMemoryRuntimePolicyStore()
+        assert _run_async(store.get("rpr_missing")) is None
+
+    def test_list_all(self):
+        store = InMemoryRuntimePolicyStore()
+        _run_async(store.create(_sample_rule("rpr_list_01")))
+        _run_async(store.create(_sample_rule("rpr_list_02")))
+        results = _run_async(store.list())
+        assert len(results) == 2
+
+    def test_list_by_action_type(self):
+        store = InMemoryRuntimePolicyStore()
+        _run_async(store.create(_sample_rule("rpr_at_01", action_type=PolicyActionType.TOOL_EXECUTE)))
+        _run_async(store.create(_sample_rule("rpr_at_02", action_type=PolicyActionType.TOOL_RESUME)))
+        results = _run_async(store.list(action_type=PolicyActionType.TOOL_EXECUTE))
+        assert len(results) == 1
+        assert results[0].rule_id == "rpr_at_01"
+
+    def test_list_by_status(self):
+        store = InMemoryRuntimePolicyStore()
+        _run_async(store.create(_sample_rule("rpr_st_01")))
+        _run_async(store.create(_sample_rule("rpr_st_02")))
+        _run_async(store.disable("rpr_st_02"))
+        results = _run_async(store.list(status=RuntimePolicyRuleStatus.DISABLED))
+        assert len(results) == 1
+        assert results[0].rule_id == "rpr_st_02"
+
+    def test_enable_rule(self):
+        store = InMemoryRuntimePolicyStore()
+        rule = _sample_rule("rpr_en_01", status=RuntimePolicyRuleStatus.DISABLED)
+        _run_async(store.create(rule))
+        updated = _run_async(store.enable("rpr_en_01"))
+        assert updated.status == RuntimePolicyRuleStatus.ENABLED
+
+    def test_disable_rule(self):
+        store = InMemoryRuntimePolicyStore()
+        _run_async(store.create(_sample_rule("rpr_dis_01")))
+        updated = _run_async(store.disable("rpr_dis_01"))
+        assert updated.status == RuntimePolicyRuleStatus.DISABLED
+
+    def test_disable_nonexistent_raises(self):
+        store = InMemoryRuntimePolicyStore()
+        with pytest.raises(KeyError):
+            _run_async(store.disable("rpr_missing"))
+
+
+class TestSQLiteRuntimePolicyStore:
+
+    def test_sqlite_create_and_get(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        store = SQLiteRuntimePolicyStore(db_path=db)
+        rule = _sample_rule("rpr_sql_01")
+        _run_async(store.create(rule))
+
+        # Verify persistence with a new store instance on the same file
+        store2 = SQLiteRuntimePolicyStore(db_path=db)
+        fetched = _run_async(store2.get("rpr_sql_01"))
+        assert fetched is not None
+        assert fetched.name == rule.name
+        assert fetched.effect == rule.effect
+        assert fetched.tool_name == "data.delete"
+        assert fetched.required_permissions == ["data:delete"]
+        assert fetched.required_roles == ["admin"]
+        assert fetched.metadata == {"source": "test"}
+
+    def test_sqlite_list_filters(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        store = SQLiteRuntimePolicyStore(db_path=db)
+        _run_async(store.create(_sample_rule("rpr_sqf_01", action_type=PolicyActionType.TOOL_EXECUTE)))
+        _run_async(store.create(_sample_rule("rpr_sqf_02", action_type=PolicyActionType.TOOL_RESUME)))
+        _run_async(store.create(_sample_rule("rpr_sqf_03", action_type=PolicyActionType.TOOL_EXECUTE)))
+
+        results = _run_async(store.list(action_type=PolicyActionType.TOOL_RESUME))
+        assert len(results) == 1
+        assert results[0].rule_id == "rpr_sqf_02"
+
+    def test_sqlite_enable_disable(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        store = SQLiteRuntimePolicyStore(db_path=db)
+        _run_async(store.create(_sample_rule("rpr_sqed_01")))
+
+        updated = _run_async(store.disable("rpr_sqed_01"))
+        assert updated.status == RuntimePolicyRuleStatus.DISABLED
+
+        # Persisted in a fresh instance
+        store2 = SQLiteRuntimePolicyStore(db_path=db)
+        fetched = _run_async(store2.get("rpr_sqed_01"))
+        assert fetched.status == RuntimePolicyRuleStatus.DISABLED
+
+        updated2 = _run_async(store2.enable("rpr_sqed_01"))
+        assert updated2.status == RuntimePolicyRuleStatus.ENABLED
+
+    def test_sqlite_approval_policy_persists(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        store = SQLiteRuntimePolicyStore(db_path=db)
+        rule = _sample_rule(
+            "rpr_sqap_01",
+            effect=RuntimePolicyEffect.REQUIRE_APPROVAL,
+            approval_policy=RolloutApprovalPolicy(
+                policy_type=RolloutApprovalPolicyType.QUORUM,
+                required_approvals=3,
+            ),
+        )
+        _run_async(store.create(rule))
+
+        store2 = SQLiteRuntimePolicyStore(db_path=db)
+        fetched = _run_async(store2.get("rpr_sqap_01"))
+        assert fetched.approval_policy is not None
+        assert fetched.approval_policy.policy_type == RolloutApprovalPolicyType.QUORUM
+        assert fetched.approval_policy.required_approvals == 3
