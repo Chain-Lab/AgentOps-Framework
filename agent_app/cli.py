@@ -661,6 +661,23 @@ def main() -> int:
     runtime_eval_parser.add_argument("--permissions", action="append", default=[])
     runtime_eval_parser.add_argument("--roles", action="append", default=[])
 
+    # Phase 39: observability subcommands
+    observability_parser = policy_sub.add_parser("observability", help="Policy observability and analytics")
+    obs_subparsers = observability_parser.add_subparsers(dest="observability_command")
+
+    obs_report_parser = obs_subparsers.add_parser("report", help="Generate observability report")
+    obs_report_parser.add_argument("--config", default="agentapp.yaml")
+    obs_report_parser.add_argument("--since", default=None, help="Window start (ISO 8601)")
+    obs_report_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
+    obs_report_parser.add_argument("--json", action="store_true", help="JSON output")
+
+    obs_export_parser = obs_subparsers.add_parser("export", help="Export observability report")
+    obs_export_parser.add_argument("--config", default="agentapp.yaml")
+    obs_export_parser.add_argument("--format", required=True, choices=["json", "csv"], help="Export format")
+    obs_export_parser.add_argument("--output", required=True, help="Output file path")
+    obs_export_parser.add_argument("--since", default=None, help="Window start (ISO 8601)")
+    obs_export_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -959,6 +976,16 @@ def main() -> int:
             return asyncio.run(_cmd_policy_runtime_evaluate(args))
         runtime_parser.print_help()
         return 1
+
+    # Phase 39: observability subcommands
+    if args.command == "policy" and args.policy_command == "observability":
+        if args.observability_command == "report":
+            return asyncio.run(_cmd_policy_observability_report(args))
+        elif args.observability_command == "export":
+            return asyncio.run(_cmd_policy_observability_export(args))
+        else:
+            observability_parser.print_help()
+            return 1
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -4835,6 +4862,142 @@ def _decision_to_dict(decision) -> dict:
             "required_approvals": decision.approval_policy.required_approvals,
         } if decision.approval_policy else None,
     }
+
+
+def _get_observability_service(app):
+    """Get policy observability service from app."""
+    return getattr(app, 'policy_observability_service', None)
+
+
+async def _cmd_policy_observability_report(args: argparse.Namespace) -> int:
+    """Generate a policy observability report."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_observability_service(app)
+    if service is None:
+        print("Policy observability not configured.", file=sys.stderr)
+        return 1
+
+    # Parse window
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --since: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --until: {args.until}", file=sys.stderr)
+            return 1
+
+    report = await service.generate_report(window_start=window_start, window_end=window_end)
+
+    if args.json:
+        from agent_app.runtime.policy_compliance_export import report_to_json
+        print(report_to_json(report))
+    else:
+        # Human-readable output
+        print(f"Policy Observability Report: {report.report_id}")
+        print(f"Generated: {report.generated_at}")
+        if report.window_start:
+            print(f"Window: {report.window_start} to {report.window_end or 'now'}")
+        print(f"\nTotal Decisions: {report.total_decisions}")
+        print("\nBy Status:")
+        for dc in report.decisions_by_status:
+            print(f"  {dc.status}: {dc.count}")
+        print("\nBy Action:")
+        for a in report.actions:
+            print(f"  {a.action_type}: allowed={a.allowed} denied={a.denied} approval_required={a.approval_required} total={a.total}")
+        print("\nTop Actors:")
+        for a in report.actors[:5]:
+            print(f"  {a.actor_id}: allowed={a.allowed} denied={a.denied} total={a.total}")
+        print("\nTop Tools:")
+        for t in report.tools[:5]:
+            print(f"  {t.tool_name}: allowed={t.allowed} denied={t.denied} total={t.total}")
+        if report.approval_latency:
+            al = report.approval_latency
+            print(f"\nApproval Latency: count={al.count} avg={al.average_seconds}s min={al.min_seconds}s max={al.max_seconds}s")
+        if report.top_denials:
+            print("\nTop Denials:")
+            for d in report.top_denials[:5]:
+                print(f"  {d['reason']}: {d['count']}")
+    return 0
+
+
+async def _cmd_policy_observability_export(args: argparse.Namespace) -> int:
+    """Export a policy observability report to a file."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_observability_service(app)
+    if service is None:
+        print("Policy observability not configured.", file=sys.stderr)
+        return 1
+
+    # Parse window
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --since: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --until: {args.until}", file=sys.stderr)
+            return 1
+
+    report = await service.generate_report(window_start=window_start, window_end=window_end)
+
+    if args.format == "json":
+        from agent_app.runtime.policy_compliance_export import report_to_json
+        content = report_to_json(report)
+    elif args.format == "csv":
+        import csv
+        import io
+        from agent_app.runtime.policy_compliance_export import report_to_csv_rows
+        rows = report_to_csv_rows(report)
+        if not rows:
+            content = "section,key,allowed,denied,approval_required,total\n"
+        else:
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+            content = output.getvalue()
+    else:
+        print(f"Unsupported format '{args.format}'. Supported: json, csv", file=sys.stderr)
+        return 1
+
+    try:
+        with open(args.output, 'w') as f:
+            f.write(content)
+        print(f"Report exported to {args.output}")
+    except Exception as exc:
+        print(f"Error writing file: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 async def _cmd_policy_runtime_list(args: argparse.Namespace) -> int:
