@@ -619,6 +619,48 @@ def main() -> int:
     approval_expire.add_argument("--actor-id", required=True, help="Who is expiring approvals")
     approval_expire.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
 
+    # Phase 38: runtime policy subcommands
+    runtime_parser = policy_sub.add_parser("runtime", help="Runtime policy management (Phase 38)")
+    runtime_sub = runtime_parser.add_subparsers(dest="runtime_command")
+
+    runtime_list_parser = runtime_sub.add_parser("list", help="List runtime policy rules")
+    runtime_list_parser.add_argument("--config", default="agentapp.yaml")
+    runtime_list_parser.add_argument("--action-type", default=None, help="Filter by action type")
+    runtime_list_parser.add_argument("--json", action="store_true")
+
+    runtime_create_parser = runtime_sub.add_parser("create", help="Create a runtime policy rule")
+    runtime_create_parser.add_argument("--config", default="agentapp.yaml")
+    runtime_create_parser.add_argument("--name", required=True, help="Rule name")
+    runtime_create_parser.add_argument("--action-type", required=True, help="Action type (e.g. tool.execute)")
+    runtime_create_parser.add_argument("--effect", required=True, help="Effect (allow, deny, require_approval)")
+    runtime_create_parser.add_argument("--tool-name", default=None, help="Tool name to match")
+    runtime_create_parser.add_argument("--risk-level", default=None, help="Risk level to match")
+    runtime_create_parser.add_argument("--required-permissions", action="append", default=[])
+    runtime_create_parser.add_argument("--required-roles", action="append", default=[])
+    runtime_create_parser.add_argument("--approval-policy-type", default=None, help="Approval policy type (single, quorum)")
+    runtime_create_parser.add_argument("--required-approvals", type=int, default=None, help="Required approvals count")
+    runtime_create_parser.add_argument("--reason", default=None, help="Reason for the rule")
+    runtime_create_parser.add_argument("--actor-id", required=True, help="Who is creating")
+    runtime_create_parser.add_argument("--permissions", action="append", default=[])
+    runtime_create_parser.add_argument("--roles", action="append", default=[])
+
+    runtime_enable_parser = runtime_sub.add_parser("enable", help="Enable a runtime policy rule")
+    runtime_enable_parser.add_argument("--config", default="agentapp.yaml")
+    runtime_enable_parser.add_argument("--rule-id", required=True, help="Rule ID to enable")
+
+    runtime_disable_parser = runtime_sub.add_parser("disable", help="Disable a runtime policy rule")
+    runtime_disable_parser.add_argument("--config", default="agentapp.yaml")
+    runtime_disable_parser.add_argument("--rule-id", required=True, help="Rule ID to disable")
+
+    runtime_eval_parser = runtime_sub.add_parser("evaluate", help="Evaluate a runtime policy decision")
+    runtime_eval_parser.add_argument("--config", default="agentapp.yaml")
+    runtime_eval_parser.add_argument("--action-type", required=True, help="Action type")
+    runtime_eval_parser.add_argument("--tool-name", default=None, help="Tool name")
+    runtime_eval_parser.add_argument("--risk-level", default=None, help="Risk level")
+    runtime_eval_parser.add_argument("--actor-id", required=True, help="Actor ID")
+    runtime_eval_parser.add_argument("--permissions", action="append", default=[])
+    runtime_eval_parser.add_argument("--roles", action="append", default=[])
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -902,6 +944,21 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_rollout_approval_reject(args))
             if args.approval_command == "expire":
                 return asyncio.run(_cmd_policy_rollout_approval_expire(args))
+
+    # Phase 38: runtime policy subcommands
+    if args.command == "policy" and args.policy_command == "runtime":
+        if args.runtime_command == "list":
+            return asyncio.run(_cmd_policy_runtime_list(args))
+        if args.runtime_command == "create":
+            return asyncio.run(_cmd_policy_runtime_create(args))
+        if args.runtime_command == "enable":
+            return asyncio.run(_cmd_policy_runtime_enable(args))
+        if args.runtime_command == "disable":
+            return asyncio.run(_cmd_policy_runtime_disable(args))
+        if args.runtime_command == "evaluate":
+            return asyncio.run(_cmd_policy_runtime_evaluate(args))
+        runtime_parser.print_help()
+        return 1
 
     if args.command == "recovery" and args.recovery_command == "scan":
         return asyncio.run(_cmd_recovery_scan(args))
@@ -4721,6 +4778,253 @@ async def _cmd_policy_rollout_approval_expire(args: argparse.Namespace) -> int:
         return 0
 
     print(json.dumps([_approval_to_dict(a) for a in expired], indent=2, default=str))
+    return 0
+
+
+# --- Phase 38: Runtime policy CLI commands ---
+
+
+def _get_runtime_policy_store(app):
+    """Get runtime policy store from app."""
+    return getattr(app, '_runtime_policy_store', None)
+
+
+def _get_policy_enforcement_service(app):
+    """Get policy enforcement service from app."""
+    return getattr(app, '_policy_enforcement_service', None)
+
+
+def _rule_to_dict(rule) -> dict:
+    """Convert a RuntimePolicyRule to a JSON-serializable dict."""
+    result = {
+        "rule_id": rule.rule_id,
+        "name": rule.name,
+        "action_type": rule.action_type.value,
+        "effect": rule.effect.value,
+        "status": rule.status.value,
+        "tool_name": rule.tool_name,
+        "risk_level": rule.risk_level,
+        "required_permissions": rule.required_permissions,
+        "required_roles": rule.required_roles,
+        "reason": rule.reason,
+    }
+    if rule.approval_policy:
+        result["approval_policy"] = {
+            "policy_type": rule.approval_policy.policy_type.value,
+            "required_approvals": rule.approval_policy.required_approvals,
+            "allowed_approver_roles": rule.approval_policy.allowed_approver_roles,
+            "allowed_approver_permissions": rule.approval_policy.allowed_approver_permissions,
+            "prohibit_requester_approval": rule.approval_policy.prohibit_requester_approval,
+            "expires_after_seconds": rule.approval_policy.expires_after_seconds,
+        }
+    return result
+
+
+def _decision_to_dict(decision) -> dict:
+    """Convert a PolicyEnforcementDecision to a JSON-serializable dict."""
+    return {
+        "decision_id": decision.decision_id,
+        "status": decision.status.value,
+        "action_type": decision.action_type.value,
+        "subject": decision.subject,
+        "reason": decision.reason,
+        "required_permissions": decision.required_permissions,
+        "required_roles": decision.required_roles,
+        "approval_policy": {
+            "policy_type": decision.approval_policy.policy_type.value,
+            "required_approvals": decision.approval_policy.required_approvals,
+        } if decision.approval_policy else None,
+    }
+
+
+async def _cmd_policy_runtime_list(args: argparse.Namespace) -> int:
+    """List runtime policy rules."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_runtime_policy_store(app)
+    if store is None:
+        print("Runtime policy not configured.", file=sys.stderr)
+        return 1
+
+    action_type = None
+    if args.action_type:
+        from agent_app.governance.policy_enforcement import PolicyActionType
+        try:
+            action_type = PolicyActionType(args.action_type)
+        except ValueError:
+            print(f"Invalid action type '{args.action_type}'. Valid: {[a.value for a in PolicyActionType]}", file=sys.stderr)
+            return 1
+
+    rules = await store.list(action_type=action_type)
+
+    if not rules:
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print("No runtime policy rules found.")
+        return 0
+
+    if args.json:
+        print(json.dumps([_rule_to_dict(r) for r in rules], indent=2, default=str))
+    else:
+        print(f"{'Rule ID':<15} {'Name':<30} {'Effect':<18} {'Status':<10} {'Tool':<20}")
+        print("-" * 95)
+        for r in rules:
+            print(f"{r.rule_id:<15} {r.name:<30} {r.effect.value:<18} {r.status.value:<10} {r.tool_name or '':<20}")
+    return 0
+
+
+async def _cmd_policy_runtime_create(args: argparse.Namespace) -> int:
+    """Create a runtime policy rule."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.runtime_policy import RuntimePolicyRule, RuntimePolicyEffect, RuntimePolicyRuleStatus
+    from agent_app.governance.policy_enforcement import PolicyActionType
+    import uuid as _uuid
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_runtime_policy_store(app)
+    if store is None:
+        print("Runtime policy not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions, roles=getattr(args, 'roles', []))
+
+    try:
+        action_type = PolicyActionType(args.action_type)
+    except ValueError:
+        print(f"Invalid action type '{args.action_type}'. Valid: {[a.value for a in PolicyActionType]}", file=sys.stderr)
+        return 1
+
+    try:
+        effect = RuntimePolicyEffect(args.effect)
+    except ValueError:
+        print(f"Invalid effect '{args.effect}'. Valid: {[e.value for e in RuntimePolicyEffect]}", file=sys.stderr)
+        return 1
+
+    # Build approval_policy if provided
+    approval_policy = None
+    if args.approval_policy_type:
+        from agent_app.governance.policy_rollout_approval import RolloutApprovalPolicy, RolloutApprovalPolicyType
+        approval_policy = RolloutApprovalPolicy(
+            policy_type=RolloutApprovalPolicyType(args.approval_policy_type),
+            required_approvals=args.required_approvals or 1,
+        )
+
+    rule = RuntimePolicyRule(
+        rule_id=f"rpr_{_uuid.uuid4().hex[:12]}",
+        name=args.name,
+        action_type=action_type,
+        effect=effect,
+        tool_name=args.tool_name,
+        risk_level=args.risk_level,
+        required_permissions=args.required_permissions or [],
+        required_roles=args.required_roles or [],
+        approval_policy=approval_policy,
+        reason=args.reason,
+    )
+
+    try:
+        rule = await store.create(rule)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_rule_to_dict(rule), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_runtime_enable(args: argparse.Namespace) -> int:
+    """Enable a runtime policy rule."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_runtime_policy_store(app)
+    if store is None:
+        print("Runtime policy not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        rule = await store.enable(args.rule_id)
+    except KeyError:
+        print(f"Rule '{args.rule_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_rule_to_dict(rule), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_runtime_disable(args: argparse.Namespace) -> int:
+    """Disable a runtime policy rule."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = _get_runtime_policy_store(app)
+    if store is None:
+        print("Runtime policy not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        rule = await store.disable(args.rule_id)
+    except KeyError:
+        print(f"Rule '{args.rule_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(json.dumps(_rule_to_dict(rule), indent=2, default=str))
+    return 0
+
+
+async def _cmd_policy_runtime_evaluate(args: argparse.Namespace) -> int:
+    """Evaluate a runtime policy enforcement decision."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_enforcement import PolicyActionType
+    from agent_app.runtime.runtime_policy_evaluator import RuntimePolicyEvaluationRequest
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_policy_enforcement_service(app)
+    if service is None:
+        print("Runtime policy not configured.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions or [], roles=getattr(args, 'roles', []))
+
+    try:
+        action_type = PolicyActionType(args.action_type)
+    except ValueError:
+        print(f"Invalid action type '{args.action_type}'.", file=sys.stderr)
+        return 1
+
+    request = RuntimePolicyEvaluationRequest(
+        action_type=action_type,
+        tool_name=args.tool_name,
+        risk_level=args.risk_level,
+        context=context,
+    )
+
+    decision = await service.enforce(request)
+    print(json.dumps(_decision_to_dict(decision), indent=2, default=str))
     return 0
 
 
