@@ -352,3 +352,444 @@ class TestSQLiteRuntimePolicyStore:
         assert fetched.approval_policy is not None
         assert fetched.approval_policy.policy_type == RolloutApprovalPolicyType.QUORUM
         assert fetched.approval_policy.required_approvals == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 38 Task 3: RuntimePolicyEvaluator and PolicyEnforcementService tests
+# ---------------------------------------------------------------------------
+
+from agent_app.core.context import RunContext
+from agent_app.governance.audit import InMemoryAuditLogger
+from agent_app.runtime.runtime_policy_evaluator import (
+    RuntimePolicyEvaluationRequest,
+    RuntimePolicyEvaluator,
+)
+from agent_app.runtime.policy_enforcement_service import PolicyEnforcementService
+
+
+def _eval_context(
+    *,
+    roles: list[str] | None = None,
+    permissions: list[str] | None = None,
+    user_id: str = "user_001",
+    tenant_id: str = "tenant_001",
+) -> RunContext:
+    """Build a minimal RunContext for evaluator tests."""
+    return RunContext(
+        run_id="run_eval_001",
+        user_id=user_id,
+        tenant_id=tenant_id,
+        roles=roles or [],
+        permissions=permissions or [],
+    )
+
+
+class TestRuntimePolicyEvaluator:
+
+    def test_no_matching_rule_returns_allowed(self):
+        """No rules in store -> ALLOWED with reason 'no_matching_rule'."""
+        store = InMemoryRuntimePolicyStore()
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+        assert result.reason == "no_matching_rule"
+
+    def test_no_store_returns_allowed(self):
+        """Evaluator with None store -> ALLOWED."""
+        evaluator = RuntimePolicyEvaluator(policy_store=None)
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+        assert result.reason == "no_policy_store"
+
+    def test_deny_rule_blocks(self):
+        """DENY rule matches -> DENIED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_deny_01",
+                    name="deny_refund",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.DENY,
+                    reason="Refunds are disabled",
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "Refunds are disabled" in (result.reason or "")
+
+    def test_require_approval_returns_approval_required(self):
+        """REQUIRE_APPROVAL rule with satisfied permissions/roles -> APPROVAL_REQUIRED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_ra_01",
+                    name="require_approval_refund",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.REQUIRE_APPROVAL,
+                    required_permissions=["refund:create"],
+                    required_roles=["finance"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(roles=["finance"], permissions=["refund:create"])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.APPROVAL_REQUIRED
+
+    def test_require_approval_missing_permission_denied(self):
+        """REQUIRE_APPROVAL rule with missing permission -> DENIED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_ra_02",
+                    name="require_approval_refund",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.REQUIRE_APPROVAL,
+                    required_permissions=["refund:create"],
+                    required_roles=["finance"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(roles=["finance"], permissions=[])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "Missing required permission" in (result.reason or "")
+
+    def test_require_approval_missing_role_denied(self):
+        """REQUIRE_APPROVAL rule with missing role -> DENIED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_ra_03",
+                    name="require_approval_refund",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.REQUIRE_APPROVAL,
+                    required_permissions=["refund:create"],
+                    required_roles=["finance"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(roles=["viewer"], permissions=["refund:create"])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "Missing required role" in (result.reason or "")
+
+    def test_allow_rule_allows(self):
+        """ALLOW rule with satisfied permissions -> ALLOWED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_allow_01",
+                    name="allow_query",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.ALLOW,
+                    required_permissions=["order:read"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(permissions=["order:read"])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+
+    def test_allow_rule_missing_permission_denied(self):
+        """ALLOW rule with missing permission -> DENIED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_allow_02",
+                    name="allow_query",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.ALLOW,
+                    required_permissions=["order:read"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(permissions=[])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "Missing required permission" in (result.reason or "")
+
+    def test_allow_rule_missing_role_denied(self):
+        """ALLOW rule with missing role -> DENIED."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_allow_03",
+                    name="allow_admin_action",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.ALLOW,
+                    required_roles=["admin"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context(roles=["viewer"])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "Missing required role" in (result.reason or "")
+
+    def test_tool_name_matching(self):
+        """Rule with tool_name='refund' only matches requests with that tool_name."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_tn_01",
+                    name="deny_refund",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.DENY,
+                    tool_name="refund",
+                    reason="Refund tool blocked",
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context()
+
+        # Matching tool_name -> DENIED
+        req_match = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            tool_name="refund",
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req_match))
+        assert result.status == PolicyDecisionStatus.DENIED
+
+        # Non-matching tool_name -> ALLOWED (no matching rule)
+        req_no_match = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            tool_name="query",
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req_no_match))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+
+    def test_risk_level_matching(self):
+        """Rule with risk_level='high' only matches requests with that risk_level."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_rl_01",
+                    name="deny_high_risk",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.DENY,
+                    risk_level="high",
+                    reason="High risk blocked",
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context()
+
+        # Matching risk_level -> DENIED
+        req_match = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            risk_level="high",
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req_match))
+        assert result.status == PolicyDecisionStatus.DENIED
+
+        # Non-matching risk_level -> ALLOWED (no matching rule)
+        req_no_match = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            risk_level="low",
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req_no_match))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+
+    def test_most_restrictive_wins(self):
+        """DENY rule + ALLOW rule both match -> DENIED wins."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_mrw_allow",
+                    name="allow_execute",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.ALLOW,
+                )
+            )
+        )
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_eval_mrw_deny",
+                    name="deny_execute",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.DENY,
+                    reason="Deny overrides allow",
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(evaluator.evaluate(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+
+
+class TestPolicyEnforcementService:
+
+    def test_allowed_decision_audited(self):
+        """ALLOWED decision produces audit event with 'policy.runtime.enforcement.allowed'."""
+        store = InMemoryRuntimePolicyStore()
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        audit = InMemoryAuditLogger()
+        service = PolicyEnforcementService(evaluator=evaluator, audit_logger=audit)
+
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(service.enforce(req))
+        assert result.status == PolicyDecisionStatus.ALLOWED
+
+        allowed_events = audit.list_events(event_type="policy.runtime.enforcement.allowed")
+        assert len(allowed_events) == 1
+        assert allowed_events[0].data["decision_id"] == result.decision_id
+
+    def test_denied_decision_audited(self):
+        """DENIED decision produces audit event with 'policy.runtime.enforcement.denied'."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_svc_deny_01",
+                    name="deny_all",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.DENY,
+                    reason="Blocked",
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        audit = InMemoryAuditLogger()
+        service = PolicyEnforcementService(evaluator=evaluator, audit_logger=audit)
+
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(service.enforce(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+
+        denied_events = audit.list_events(event_type="policy.runtime.enforcement.denied")
+        assert len(denied_events) == 1
+        assert denied_events[0].data["decision_id"] == result.decision_id
+
+    def test_approval_required_audited(self):
+        """APPROVAL_REQUIRED produces audit event with 'policy.runtime.enforcement.approval_required'."""
+        store = InMemoryRuntimePolicyStore()
+        _run_async(
+            store.create(
+                RuntimePolicyRule(
+                    rule_id="rpr_svc_ar_01",
+                    name="require_approval",
+                    action_type=PolicyActionType.TOOL_EXECUTE,
+                    effect=RuntimePolicyEffect.REQUIRE_APPROVAL,
+                    required_roles=["admin"],
+                )
+            )
+        )
+        evaluator = RuntimePolicyEvaluator(policy_store=store)
+        audit = InMemoryAuditLogger()
+        service = PolicyEnforcementService(evaluator=evaluator, audit_logger=audit)
+
+        ctx = _eval_context(roles=["admin"])
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(service.enforce(req))
+        assert result.status == PolicyDecisionStatus.APPROVAL_REQUIRED
+
+        ar_events = audit.list_events(
+            event_type="policy.runtime.enforcement.approval_required"
+        )
+        assert len(ar_events) == 1
+        assert ar_events[0].data["decision_id"] == result.decision_id
+
+    def test_evaluator_error_audited(self):
+        """Evaluator exception produces audit event with 'policy.runtime.enforcement.error'."""
+        evaluator = RuntimePolicyEvaluator(policy_store=None)
+        audit = InMemoryAuditLogger()
+
+        # Monkey-patch evaluate to raise
+        async def _boom(req):
+            raise RuntimeError("boom")
+
+        evaluator.evaluate = _boom  # type: ignore[assignment]
+        service = PolicyEnforcementService(evaluator=evaluator, audit_logger=audit)
+
+        ctx = _eval_context()
+        req = RuntimePolicyEvaluationRequest(
+            action_type=PolicyActionType.TOOL_EXECUTE,
+            context=ctx,
+        )
+        result = _run_async(service.enforce(req))
+        assert result.status == PolicyDecisionStatus.DENIED
+        assert "boom" in (result.reason or "")
+
+        error_events = audit.list_events(event_type="policy.runtime.enforcement.error")
+        assert len(error_events) == 1
+        assert error_events[0].data["error"] == "boom"
