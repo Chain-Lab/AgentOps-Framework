@@ -1,8 +1,8 @@
-"""Phase 39: Tests for policy observability models."""
+"""Phase 39: Tests for policy observability models and service."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -14,6 +14,7 @@ from agent_app.governance.policy_observability import (
     PolicyObservabilityReport,
     PolicyToolSummary,
 )
+from tests.conftest import _run_async
 
 
 class TestPolicyDecisionCount:
@@ -110,3 +111,440 @@ class TestPolicyObservabilityReport:
         json_str = r.model_dump_json()
         assert "por_003" in json_str
         assert "tool.execute" in json_str
+
+
+class TestPolicyObservabilityService:
+    """Tests for PolicyObservabilityService (Phase 39 Task 2)."""
+
+    def test_empty_sources_produce_empty_report(self):
+        """No audit logger at all should produce an empty report."""
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        service = PolicyObservabilityService()
+        report = _run_async(service.generate_report())
+        assert report.total_decisions == 0
+        assert report.actions == []
+        assert report.actors == []
+        assert report.tools == []
+        assert report.decisions_by_status == []
+        assert report.top_denials == []
+
+    def test_allowed_decision_counted(self):
+        """A single allowed enforcement event is counted in the report."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_allowed1",
+                    event_type="policy.runtime.enforcement.allowed",
+                    user_id="user_1",
+                    tool_name="refund.request",
+                    data={"action_type": "tool.execute", "reason": "no_matching_rule"},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        )
+        service = PolicyObservabilityService(audit_logger=audit)
+        report = _run_async(service.generate_report())
+
+        assert report.total_decisions == 1
+        assert len(report.actions) == 1
+        assert report.actions[0].allowed == 1
+        assert report.actions[0].denied == 0
+        assert report.actions[0].total == 1
+        # Verify decision status breakdown
+        allowed_counts = [d for d in report.decisions_by_status if d.status == "allowed"]
+        assert len(allowed_counts) == 1
+        assert allowed_counts[0].count == 1
+
+    def test_denied_decision_counted(self):
+        """A single denied enforcement event is counted in the report."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_denied1",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_2",
+                    tool_name="payment.refund",
+                    data={
+                        "action_type": "tool.execute",
+                        "reason": "missing_permission",
+                    },
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        )
+        service = PolicyObservabilityService(audit_logger=audit)
+        report = _run_async(service.generate_report())
+
+        assert report.total_decisions == 1
+        assert report.actions[0].denied == 1
+        denied_counts = [d for d in report.decisions_by_status if d.status == "denied"]
+        assert len(denied_counts) == 1
+        assert denied_counts[0].count == 1
+
+    def test_approval_required_counted(self):
+        """An approval_required enforcement event is counted in the report."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_approval1",
+                    event_type="policy.runtime.enforcement.approval_required",
+                    user_id="user_3",
+                    tool_name="deploy.production",
+                    data={"action_type": "tool.execute", "reason": "high_risk"},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        )
+        service = PolicyObservabilityService(audit_logger=audit)
+        report = _run_async(service.generate_report())
+
+        assert report.total_decisions == 1
+        assert report.actions[0].approval_required == 1
+        ar_counts = [
+            d for d in report.decisions_by_status if d.status == "approval_required"
+        ]
+        assert len(ar_counts) == 1
+        assert ar_counts[0].count == 1
+
+    def test_action_summary_works(self):
+        """Multiple events grouped by action_type produce correct summaries."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        now = datetime.now(timezone.utc)
+        for i in range(3):
+            _run_async(
+                audit.log(
+                    AuditEvent(
+                        event_id=f"ae_act_allowed_{i}",
+                        event_type="policy.runtime.enforcement.allowed",
+                        user_id="user_1",
+                        tool_name="order.query",
+                        data={"action_type": "tool.execute"},
+                        created_at=now + timedelta(seconds=i),
+                    )
+                )
+            )
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_act_denied_1",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_2",
+                    tool_name="deploy.production",
+                    data={"action_type": "workflow.run"},
+                    created_at=now + timedelta(seconds=10),
+                )
+            )
+        )
+
+        service = PolicyObservabilityService(audit_logger=audit)
+        actions = _run_async(service.summarize_enforcement_decisions())
+
+        assert len(actions) == 2
+        by_type = {a.action_type: a for a in actions}
+        assert by_type["tool.execute"].allowed == 3
+        assert by_type["tool.execute"].total == 3
+        assert by_type["workflow.run"].denied == 1
+        assert by_type["workflow.run"].total == 1
+
+    def test_actor_summary_works(self):
+        """Events grouped by user_id produce correct actor summaries."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        now = datetime.now(timezone.utc)
+        # user_1: 2 allowed, 1 denied
+        for i in range(2):
+            _run_async(
+                audit.log(
+                    AuditEvent(
+                        event_id=f"ae_actor_a_{i}",
+                        event_type="policy.runtime.enforcement.allowed",
+                        user_id="user_1",
+                        tool_name="order.query",
+                        data={"action_type": "tool.execute"},
+                        created_at=now + timedelta(seconds=i),
+                    )
+                )
+            )
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_actor_d_1",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_1",
+                    tool_name="payment.refund",
+                    data={"action_type": "tool.execute"},
+                    created_at=now + timedelta(seconds=5),
+                )
+            )
+        )
+        # user_2: 1 approval_required
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_actor_ar_1",
+                    event_type="policy.runtime.enforcement.approval_required",
+                    user_id="user_2",
+                    tool_name="deploy.production",
+                    data={"action_type": "tool.execute"},
+                    created_at=now + timedelta(seconds=10),
+                )
+            )
+        )
+
+        service = PolicyObservabilityService(audit_logger=audit)
+        actors = _run_async(service.summarize_actors())
+
+        assert len(actors) == 2
+        by_actor = {a.actor_id: a for a in actors}
+        assert by_actor["user_1"].allowed == 2
+        assert by_actor["user_1"].denied == 1
+        assert by_actor["user_1"].total == 3
+        assert by_actor["user_2"].approval_required == 1
+        assert by_actor["user_2"].total == 1
+
+    def test_tool_summary_works(self):
+        """Events grouped by tool_name produce correct tool summaries."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        now = datetime.now(timezone.utc)
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_tool_a1",
+                    event_type="policy.runtime.enforcement.allowed",
+                    user_id="user_1",
+                    tool_name="order.query",
+                    data={"action_type": "tool.execute"},
+                    created_at=now,
+                )
+            )
+        )
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_tool_d1",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_2",
+                    tool_name="payment.refund",
+                    data={"action_type": "tool.execute"},
+                    created_at=now + timedelta(seconds=1),
+                )
+            )
+        )
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_tool_d2",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_3",
+                    tool_name="payment.refund",
+                    data={"action_type": "tool.execute"},
+                    created_at=now + timedelta(seconds=2),
+                )
+            )
+        )
+
+        service = PolicyObservabilityService(audit_logger=audit)
+        tools = _run_async(service.summarize_tools())
+
+        assert len(tools) == 2
+        by_tool = {t.tool_name: t for t in tools}
+        assert by_tool["order.query"].allowed == 1
+        assert by_tool["payment.refund"].denied == 2
+        assert by_tool["payment.refund"].total == 2
+
+    def test_top_denials_generated(self):
+        """Denied events are grouped by reason for top denials."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        now = datetime.now(timezone.utc)
+        # 3 denied with reason "missing_permission", 1 with "high_risk"
+        for i in range(3):
+            _run_async(
+                audit.log(
+                    AuditEvent(
+                        event_id=f"ae_top_d_{i}",
+                        event_type="policy.runtime.enforcement.denied",
+                        user_id=f"user_{i}",
+                        tool_name="payment.refund",
+                        data={"action_type": "tool.execute", "reason": "missing_permission"},
+                        created_at=now + timedelta(seconds=i),
+                    )
+                )
+            )
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_top_d_hr",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_99",
+                    tool_name="deploy.production",
+                    data={"action_type": "tool.execute", "reason": "high_risk"},
+                    created_at=now + timedelta(seconds=10),
+                )
+            )
+        )
+
+        service = PolicyObservabilityService(audit_logger=audit)
+        top_denials = _run_async(service._top_denials())
+
+        assert len(top_denials) == 2
+        # First should be "missing_permission" with count 3
+        assert top_denials[0]["reason"] == "missing_permission"
+        assert top_denials[0]["count"] == 3
+        assert top_denials[1]["reason"] == "high_risk"
+        assert top_denials[1]["count"] == 1
+
+    def test_window_filter_works(self):
+        """Events outside the time window are excluded from the report."""
+        from agent_app.governance.audit import AuditEvent, InMemoryAuditLogger
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        audit = InMemoryAuditLogger()
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        # Event inside window
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_win_in",
+                    event_type="policy.runtime.enforcement.allowed",
+                    user_id="user_1",
+                    tool_name="order.query",
+                    data={"action_type": "tool.execute"},
+                    created_at=t0 + timedelta(minutes=30),
+                )
+            )
+        )
+        # Event outside window (before start)
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_win_out_before",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_2",
+                    tool_name="payment.refund",
+                    data={"action_type": "tool.execute"},
+                    created_at=t0 - timedelta(hours=1),
+                )
+            )
+        )
+        # Event outside window (after end)
+        _run_async(
+            audit.log(
+                AuditEvent(
+                    event_id="ae_win_out_after",
+                    event_type="policy.runtime.enforcement.denied",
+                    user_id="user_3",
+                    tool_name="deploy.production",
+                    data={"action_type": "tool.execute"},
+                    created_at=t0 + timedelta(hours=2),
+                )
+            )
+        )
+
+        service = PolicyObservabilityService(audit_logger=audit)
+        report = _run_async(
+            service.generate_report(
+                window_start=t0,
+                window_end=t0 + timedelta(hours=1),
+            )
+        )
+
+        # Only the one allowed event should be counted
+        assert report.total_decisions == 1
+        assert report.actions[0].allowed == 1
+        assert report.window_start == t0
+        assert report.window_end == t0 + timedelta(hours=1)
+
+    def test_missing_audit_logger_partial_report(self):
+        """None audit logger produces a partial report with empty summaries."""
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        service = PolicyObservabilityService(audit_logger=None)
+        report = _run_async(service.generate_report())
+
+        assert report.total_decisions == 0
+        assert report.actions == []
+        assert report.actors == []
+        assert report.tools == []
+        assert report.top_denials == []
+        # report_id should still have the por_ prefix
+        assert report.report_id.startswith("por_")
+
+    def test_approval_latency_from_store(self):
+        """Approval store with resolved approvals computes latency correctly."""
+        from datetime import datetime, timedelta, timezone
+
+        from agent_app.runtime.policy_observability_service import (
+            PolicyObservabilityService,
+        )
+
+        # Create a mock approval store with resolved approvals
+        class MockApproval:
+            def __init__(self, created_at, resolved_at):
+                self.created_at = created_at
+                self.resolved_at = resolved_at
+
+        class MockApprovalStore:
+            def __init__(self, approvals):
+                self._approvals = approvals
+
+            async def list(self, status=None, rollout_id=None):
+                return self._approvals
+
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        approvals = [
+            MockApproval(created_at=t0, resolved_at=t0 + timedelta(seconds=60)),
+            MockApproval(created_at=t0, resolved_at=t0 + timedelta(seconds=120)),
+            MockApproval(created_at=t0, resolved_at=t0 + timedelta(seconds=30)),
+        ]
+        store = MockApprovalStore(approvals)
+        service = PolicyObservabilityService(rollout_approval_store=store)
+        latency = _run_async(service.approval_latency_summary())
+
+        assert latency.count == 3
+        assert latency.min_seconds == 30.0
+        assert latency.max_seconds == 120.0
+        assert latency.average_seconds == 70.0
