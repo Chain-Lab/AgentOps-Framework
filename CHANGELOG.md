@@ -2,6 +2,37 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.29.0 (2026-06-16)
+
+### Phase 41: Policy Gate Integration and Automated Safeguards
+
+- **New:** SimulationGateInput model — combines simulation summary with validation report for gate evaluation
+- **New:** simulation_gate_metrics() — extracts 12 supported metrics from simulation input
+- **New:** SimulationGateEvaluator — evaluates metrics against configurable threshold rules (lt/lte/gt/gte/eq/neq operators)
+- **New:** SimulationGateRule, SimulationGateResult, SimulationGateReport models
+- **New:** PolicySimulationService.validate_and_gate() — chains validation, simulation, and gate evaluation
+- **New:** RBAC permissions: SIMULATION_GATE_RUN (requires grant), SIMULATION_GATE_VIEW (default allowed)
+- **New:** Change event types: SIMULATION_GATE_PASSED, SIMULATION_GATE_FAILED, SIMULATION_GATE_WARNING, SIMULATION_GATE_ERROR
+- **New:** Audit events: gate_passed, gate_failed, gate_error, gate_permission_denied
+- **New:** CLI command: policy simulation gate --config --rules-file --gate-rules-file [--json] [--output]
+- **New:** Console pages: gate form (/simulation-gate) and gate report (/simulation-gate/report)
+- **New:** Gate rules YAML support — separate file with configurable required/non-required rules
+- **New:** Blocking behavior — CLI exits non-zero on gate failure for CI/CD integration
+- **Changed:** config/schema.py — added gates list to PolicySimulationConfig
+- **Changed:** config/loader.py — wired SimulationGateEvaluator
+- **Changed:** governance/policy_rbac.py — added SIMULATION_GATE_RUN, SIMULATION_GATE_VIEW
+- **Changed:** governance/policy_change_event.py — added 4 simulation gate event types
+- **Changed:** runtime/policy_simulation_service.py — added validate_and_gate() method
+- **Changed:** cli.py — added policy simulation gate command
+- **Changed:** console/router.py — added simulation gate routes
+- **Changed:** adapters/fastapi.py — wired simulation_gate_evaluator
+
+### Backward Compatible
+
+- Missing gates config preserves existing Phase 40 behavior
+- SimulationGateEvaluator is optional; gate commands require explicit --gate-rules-file
+- All Phase 40 tests pass unchanged
+
 ## v0.28.0 (2026-06-16)
 
 ### Phase 40: Policy Testing, Validation, and Historical Replay

@@ -2814,3 +2814,281 @@ agentapp policy simulation export \
 - No external SIEM integration
 - Gate integration may be basic or deferred
 - Not a formal proof of policy correctness
+
+---
+
+## Phase 41: Policy Gate Integration and Automated Safeguards
+
+**Version:** v0.29.0
+**Status:** Complete
+
+### Purpose
+
+Phase 41 builds on the Phase 40 policy simulation framework by adding a
+**simulation gate** — a configurable threshold system that automatically
+evaluates simulation results against gate rules and blocks policy promotion
+when the gate fails. Teams can answer: "Do the simulation metrics pass our
+safety thresholds before we promote this policy?"
+
+The simulation gate enables:
+
+1. **Automated safety checks** — Evaluate simulation metrics against configurable
+   threshold rules (max denied ratio, max changed ratio, max errors, etc.)
+2. **Blocking behavior** — CLI exits non-zero when gate fails, enabling CI/CD
+   integration where gate failure blocks deployment
+3. **Gate report** — Structured report showing which rules passed/failed with
+   detailed metrics
+4. **Console integration** — HTML form to run gates and view reports
+
+### New Models
+
+| Model | Purpose |
+|-------|---------|
+| `SimulationGateInput` | Input model: simulation summary + validation report |
+| `SimulationGateRule` | Threshold rule: metric, operator, threshold, required |
+| `SimulationGateResult` | Per-rule evaluation: pass/fail, actual value, message |
+| `SimulationGateReport` | Full gate report: pass/fail, all rule results |
+
+### Supported Simulation Metrics
+
+The gate evaluator checks the following 12 metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `simulation.total` | Total simulation cases |
+| `simulation.unchanged` | Cases with UNCHANGED outcome |
+| `simulation.would_allow` | Cases that would be ALLOWED |
+| `simulation.would_deny` | Cases that would be DENIED |
+| `simulation.would_require_approval` | Cases requiring approval |
+| `simulation.would_change` | Cases with any change |
+| `simulation.errors` | Cases that resulted in ERROR |
+| `simulation.changed_ratio` | Ratio of changed to total |
+| `simulation.denied_ratio` | Ratio of denied to total |
+| `simulation.approval_required_ratio` | Ratio of approval-required to total |
+| `validation.errors` | Validation errors in candidate rules |
+| `validation.warnings` | Validation warnings in candidate rules |
+
+### Gate Rules YAML
+
+Gate rules are defined in a separate YAML file and passed to the gate command
+via `--gate-rules-file`:
+
+```yaml
+gates:
+  - name: max_denied_ratio
+    metric: simulation.denied_ratio
+    operator: lt
+    threshold: 0.05
+    required: true
+
+  - name: max_changed_ratio
+    metric: simulation.changed_ratio
+    operator: lt
+    threshold: 0.20
+    required: true
+
+  - name: no_errors
+    metric: simulation.errors
+    operator: eq
+    threshold: 0
+    required: true
+
+  - name: max_approval_required_ratio
+    metric: simulation.approval_required_ratio
+    operator: lt
+    threshold: 0.10
+    required: false
+
+  - name: no_validation_errors
+    metric: validation.errors
+    operator: eq
+    threshold: 0
+    required: true
+```
+
+**Rule fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `str` | Human-readable rule name |
+| `metric` | `str` | One of the 12 supported metrics |
+| `operator` | `str` | `lt`, `lte`, `gt`, `gte`, `eq`, `neq` |
+| `threshold` | `float` | Threshold value to compare against |
+| `required` | `bool` | If true, failure blocks the gate; if false, failure is a warning |
+
+### New Modules
+
+| Module | Responsibility |
+|--------|---------------|
+| `governance/policy_simulation_gate.py` | SimulationGateInput, simulation_gate_metrics() |
+| `runtime/policy_simulation_gate_evaluator.py` | SimulationGateEvaluator |
+
+### Modified Modules
+
+| Module | Change |
+|--------|--------|
+| `runtime/policy_simulation_service.py` | Added `validate_and_gate()` method |
+| `governance/policy_rbac.py` | Added SIMULATION_GATE_RUN, SIMULATION_GATE_VIEW permissions |
+| `governance/policy_change_event.py` | Added 4 simulation gate event types |
+| `config/schema.py` | Added `gates` list to PolicySimulationConfig |
+| `config/loader.py` | Wired SimulationGateEvaluator |
+| `cli.py` | Added `policy simulation gate` command |
+| `console/router.py` | Added simulation gate routes |
+| `adapters/fastapi.py` | Wired simulation_gate_evaluator |
+
+### New Console Templates
+
+| Template | Description |
+|----------|-------------|
+| `policy_simulation_gate.html` | Gate form page |
+| `policy_simulation_gate_report.html` | Gate report page |
+
+### RBAC Permissions
+
+| Permission | Default |
+|-----------|---------|
+| `policy.simulation.gate.run` | Requires explicit permission |
+| `policy.simulation.gate.view` | Default allowed |
+
+### Change Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `SIMULATION_GATE_PASSED` | Gate evaluation passed all required rules |
+| `SIMULATION_GATE_FAILED` | Gate evaluation failed one or more required rules |
+| `SIMULATION_GATE_WARNING` | Gate evaluation passed but with warnings |
+| `SIMULATION_GATE_ERROR` | Gate evaluation encountered an error |
+
+### Audit Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.simulation.gate_passed` | Gate evaluation passed |
+| `policy.simulation.gate_failed` | Gate evaluation failed |
+| `policy.simulation.gate_error` | Gate evaluation error |
+| `policy.simulation.gate_permission_denied` | RBAC permission denied |
+
+### CLI Examples
+
+```bash
+# Gate passes — exit 0
+agentapp policy simulation gate \
+  --config agentapp.yaml \
+  --rules-file candidate.yaml \
+  --gate-rules-file gates.yaml
+
+# Gate fails — exit non-zero, shows failed rules
+agentapp policy simulation gate \
+  --config agentapp.yaml \
+  --rules-file candidate.yaml \
+  --gate-rules-file strict_gates.yaml
+
+# JSON output
+agentapp policy simulation gate \
+  --config agentapp.yaml \
+  --rules-file candidate.yaml \
+  --gate-rules-file gates.yaml \
+  --json
+
+# Write report to file
+agentapp policy simulation gate \
+  --config agentapp.yaml \
+  --rules-file candidate.yaml \
+  --gate-rules-file gates.yaml \
+  --output result.json
+```
+
+### Console Workflow
+
+1. Navigate to `/policy-console/simulation-gate`
+2. Select candidate rules file and gate rules file
+3. Submit the gate evaluation form
+4. View the gate report at `/policy-console/simulation-gate/report`
+5. Report shows pass/fail status, per-rule results, and metric values
+
+### Blocking Behavior
+
+The `policy simulation gate` CLI command uses process exit codes:
+
+- **Exit 0** — Gate passed (all required rules satisfied)
+- **Exit non-zero** — Gate failed (one or more required rules failed)
+
+This enables CI/CD integration where gate failure blocks deployment
+pipelines. The `--json` flag outputs a machine-readable report, and
+`--output` writes the report to a file for archival or further processing.
+
+### Configuration
+
+```yaml
+governance:
+  policy_simulation:
+    enabled: true
+    gates:                         # Phase 41
+      - name: max_denied_ratio
+        metric: simulation.denied_ratio
+        operator: lt
+        threshold: 0.05
+        required: true
+```
+
+The `gates` list in `PolicySimulationConfig` provides default gate rules.
+These can be overridden at the CLI level via `--gate-rules-file`.
+
+### Design Decisions
+
+1. **Separate gate rules file** — Gate rules are defined in a separate YAML
+   file rather than embedded in the main config. This allows teams to maintain
+   different gate strictness levels (e.g., `gates.yaml` for standard,
+   `strict_gates.yaml` for production) and swap them at the CLI level.
+
+2. **Required vs non-required rules** — Rules with `required: true` block the
+   gate on failure; rules with `required: false` produce warnings. This allows
+   teams to track soft thresholds without blocking promotion.
+
+3. **Exit code as blocking mechanism** — Using process exit codes for pass/fail
+   enables seamless CI/CD integration. A non-zero exit code naturally blocks
+   deployment pipelines without requiring custom integration code.
+
+4. **Gate evaluator is decoupled from simulation service** — The
+   `SimulationGateEvaluator` operates on `SimulationGateInput` (summary +
+   validation report) rather than directly on the simulation service. This
+   allows gate evaluation to be tested independently and reused with different
+   simulation sources.
+
+5. **validate_and_gate combines validation + simulation + gate** — The
+   `PolicySimulationService.validate_and_gate()` method chains validation,
+   simulation, and gate evaluation in a single call, providing a convenient
+   one-step safety check for CLI and console workflows.
+
+6. **Default gate rules from config** — The `gates` list in
+   `PolicySimulationConfig` provides default gate rules that can be used
+   without a separate file. The `--gate-rules-file` flag overrides these
+   defaults when provided.
+
+### Known Limitations
+
+1. **Simulation gate uses historical audit, not live shadow traffic** — Gate
+   evaluation is based on historical audit events, not real-time traffic
+   mirroring. The gate quality depends on the completeness and recency of
+   audit coverage.
+
+2. **Gate quality depends on audit coverage** — If the audit log has gaps or
+   missing events, the simulation metrics may not accurately reflect the
+   impact of the proposed policy change.
+
+3. **Promotion integration is CLI-level (Option A)** — The gate blocks
+   promotion at the CLI level (exit code). Users must pass the gate before
+   manually promoting. There is no automatic enforcement at the promotion
+   service level.
+
+4. **No automatic production rollback** — Gate failure does not trigger
+   automatic rollback. Operators must manually roll back if a promoted policy
+   causes issues.
+
+5. **No distributed gate execution** — Gate evaluation runs in a single
+   process. There is no support for distributed or parallel gate execution
+   across multiple instances.
+
+6. **No external risk engine** — Gate rules are simple threshold comparisons.
+   There is no integration with external risk scoring engines or ML-based
+   anomaly detection.
