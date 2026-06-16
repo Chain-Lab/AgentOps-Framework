@@ -425,6 +425,28 @@ class RolloutStoreConfig(BaseModel):
     )
 
 
+class RuntimePolicyRuleConfig(BaseModel):
+    """Configuration for an inline runtime policy rule (Phase 38)."""
+
+    name: str
+    action_type: str  # "tool.execute", "tool.resume", etc.
+    effect: str  # "allow", "deny", "require_approval"
+    tool_name: str | None = None
+    risk_level: str | None = None
+    required_permissions: list[str] = Field(default_factory=list)
+    required_roles: list[str] = Field(default_factory=list)
+    approval_policy: RolloutApprovalPolicyConfig | None = None
+    reason: str | None = None
+
+
+class RuntimePoliciesConfig(BaseModel):
+    """Configuration for runtime policy enforcement (Phase 38)."""
+
+    type: str = "memory"  # "memory" or "sqlite"
+    path: str | None = None
+    rules: list[RuntimePolicyRuleConfig] = Field(default_factory=list)
+
+
 class PolicyReleaseRuntimeConfig(BaseModel):
     """Runtime policy activation configuration (Phase 31)."""
 
@@ -799,6 +821,10 @@ class GovernanceConfig(BaseModel):
         default=None,
         description="Policy release gate configuration (Phase 29)",
     )
+    runtime_policies: RuntimePoliciesConfig | None = Field(
+        default=None,
+        description="Runtime policy enforcement config (Phase 38)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -845,7 +871,8 @@ class AppConfig(BaseModel):
         if isinstance(gov, dict):
             normalized_gov = {}
             for section in ("approvals", "audit", "permissions", "policies",
-                            "policy_decisions", "policy_console", "policy_release"):
+                            "policy_decisions", "policy_console", "policy_release",
+                            "runtime_policies"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val

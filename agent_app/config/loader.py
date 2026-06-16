@@ -632,6 +632,83 @@ def build_app(
         app._rollout_store = rollout_store
         app._rollout_service = rollout_service
         app._rollout_approval_store = rollout_approval_store
+
+        # Phase 38: Runtime policy enforcement
+        runtime_policy_store = None
+        runtime_policy_evaluator = None
+        policy_enforcement_service = None
+        if hasattr(gov, 'runtime_policies') and gov.runtime_policies is not None:
+            import uuid as _uuid
+            from agent_app.runtime.runtime_policy_store import create_runtime_policy_store
+            from agent_app.runtime.runtime_policy_evaluator import RuntimePolicyEvaluator
+            from agent_app.runtime.policy_enforcement_service import PolicyEnforcementService
+
+            rp_cfg = gov.runtime_policies
+            runtime_policy_store = create_runtime_policy_store(
+                store_type=rp_cfg.type,
+                db_path=rp_cfg.path,
+            )
+
+            # Load inline rules from config
+            from agent_app.governance.runtime_policy import (
+                RuntimePolicyEffect,
+                RuntimePolicyRule,
+                RuntimePolicyRuleStatus,
+            )
+            from agent_app.governance.policy_enforcement import PolicyActionType
+            from agent_app.governance.policy_rollout_approval import (
+                RolloutApprovalPolicy,
+                RolloutApprovalPolicyType,
+            )
+            import asyncio
+
+            for rule_cfg in rp_cfg.rules:
+                ap = None
+                if rule_cfg.approval_policy:
+                    ap_cfg = rule_cfg.approval_policy
+                    ap = RolloutApprovalPolicy(
+                        policy_type=RolloutApprovalPolicyType(ap_cfg.policy_type),
+                        required_approvals=ap_cfg.required_approvals,
+                        allowed_approver_roles=ap_cfg.allowed_approver_roles,
+                        allowed_approver_permissions=ap_cfg.allowed_approver_permissions,
+                        prohibit_requester_approval=ap_cfg.prohibit_requester_approval,
+                        prohibit_creator_approval=ap_cfg.prohibit_creator_approval,
+                        expires_after_seconds=ap_cfg.expires_after_seconds,
+                        require_reason=ap_cfg.require_reason,
+                    )
+
+                rule = RuntimePolicyRule(
+                    rule_id=f"rpr_{_uuid.uuid4().hex[:12]}",
+                    name=rule_cfg.name,
+                    action_type=PolicyActionType(rule_cfg.action_type),
+                    effect=RuntimePolicyEffect(rule_cfg.effect),
+                    status=RuntimePolicyRuleStatus.ENABLED,
+                    tool_name=rule_cfg.tool_name,
+                    risk_level=rule_cfg.risk_level,
+                    required_permissions=rule_cfg.required_permissions,
+                    required_roles=rule_cfg.required_roles,
+                    approval_policy=ap,
+                    reason=rule_cfg.reason,
+                )
+                try:
+                    asyncio.get_event_loop().run_until_complete(runtime_policy_store.create(rule))
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(runtime_policy_store.create(rule))
+                    finally:
+                        loop.close()
+
+            runtime_policy_evaluator = RuntimePolicyEvaluator(policy_store=runtime_policy_store)
+            policy_enforcement_service = PolicyEnforcementService(
+                evaluator=runtime_policy_evaluator,
+                audit_logger=audit_logger,
+            )
+
+        app._runtime_policy_store = runtime_policy_store
+        app._runtime_policy_evaluator = runtime_policy_evaluator
+        app._policy_enforcement_service = policy_enforcement_service
+
     app._release_config = release_config
     return app
 

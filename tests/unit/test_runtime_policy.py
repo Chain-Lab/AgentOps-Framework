@@ -793,3 +793,77 @@ class TestPolicyEnforcementService:
         error_events = audit.list_events(event_type="policy.runtime.enforcement.error")
         assert len(error_events) == 1
         assert error_events[0].data["error"] == "boom"
+
+
+# ---------------------------------------------------------------------------
+# Phase 38 Task 6: Config schema tests
+# ---------------------------------------------------------------------------
+
+from agent_app.config.schema import (
+    RuntimePoliciesConfig,
+    RuntimePolicyRuleConfig,
+    RolloutApprovalPolicyConfig,
+)
+
+
+class TestRuntimePolicyConfig:
+
+    def test_runtime_policies_config_defaults(self):
+        """RuntimePoliciesConfig defaults to memory, empty rules."""
+        cfg = RuntimePoliciesConfig()
+        assert cfg.type == "memory"
+        assert cfg.path is None
+        assert cfg.rules == []
+
+    def test_runtime_policy_rule_config(self):
+        """RuntimePolicyRuleConfig with all fields."""
+        cfg = RuntimePolicyRuleConfig(
+            name="deny_refunds",
+            action_type="tool.execute",
+            effect="deny",
+            tool_name="refund.request",
+            risk_level="high",
+            required_permissions=["refund:create"],
+            required_roles=["finance"],
+            reason="Refunds blocked",
+        )
+        assert cfg.name == "deny_refunds"
+        assert cfg.action_type == "tool.execute"
+        assert cfg.effect == "deny"
+        assert cfg.tool_name == "refund.request"
+        assert cfg.risk_level == "high"
+        assert cfg.required_permissions == ["refund:create"]
+        assert cfg.required_roles == ["finance"]
+        assert cfg.reason == "Refunds blocked"
+        assert cfg.approval_policy is None
+
+    def test_approval_policy_in_rule_config(self):
+        """RolloutApprovalPolicyConfig nested in rule config."""
+        ap = RolloutApprovalPolicyConfig(
+            policy_type="quorum",
+            required_approvals=3,
+            allowed_approver_roles=["admin"],
+        )
+        cfg = RuntimePolicyRuleConfig(
+            name="require_quorum_refund",
+            action_type="tool.execute",
+            effect="require_approval",
+            approval_policy=ap,
+        )
+        assert cfg.approval_policy is not None
+        assert cfg.approval_policy.policy_type == "quorum"
+        assert cfg.approval_policy.required_approvals == 3
+        assert cfg.approval_policy.allowed_approver_roles == ["admin"]
+
+    def test_runtime_policies_with_rules(self):
+        """RuntimePoliciesConfig can hold inline rules."""
+        rule = RuntimePolicyRuleConfig(
+            name="test_rule",
+            action_type="tool.execute",
+            effect="allow",
+        )
+        cfg = RuntimePoliciesConfig(type="sqlite", path="/tmp/rp.db", rules=[rule])
+        assert cfg.type == "sqlite"
+        assert cfg.path == "/tmp/rp.db"
+        assert len(cfg.rules) == 1
+        assert cfg.rules[0].name == "test_rule"

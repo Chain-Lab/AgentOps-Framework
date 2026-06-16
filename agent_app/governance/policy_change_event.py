@@ -38,6 +38,9 @@ class PolicyChangeEventType(StrEnum):
     ROLLOUT_APPROVAL_QUORUM_REACHED = "policy.rollout.approval.quorum_reached"
     ROLLOUT_APPROVAL_POLICY_DENIED = "policy.rollout.approval.policy_denied"
     RUNTIME_POLICY_EVALUATED = "policy.runtime.evaluated"
+    RUNTIME_POLICY_RULE_CREATED = "policy.runtime.rule.created"
+    RUNTIME_POLICY_RULE_ENABLED = "policy.runtime.rule.enabled"
+    RUNTIME_POLICY_RULE_DISABLED = "policy.runtime.rule.disabled"
 
 
 class PolicyChangeEvent(BaseModel):

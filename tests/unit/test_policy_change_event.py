@@ -43,13 +43,17 @@ class TestPolicyChangeEventType:
             "policy.rollout.approval.decision_recorded",
             "policy.rollout.approval.quorum_reached",
             "policy.rollout.approval.policy_denied",
+            "policy.runtime.evaluated",
+            "policy.runtime.rule.created",
+            "policy.runtime.rule.enabled",
+            "policy.runtime.rule.disabled",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 25 enum members defined."""
-        assert len(PolicyChangeEventType) == 25
+        """Exactly 29 enum members defined."""
+        assert len(PolicyChangeEventType) == 29
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""

@@ -73,6 +73,11 @@ class PolicyReleasePermission(StrEnum):
     ROLLOUT_APPROVAL_APPROVE = "policy.rollout.approval.approve"
     ROLLOUT_APPROVAL_REJECT = "policy.rollout.approval.reject"
     ROLLOUT_APPROVAL_VIEW = "policy.rollout.approval.view"
+    RUNTIME_POLICY_CREATE = "policy.runtime.create"
+    RUNTIME_POLICY_VIEW = "policy.runtime.view"
+    RUNTIME_POLICY_ENABLE = "policy.runtime.enable"
+    RUNTIME_POLICY_DISABLE = "policy.runtime.disable"
+    RUNTIME_POLICY_EVALUATE = "policy.runtime.evaluate"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -84,6 +89,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.EVENT_VIEW,
     PolicyReleasePermission.ROLLOUT_VIEW,
     PolicyReleasePermission.ROLLOUT_APPROVAL_VIEW,
+    PolicyReleasePermission.RUNTIME_POLICY_VIEW,
+    PolicyReleasePermission.RUNTIME_POLICY_EVALUATE,
 }
 
 
