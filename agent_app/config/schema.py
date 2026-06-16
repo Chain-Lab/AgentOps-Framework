@@ -447,6 +447,12 @@ class RuntimePoliciesConfig(BaseModel):
     rules: list[RuntimePolicyRuleConfig] = Field(default_factory=list)
 
 
+class PolicyObservabilityConfig(BaseModel):
+    """Configuration for policy observability (Phase 39)."""
+
+    enabled: bool = True
+
+
 class PolicyReleaseRuntimeConfig(BaseModel):
     """Runtime policy activation configuration (Phase 31)."""
 
@@ -825,6 +831,10 @@ class GovernanceConfig(BaseModel):
         default=None,
         description="Runtime policy enforcement config (Phase 38)",
     )
+    policy_observability: PolicyObservabilityConfig | None = Field(
+        default=None,
+        description="Policy observability configuration (Phase 39)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -872,7 +882,7 @@ class AppConfig(BaseModel):
             normalized_gov = {}
             for section in ("approvals", "audit", "permissions", "policies",
                             "policy_decisions", "policy_console", "policy_release",
-                            "runtime_policies"):
+                            "runtime_policies", "policy_observability"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val

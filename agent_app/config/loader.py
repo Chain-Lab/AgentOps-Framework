@@ -709,6 +709,20 @@ def build_app(
         app._runtime_policy_evaluator = runtime_policy_evaluator
         app._policy_enforcement_service = policy_enforcement_service
 
+        # Phase 39: Policy observability
+        policy_observability_service = None
+        obs_cfg = getattr(gov, 'policy_observability', None)
+        if obs_cfg is None or getattr(obs_cfg, 'enabled', True):
+            from agent_app.runtime.policy_observability_service import PolicyObservabilityService
+            policy_observability_service = PolicyObservabilityService(
+                audit_logger=audit_logger,
+                event_store=event_store,
+                rollout_store=rollout_store,
+                rollout_approval_store=rollout_approval_store,
+                runtime_policy_store=runtime_policy_store,
+            )
+        app._policy_observability_service = policy_observability_service
+
     app._release_config = release_config
     return app
 

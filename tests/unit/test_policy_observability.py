@@ -641,3 +641,63 @@ class TestComplianceExport:
         )
         rows = report_to_csv_rows(report)
         assert rows == []
+
+
+class TestObservabilityConfig:
+    """Tests for PolicyObservabilityConfig (Phase 39 Task 4)."""
+
+    def test_observability_config_defaults(self):
+        """PolicyObservabilityConfig defaults to enabled=True."""
+        from agent_app.config.schema import PolicyObservabilityConfig
+
+        cfg = PolicyObservabilityConfig()
+        assert cfg.enabled is True
+
+    def test_observability_config_disabled(self):
+        """PolicyObservabilityConfig can be explicitly disabled."""
+        from agent_app.config.schema import PolicyObservabilityConfig
+
+        cfg = PolicyObservabilityConfig(enabled=False)
+        assert cfg.enabled is False
+
+
+class TestObservabilityRBAC:
+    """Tests for observability RBAC permissions (Phase 39 Task 4)."""
+
+    def test_observability_view_permission_exists(self):
+        """OBSERVABILITY_VIEW is a valid PolicyReleasePermission member."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+        assert hasattr(PolicyReleasePermission, "OBSERVABILITY_VIEW")
+        assert PolicyReleasePermission.OBSERVABILITY_VIEW.value == "policy.observability.view"
+
+    def test_observability_export_permission_exists(self):
+        """OBSERVABILITY_EXPORT is a valid PolicyReleasePermission member."""
+        from agent_app.governance.policy_rbac import PolicyReleasePermission
+
+        assert hasattr(PolicyReleasePermission, "OBSERVABILITY_EXPORT")
+        assert PolicyReleasePermission.OBSERVABILITY_EXPORT.value == "policy.observability.export"
+
+    def test_observability_view_default_allowed(self):
+        """OBSERVABILITY_VIEW is in the default-allowed permission set."""
+        from agent_app.governance.policy_rbac import (
+            PolicyReleasePermission,
+            _DEFAULT_ALLOWED,
+        )
+
+        assert PolicyReleasePermission.OBSERVABILITY_VIEW in _DEFAULT_ALLOWED
+
+
+class TestObservabilityEventTypes:
+    """Tests for observability change event types (Phase 39 Task 4)."""
+
+    def test_observability_event_types_exist(self):
+        """Observability event types are valid PolicyChangeEventType members."""
+        from agent_app.governance.policy_change_event import PolicyChangeEventType
+
+        assert hasattr(PolicyChangeEventType, "OBSERVABILITY_REPORT_GENERATED")
+        assert PolicyChangeEventType.OBSERVABILITY_REPORT_GENERATED.value == "policy.observability.report_generated"
+        assert hasattr(PolicyChangeEventType, "OBSERVABILITY_EXPORT_GENERATED")
+        assert PolicyChangeEventType.OBSERVABILITY_EXPORT_GENERATED.value == "policy.observability.export_generated"
+        assert hasattr(PolicyChangeEventType, "OBSERVABILITY_EXPORT_FAILED")
+        assert PolicyChangeEventType.OBSERVABILITY_EXPORT_FAILED.value == "policy.observability.export_failed"

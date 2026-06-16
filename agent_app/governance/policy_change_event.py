@@ -41,6 +41,9 @@ class PolicyChangeEventType(StrEnum):
     RUNTIME_POLICY_RULE_CREATED = "policy.runtime.rule.created"
     RUNTIME_POLICY_RULE_ENABLED = "policy.runtime.rule.enabled"
     RUNTIME_POLICY_RULE_DISABLED = "policy.runtime.rule.disabled"
+    OBSERVABILITY_REPORT_GENERATED = "policy.observability.report_generated"
+    OBSERVABILITY_EXPORT_GENERATED = "policy.observability.export_generated"
+    OBSERVABILITY_EXPORT_FAILED = "policy.observability.export_failed"
 
 
 class PolicyChangeEvent(BaseModel):

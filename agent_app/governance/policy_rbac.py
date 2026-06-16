@@ -78,6 +78,8 @@ class PolicyReleasePermission(StrEnum):
     RUNTIME_POLICY_ENABLE = "policy.runtime.enable"
     RUNTIME_POLICY_DISABLE = "policy.runtime.disable"
     RUNTIME_POLICY_EVALUATE = "policy.runtime.evaluate"
+    OBSERVABILITY_VIEW = "policy.observability.view"
+    OBSERVABILITY_EXPORT = "policy.observability.export"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -91,6 +93,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.ROLLOUT_APPROVAL_VIEW,
     PolicyReleasePermission.RUNTIME_POLICY_VIEW,
     PolicyReleasePermission.RUNTIME_POLICY_EVALUATE,
+    PolicyReleasePermission.OBSERVABILITY_VIEW,
 }
 
 
