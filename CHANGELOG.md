@@ -2,6 +2,32 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.26.0 — Phase 38: Runtime Policy Enforcement Points
+
+### Added
+- **PolicyEnforcementDecision model** — runtime enforcement decision with ped_ prefix
+- **RuntimePolicyRule model** — configurable enforcement rules with rpr_ prefix
+- **RuntimePolicyStore** — InMemory + SQLite implementations for runtime policy rules
+- **RuntimePolicyEvaluator** — rule matching with deny > require_approval > allow priority
+- **PolicyEnforcementService** — wraps evaluator with audit logging
+- **ToolExecutor enforcement** — runtime policy check before tool execution
+- **Resume enforcement** — runtime policy re-check before approval resume
+- **Runtime approval extension** — ApprovalRequest with optional policy/decisions/subject/action_type fields
+- **Runtime policies config** — YAML config for inline rules
+- **RBAC permissions** — RUNTIME_POLICY_CREATE/VIEW/ENABLE/DISABLE/EVALUATE
+- **Change event types** — RUNTIME_POLICY_RULE_CREATED/ENABLED/DISABLED/EVALUATED
+- **CLI runtime policy commands** — list, create, enable, disable, evaluate
+- **Console runtime policy pages** — rule list, detail, evaluate, enable/disable
+
+### Changed
+- **ToolExecutor.execute()** — optional enforcement check after permission check
+- **ApprovalResumeService** — optional policy re-check on resume
+
+### Backward Compatible
+- All new parameters default to None — existing behavior unchanged
+- Missing runtime_policies config preserves current behavior
+- Existing ToolSpec.requires_approval and Phase 37 approvals work unchanged
+
 ## v0.25.0 — Phase 37: Separation of Duties and Multi-Approver Approval Policies
 
 ### Added

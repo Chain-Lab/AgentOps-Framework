@@ -1250,3 +1250,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 35**: Multi-Environment Rollout Orchestration — rollout plans, step-by-step execution, gate/eval checks, approval blocking
 - **Phase 36** — Rollout Approval Workflow
 - **Phase 37**: Separation of Duties and Multi-Approver Approval Policies — quorum approvals, separation-of-duties checks, role/permission constraints, approval expiration
+- **Phase 38**: Runtime Policy Enforcement Points and Unified Approval Governance — tool execution enforcement, resume enforcement, runtime policy rules, CLI/console management

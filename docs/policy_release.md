@@ -2499,3 +2499,126 @@ New event types:
 - No cryptographic signatures on decisions
 - No delegated approval or approval groups
 - No recurring scheduled expiration worker; expiration is checked during action or explicit expire command
+
+---
+
+## Phase 38: Runtime Policy Enforcement Points and Unified Approval Governance
+
+Phase 38 extends approval policy enforcement into runtime execution paths so that approval and separation-of-duties controls are enforced consistently across tool execution, approval resume, and rollout approvals.
+
+### Runtime Policy Rules
+
+Runtime policy rules are configurable enforcement rules that are evaluated before tool execution and approval resume. Each rule specifies:
+
+- **action_type**: The action being governed (e.g., `tool.execute`, `tool.resume`)
+- **effect**: What happens when the rule matches (`allow`, `deny`, `require_approval`)
+- **tool_name/risk_level**: Optional matching criteria
+- **required_permissions/required_roles**: RBAC constraints
+- **approval_policy**: Optional quorum/separation-of-duties policy for `require_approval` effect
+
+```yaml
+governance:
+  runtime_policies:
+    type: memory
+    rules:
+      - name: require_quorum_for_refunds
+        action_type: tool.execute
+        effect: require_approval
+        tool_name: refund.request
+        required_permissions:
+          - refund:create
+        approval_policy:
+          policy_type: quorum
+          required_approvals: 2
+          allowed_approver_roles:
+            - finance_reviewer
+          prohibit_requester_approval: true
+          expires_after_seconds: 3600
+
+      - name: deny_dangerous_delete
+        action_type: tool.execute
+        effect: deny
+        tool_name: data.delete
+        reason: "Deletion is disabled in this environment"
+```
+
+### Policy Enforcement Points
+
+When a runtime policy enforcement service is configured, it is checked:
+
+1. **Before tool execution** (ToolExecutor.execute) — after permission check, before approval gate
+2. **Before approval resume** (ApprovalResumeService.approve_and_resume) — after TTL check, before policy engine
+
+If no matching rule exists, the action is ALLOWED (preserves existing behavior).
+
+### ToolExecutor Enforcement
+
+When a runtime policy rule matches:
+- **DENY** → tool execution returns FAILED with `policy_enforcement_denied`
+- **REQUIRE_APPROVAL** → tool execution returns INTERRUPTED with an approval request
+- **ALLOW** → continues to existing approval gate
+
+If both ToolSpec.requires_approval and a runtime policy REQUIRE_APPROVAL trigger, only one approval is created (ToolSpec takes precedence to avoid duplicates).
+
+### Resume Enforcement
+
+Before resuming an approved tool/action:
+- If policy now DENIES → resume returns failed
+- If policy now requires APPROVAL → resume returns interrupted
+- If policy still ALLOWS → resume continues
+
+### CLI Commands
+
+```bash
+# List runtime policy rules
+agentapp policy runtime list --config agentapp.yaml
+
+# Create a rule
+agentapp policy runtime create \
+  --config agentapp.yaml \
+  --name require_quorum_for_refunds \
+  --action-type tool.execute \
+  --effect require_approval \
+  --tool-name refund.request \
+  --actor-id admin \
+  --permissions policy.runtime.create
+
+# Enable/disable rules
+agentapp policy runtime enable --config agentapp.yaml --rule-id rpr_xxx
+agentapp policy runtime disable --config agentapp.yaml --rule-id rpr_xxx
+
+# Evaluate a policy decision
+agentapp policy runtime evaluate \
+  --config agentapp.yaml \
+  --action-type tool.execute \
+  --tool-name refund.request \
+  --actor-id user_123 \
+  --roles finance_reviewer \
+  --permissions refund:create
+```
+
+### Console Pages
+
+- **Runtime Rules** (`/policy-console/runtime-rules`) — list all rules with enable/disable
+- **Rule Detail** (`/policy-console/runtime-rules/{rule_id}`) — full rule details
+- **Runtime Evaluate** (`/policy-console/runtime-evaluate`) — interactive policy evaluation
+
+### Audit Events
+
+New event types:
+- `policy.runtime.enforcement.allowed` — action allowed by runtime policy
+- `policy.runtime.enforcement.denied` — action denied by runtime policy
+- `policy.runtime.enforcement.approval_required` — action requires approval per runtime policy
+- `policy.runtime.enforcement.error` — evaluator error during enforcement
+- `policy.runtime.rule.created/created/enabled/disabled` — rule lifecycle events
+
+### Known Limitations
+
+- Runtime policies are framework-level, not external IAM
+- Roles and permissions are supplied through RunContext / CLI, not from external identity providers
+- No OPA/Rego integration
+- No external identity provider
+- No distributed enforcement engine
+- No cryptographic signing
+- No real OpenAI RunState resume
+- Runtime approval quorum may be limited depending on generic approval model chosen
