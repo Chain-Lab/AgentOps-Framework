@@ -9,6 +9,8 @@ import json
 from typing import Any
 
 from agent_app.governance.policy_observability import PolicyObservabilityReport
+from agent_app.governance.policy_simulation import PolicySimulationReport
+from agent_app.runtime.policy_validation import PolicyValidationReport
 
 
 def report_to_json(report: PolicyObservabilityReport) -> str:
@@ -58,3 +60,29 @@ def report_to_csv_rows(report: PolicyObservabilityReport) -> list[dict[str, Any]
         })
 
     return rows
+
+
+def simulation_report_to_json(report: PolicySimulationReport) -> str:
+    """Export simulation report as JSON string."""
+    return report.model_dump_json(indent=2)
+
+
+def simulation_report_to_csv_rows(report: PolicySimulationReport) -> list[dict[str, Any]]:
+    """Export simulation report results as flat CSV-ready rows."""
+    rows: list[dict[str, Any]] = []
+    for result in report.results:
+        rows.append({
+            "case_id": result.case_id,
+            "baseline_status": result.baseline_status,
+            "candidate_status": result.candidate_status,
+            "outcome": result.outcome.value,
+            "reason": result.reason,
+            "decision_id": result.decision_id,
+            "errors": "; ".join(result.errors) if result.errors else "",
+        })
+    return rows
+
+
+def validation_report_to_json(report: PolicyValidationReport) -> str:
+    """Export validation report as JSON string."""
+    return report.model_dump_json(indent=2)

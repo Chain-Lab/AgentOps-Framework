@@ -453,6 +453,12 @@ class PolicyObservabilityConfig(BaseModel):
     enabled: bool = True
 
 
+class PolicySimulationConfig(BaseModel):
+    """Configuration for policy simulation and validation."""
+
+    enabled: bool = Field(default=False, description="Enable policy simulation service")
+
+
 class PolicyReleaseRuntimeConfig(BaseModel):
     """Runtime policy activation configuration (Phase 31)."""
 
@@ -835,6 +841,10 @@ class GovernanceConfig(BaseModel):
         default=None,
         description="Policy observability configuration (Phase 39)",
     )
+    policy_simulation: PolicySimulationConfig | None = Field(
+        default=None,
+        description="Policy simulation configuration (Phase 40)",
+    )
 
 
 class AppConfig(BaseModel):
@@ -882,7 +892,7 @@ class AppConfig(BaseModel):
             normalized_gov = {}
             for section in ("approvals", "audit", "permissions", "policies",
                             "policy_decisions", "policy_console", "policy_release",
-                            "runtime_policies", "policy_observability"):
+                            "runtime_policies", "policy_observability", "policy_simulation"):
                 val = gov.get(section)
                 if isinstance(val, dict):
                     normalized_gov[section] = val

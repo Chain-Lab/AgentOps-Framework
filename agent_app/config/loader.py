@@ -723,6 +723,15 @@ def build_app(
             )
         app._policy_observability_service = policy_observability_service
 
+        # Phase 40: Policy simulation service
+        simulation_config = getattr(gov, 'policy_simulation', None)
+        if simulation_config and simulation_config.enabled:
+            from agent_app.runtime.policy_simulation_service import PolicySimulationService
+            app.policy_simulation_service = PolicySimulationService(
+                audit_logger=audit_logger,
+                runtime_policy_store=runtime_policy_store,
+            )
+
     app._release_config = release_config
     return app
 

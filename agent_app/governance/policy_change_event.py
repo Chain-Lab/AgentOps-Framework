@@ -44,6 +44,10 @@ class PolicyChangeEventType(StrEnum):
     OBSERVABILITY_REPORT_GENERATED = "policy.observability.report_generated"
     OBSERVABILITY_EXPORT_GENERATED = "policy.observability.export_generated"
     OBSERVABILITY_EXPORT_FAILED = "policy.observability.export_failed"
+    SIMULATION_VALIDATION_RUN = "policy.simulation.validation_run"
+    SIMULATION_REPLAY_RUN = "policy.simulation.replay_run"
+    SIMULATION_EXPORT_GENERATED = "policy.simulation.export_generated"
+    SIMULATION_PERMISSION_DENIED = "policy.simulation.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):
