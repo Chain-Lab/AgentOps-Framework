@@ -2,6 +2,22 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.27.0 — Phase 39: Policy Observability and Analytics
+
+### Added
+- **PolicyObservabilityReport model** — aggregated governance analytics with por_ prefix
+- **PolicyObservabilityService** — generates reports from audit events and stores
+- **Policy compliance export** — JSON and CSV export helpers
+- **CLI observability commands** — report (with --since/--until/--json) and export (--format/--output)
+- **Console observability dashboard** — live dashboard with summary cards, action/actor/tool tables, approval latency, top denials
+- **Console report page** — filtered report with since/until inputs
+- **RBAC permissions** — OBSERVABILITY_VIEW (default-allowed), OBSERVABILITY_EXPORT
+- **Event types** — OBSERVABILITY_REPORT_GENERATED, OBSERVABILITY_EXPORT_GENERATED, EXPORT_FAILED
+
+### Backward Compatible
+- Missing policy_observability config preserves behavior
+- Service is optional; missing stores produce partial reports
+
 ## v0.26.0 — Phase 38: Runtime Policy Enforcement Points
 
 ### Added

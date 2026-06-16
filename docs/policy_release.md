@@ -2622,3 +2622,87 @@ New event types:
 - No cryptographic signing
 - No real OpenAI RunState resume
 - Runtime approval quorum may be limited depending on generic approval model chosen
+
+---
+
+## Phase 39: Policy Observability, Analytics, and Compliance Reporting
+
+Phase 39 makes the unified governance model visible through analytics, reports, exports, and dashboards using existing audit events and stores.
+
+### Observability Report
+
+The `PolicyObservabilityService` aggregates enforcement decisions from audit events into a structured report:
+
+```bash
+# Generate report
+agentapp policy observability report --config agentapp.yaml
+
+# With time window
+agentapp policy observability report \
+  --config agentapp.yaml \
+  --since 2026-06-01T00:00:00Z \
+  --until 2026-06-15T23:59:59Z
+
+# JSON output
+agentapp policy observability report --config agentapp.yaml --json
+```
+
+### Report Contents
+
+- **Total decisions**: Count of all enforcement decisions in the window
+- **By status**: allowed, denied, approval_required counts
+- **By action type**: Per-action-type breakdown (e.g., tool.execute)
+- **By actor**: Per-actor breakdown (who triggered decisions)
+- **By tool**: Per-tool breakdown
+- **Approval latency**: min/max/average resolution time from rollout approvals
+- **Top denials**: Most frequent denial reasons
+
+### Export
+
+```bash
+# JSON export
+agentapp policy observability export \
+  --config agentapp.yaml \
+  --format json \
+  --output policy_report.json
+
+# CSV export
+agentapp policy observability export \
+  --config agentapp.yaml \
+  --format csv \
+  --output policy_report.csv
+```
+
+### Console Dashboard
+
+- **Observability** (`/policy-console/observability`) — live dashboard with summary cards and tables
+- **Report** (`/policy-console/observability/report`) — filtered report with since/until inputs
+
+### Data Sources
+
+The service reads from:
+- **Audit events**: `policy.runtime.enforcement.allowed/denied/approval_required` events from InMemoryAuditLogger or SQLiteAuditLogger
+- **Rollout approval store**: For approval latency computation (resolved_at - created_at)
+- All interactions are best-effort; missing stores produce partial reports
+
+### Configuration
+
+```yaml
+governance:
+  policy_observability:
+    enabled: true  # default
+```
+
+### RBAC
+
+- `policy.observability.view` — default-allowed (view dashboard and reports)
+- `policy.observability.export` — requires explicit permission
+
+### Known Limitations
+
+- Reports are generated on demand, not scheduled or persisted
+- No external BI integration
+- No Prometheus/OpenTelemetry exporter
+- Analytics depend on audit event completeness
+- CSV export is MVP-level (flat rows with section/key columns)
+- No charts beyond basic console tables
