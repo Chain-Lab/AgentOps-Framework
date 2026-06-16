@@ -28,13 +28,15 @@
       <a href="/policy-console/runtime-rules" class="{% if '/runtime-rules' in request.url.path %}active{% endif %}">Runtime Rules</a>
       <a href="/policy-console/runtime-evaluate" class="{% if '/runtime-evaluate' in request.url.path %}active{% endif %}">Runtime Eval</a>
       <a href="/policy-console/routing/simulate" class="{% if '/routing/simulate' in request.url.path %}active{% endif %}">Routing Sim</a>
+      <a href="/policy-console/observability" class="{% if request.url.path == '/policy-console/observability' %}active{% endif %}">Observability</a>
+      <a href="/policy-console/observability/report" class="{% if '/observability/report' in request.url.path %}active{% endif %}">Obs Report</a>
     </nav>
   </header>
   <main class="console-main">
     {% block content %}{% endblock %}
   </main>
   <footer class="console-footer">
-    <p>Read-only. Policy Console Lite — Phase 26. Promotion write actions — Phase 30. Runtime policy — Phase 38.</p>
+    <p>Read-only. Policy Console Lite — Phase 26. Promotion write actions — Phase 30. Runtime policy — Phase 38. Observability — Phase 39.</p>
   </footer>
 </body>
 </html>

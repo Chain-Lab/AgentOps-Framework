@@ -9,6 +9,7 @@ Phase 29: Added read-only pages for policy bundles and gate results.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -55,6 +56,7 @@ def build_policy_console_router(
     approval_store: Any = None,
     runtime_policy_store: Any = None,
     policy_enforcement_service: Any = None,
+    observability_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -2563,6 +2565,100 @@ def build_policy_console_router(
                 "store_available": approval_store is not None,
                 "approval": approval_dict,
                 "error": error_msg,
+            },
+        )
+
+    # Phase 39: Observability routes
+    @router.get("/observability", response_class=HTMLResponse)
+    async def observability_dashboard(request: Request):
+        """Observability dashboard — aggregated enforcement analytics."""
+        service = observability_service
+        if service is None:
+            return HTMLResponse(
+                "<p>Policy observability not configured.</p>",
+                status_code=404,
+            )
+        report = await service.generate_report()
+        return templates.TemplateResponse(
+            request,
+            "policy_observability.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report,
+            },
+        )
+
+    @router.get("/observability/report", response_class=HTMLResponse)
+    async def observability_report_form(request: Request):
+        """Observability report form — filter by time window."""
+        return templates.TemplateResponse(
+            request,
+            "policy_observability_report.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": None,
+            },
+        )
+
+    @router.post("/observability/report", response_class=HTMLResponse)
+    async def observability_report_submit(request: Request):
+        """Observability report — generate filtered report."""
+        service = observability_service
+        if service is None:
+            return HTMLResponse(
+                "<p>Policy observability not configured.</p>",
+                status_code=404,
+            )
+
+        form = await request.form()
+        since_str = form.get("since", "")
+        until_str = form.get("until", "")
+
+        window_start = None
+        window_end = None
+        error = None
+
+        if since_str:
+            try:
+                window_start = datetime.fromisoformat(
+                    since_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for since: {since_str}"
+        if until_str:
+            try:
+                window_end = datetime.fromisoformat(
+                    until_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for until: {until_str}"
+
+        if error:
+            return templates.TemplateResponse(
+                request,
+                "policy_observability_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": error,
+                },
+            )
+
+        report = await service.generate_report(
+            window_start=window_start, window_end=window_end
+        )
+        return templates.TemplateResponse(
+            request,
+            "policy_observability_report.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report,
+                "since": since_str,
+                "until": until_str,
             },
         )
 

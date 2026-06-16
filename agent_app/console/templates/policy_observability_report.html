@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Observability Report</h2>
+
+<form method="post" action="{{ base_path }}/observability/report">
+  <label>Since (ISO datetime): <input type="text" name="since" placeholder="2026-01-01T00:00:00Z" value="{{ since or '' }}"></label>
+  <label>Until (ISO datetime): <input type="text" name="until" placeholder="2026-12-31T23:59:59Z" value="{{ until or '' }}"></label>
+  <button type="submit">Generate Report</button>
+</form>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+{% endif %}
+
+{% if report %}
+
+<p><em>Report ID: {{ report.report_id }} | Generated: {{ report.generated_at }}</em></p>
+{% if report.window_start or report.window_end %}
+<p><em>Window: {{ report.window_start or '—' }} to {{ report.window_end or '—' }}</em></p>
+{% endif %}
+
+<!-- Summary cards -->
+<section class="report-section">
+  <h2>Summary</h2>
+  <div class="summary-cards">
+    <div class="card">
+      <h3>Total Decisions</h3>
+      <p class="card-value">{{ report.total_decisions }}</p>
+    </div>
+    {% for status in report.decisions_by_status %}
+    <div class="card">
+      <h3>{{ status.status | replace('_', ' ') | title }}</h3>
+      <p class="card-value">{{ status.count }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- Approval latency card -->
+{% if report.approval_latency and report.approval_latency.count > 0 %}
+<section class="report-section">
+  <h2>Approval Latency</h2>
+  <div class="summary-cards">
+    <div class="card">
+      <h3>Resolved Approvals</h3>
+      <p class="card-value">{{ report.approval_latency.count }}</p>
+    </div>
+    <div class="card">
+      <h3>Average</h3>
+      <p class="card-value">{{ report.approval_latency.average_seconds }}s</p>
+    </div>
+    <div class="card">
+      <h3>Min</h3>
+      <p class="card-value">{{ report.approval_latency.min_seconds }}s</p>
+    </div>
+    <div class="card">
+      <h3>Max</h3>
+      <p class="card-value">{{ report.approval_latency.max_seconds }}s</p>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<!-- Actions table -->
+{% if report.actions %}
+<section class="report-section">
+  <h2>Actions</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Action Type</th>
+        <th>Allowed</th>
+        <th>Denied</th>
+        <th>Approval Required</th>
+        <th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for action in report.actions %}
+      <tr>
+        <td>{{ action.action_type }}</td>
+        <td>{{ action.allowed }}</td>
+        <td>{{ action.denied }}</td>
+        <td>{{ action.approval_required }}</td>
+        <td>{{ action.total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- Top actors table -->
+{% if report.actors %}
+<section class="report-section">
+  <h2>Top Actors</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Actor</th>
+        <th>Allowed</th>
+        <th>Denied</th>
+        <th>Approval Required</th>
+        <th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for actor in report.actors[:5] %}
+      <tr>
+        <td>{{ actor.actor_id }}</td>
+        <td>{{ actor.allowed }}</td>
+        <td>{{ actor.denied }}</td>
+        <td>{{ actor.approval_required }}</td>
+        <td>{{ actor.total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- Top tools table -->
+{% if report.tools %}
+<section class="report-section">
+  <h2>Top Tools</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>Allowed</th>
+        <th>Denied</th>
+        <th>Approval Required</th>
+        <th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tool in report.tools[:5] %}
+      <tr>
+        <td>{{ tool.tool_name }}</td>
+        <td>{{ tool.allowed }}</td>
+        <td>{{ tool.denied }}</td>
+        <td>{{ tool.approval_required }}</td>
+        <td>{{ tool.total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- Top denials table -->
+{% if report.top_denials %}
+<section class="report-section">
+  <h2>Top Denials</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Reason</th>
+        <th>Count</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for denial in report.top_denials %}
+      <tr>
+        <td>{{ denial.reason }}</td>
+        <td>{{ denial.count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% endif %}
+{% endblock %}
