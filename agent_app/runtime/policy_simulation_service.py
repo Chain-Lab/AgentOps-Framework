@@ -18,7 +18,9 @@ from agent_app.governance.policy_simulation import (
     PolicySimulationResult,
     PolicySimulationSummary,
 )
+from agent_app.governance.policy_gate import PolicyGateRule
 from agent_app.governance.runtime_policy import RuntimePolicyRule
+from agent_app.runtime.policy_validation import PolicyValidationReport
 from agent_app.runtime.policy_simulation_cases import audit_event_to_simulation_case
 from agent_app.runtime.runtime_policy_evaluator import (
     RuntimePolicyEvaluationRequest,
@@ -203,6 +205,64 @@ class PolicySimulationService:
             include_base=include_base,
             name=name,
         )
+
+    async def validate_and_gate(
+        self,
+        candidate_rules: list[RuntimePolicyRule],
+        gate_rules: list[PolicyGateRule],
+        include_base: bool = True,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+        limit: int | None = None,
+        name: str | None = None,
+    ) -> tuple[PolicySimulationReport, PolicyValidationReport, PolicyGateResult]:
+        """Validate candidate rules, replay historical audit, and evaluate gate.
+
+        Orchestrates the full validate → replay → gate pipeline.
+
+        Args:
+            candidate_rules: Candidate runtime policy rules to test.
+            gate_rules: Gate rules to evaluate against.
+            include_base: If True, include existing base rules alongside candidates.
+            window_start: Only include audit events at or after this time.
+            window_end: Only include audit events before this time.
+            limit: Maximum number of audit cases to include.
+            name: Optional name for the simulation report.
+
+        Returns:
+            Tuple of (PolicySimulationReport, PolicyValidationReport, PolicyGateResult).
+        """
+        from agent_app.governance.policy_simulation_gate import SimulationGateInput
+        from agent_app.runtime.policy_simulation_gate_evaluator import SimulationGateEvaluator
+        from agent_app.runtime.policy_validation import RuntimePolicyValidator
+
+        # Step 1: Validate candidate rules
+        validator = RuntimePolicyValidator()
+        validation_report = validator.validate_rules(candidate_rules)
+
+        # Step 2: Replay historical audit
+        sim_report = await self.simulate_from_audit(
+            candidate_rules=candidate_rules,
+            include_base=include_base,
+            window_start=window_start,
+            window_end=window_end,
+            limit=limit,
+            name=name,
+        )
+
+        # Step 3: Build gate input
+        gate_input = SimulationGateInput(
+            simulation_report=sim_report,
+            validation_report=validation_report,
+            candidate_rule_ids=[r.rule_id for r in candidate_rules],
+        )
+
+        # Step 4: Evaluate gate
+        gate_evaluator = SimulationGateEvaluator(rules=gate_rules)
+        gate_result = await gate_evaluator.evaluate(gate_input, name=name)
+
+        # Step 5: Return all three reports
+        return sim_report, validation_report, gate_result
 
     def _build_evaluation_request(
         self, case: PolicySimulationCase
