@@ -1252,3 +1252,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 37**: Separation of Duties and Multi-Approver Approval Policies — quorum approvals, separation-of-duties checks, role/permission constraints, approval expiration
 - **Phase 38**: Runtime Policy Enforcement Points and Unified Approval Governance — tool execution enforcement, resume enforcement, runtime policy rules, CLI/console management
 - **Phase 39**: Policy Observability, Analytics, and Compliance Reporting — enforcement decision analytics, approval latency, JSON/CSV export, console dashboard
+- **Phase 40**: Policy Testing, Validation, and Historical Replay — simulation framework, audit-to-case extraction, candidate policy stores, policy validation, CLI/console simulation

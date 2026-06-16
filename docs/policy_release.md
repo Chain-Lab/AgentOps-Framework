@@ -2706,3 +2706,111 @@ governance:
 - Analytics depend on audit event completeness
 - CSV export is MVP-level (flat rows with section/key columns)
 - No charts beyond basic console tables
+
+---
+
+## Phase 40: Policy Testing, Validation, and Historical Replay
+
+**Version:** v0.28.0
+**Status:** Complete
+
+### Overview
+
+Phase 40 adds a policy simulation and validation framework that allows teams to test runtime policy rule changes against historical audit events before deploying them. Teams can answer: "If we enable this new runtime policy rule, what would have changed historically?"
+
+### New Models
+
+| Model | Prefix | Purpose |
+|-------|--------|---------|
+| PolicySimulationOutcome | — | Enum: UNCHANGED, WOULD_ALLOW, WOULD_DENY, WOULD_REQUIRE_APPROVAL, WOULD_CHANGE, ERROR |
+| PolicySimulationCase | psc_ | Single case extracted from audit history |
+| PolicySimulationResult | — | Per-case simulation outcome |
+| PolicySimulationSummary | — | Aggregate counts |
+| PolicySimulationReport | psim_ | Full simulation report |
+| PolicyValidationSeverity | — | ERROR, WARNING, INFO |
+| PolicyValidationIssue | — | Single validation issue |
+| PolicyValidationReport | — | Validation report |
+
+### New Modules
+
+| Module | Responsibility |
+|--------|---------------|
+| `governance/policy_simulation.py` | Simulation models |
+| `runtime/policy_simulation_cases.py` | Audit-to-case extraction |
+| `runtime/policy_candidate_store.py` | Isolated candidate policy store builder |
+| `runtime/policy_simulation_service.py` | Simulation service (collect, evaluate, report) |
+| `runtime/policy_validation.py` | Runtime policy rule validation |
+
+### Key Features
+
+1. **Audit-to-case extraction**: Convert runtime enforcement audit events into simulation cases
+2. **Candidate policy stores**: Build isolated InMemoryRuntimePolicyStore for simulation without mutating active rules
+3. **Simulation service**: Collect cases from audit, evaluate against candidate rules, produce impact reports
+4. **Policy validation**: Check candidate rules for duplicate names, broad rules, conflicting rules, missing approval policies
+5. **Export helpers**: JSON and CSV export for simulation and validation reports
+6. **CLI commands**: `policy simulation validate`, `policy simulation replay`, `policy simulation export`
+7. **Console pages**: Simulation dashboard with validation and replay forms
+
+### Validation Checks
+
+- Duplicate rule names (warning)
+- DENY rule with approval_policy (warning)
+- REQUIRE_APPROVAL rule without approval_policy (warning)
+- Broad rule with no tool_name or risk_level (warning)
+- Conflicting rules with same scope but different effects (warning)
+
+### RBAC Permissions
+
+| Permission | Default |
+|-----------|---------|
+| policy.simulation.run | Requires explicit permission |
+| policy.simulation.view | Default allowed |
+| policy.simulation.export | Requires explicit permission |
+
+### Audit Events
+
+- `policy.simulation.validation_run`
+- `policy.simulation.replay_run`
+- `policy.simulation.export_generated`
+- `policy.simulation.permission_denied`
+
+### Configuration
+
+```yaml
+governance:
+  policy_simulation:
+    enabled: true
+```
+
+### CLI Examples
+
+```bash
+# Validate candidate rules
+agentapp policy simulation validate \
+  --config agentapp.yaml \
+  --rules-file candidate_rules.yaml
+
+# Replay historical audit against candidate rules
+agentapp policy simulation replay \
+  --config agentapp.yaml \
+  --rules-file candidate_rules.yaml \
+  --since 2026-06-01T00:00:00Z \
+  --limit 1000
+
+# Export simulation report
+agentapp policy simulation export \
+  --config agentapp.yaml \
+  --rules-file candidate_rules.yaml \
+  --format csv \
+  --output simulation_report.csv
+```
+
+### Known Limitations
+
+- Simulation uses historical audit events only
+- Does not shadow live traffic
+- Does not call tools or models
+- Depends on audit event completeness
+- No external SIEM integration
+- Gate integration may be basic or deferred
+- Not a formal proof of policy correctness

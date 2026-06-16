@@ -2,6 +2,22 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.28.0 (2026-06-16)
+
+### Phase 40: Policy Testing, Validation, and Historical Replay
+
+- **New:** Policy simulation models (PolicySimulationOutcome, PolicySimulationCase, PolicySimulationResult, PolicySimulationSummary, PolicySimulationReport)
+- **New:** Audit-to-simulation case extraction (audit_event_to_simulation_case)
+- **New:** Candidate policy store builder (build_candidate_policy_store)
+- **New:** PolicySimulationService with collect_cases_from_audit, simulate_cases, simulate_from_audit
+- **New:** RuntimePolicyValidator with duplicate name, broad rule, conflicting rule, approval policy checks
+- **New:** Simulation export helpers (simulation_report_to_json, simulation_report_to_csv_rows, validation_report_to_json)
+- **New:** CLI commands: policy simulation validate/replay/export
+- **New:** Console simulation pages with validation and replay forms
+- **New:** RBAC permissions: SIMULATION_RUN, SIMULATION_VIEW, SIMULATION_EXPORT
+- **New:** Audit event types: SIMULATION_VALIDATION_RUN, SIMULATION_REPLAY_RUN, SIMULATION_EXPORT_GENERATED, SIMULATION_PERMISSION_DENIED
+- **New:** PolicySimulationConfig (governance.policy_simulation.enabled)
+
 ## v0.27.0 — Phase 39: Policy Observability and Analytics
 
 ### Added
