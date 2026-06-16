@@ -48,6 +48,10 @@ class PolicyChangeEventType(StrEnum):
     SIMULATION_REPLAY_RUN = "policy.simulation.replay_run"
     SIMULATION_EXPORT_GENERATED = "policy.simulation.export_generated"
     SIMULATION_PERMISSION_DENIED = "policy.simulation.permission_denied"
+    SIMULATION_GATE_RUN = "policy.simulation.gate_run"
+    SIMULATION_GATE_PASSED = "policy.simulation.gate_passed"
+    SIMULATION_GATE_FAILED = "policy.simulation.gate_failed"
+    SIMULATION_GATE_PERMISSION_DENIED = "policy.simulation.gate_permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

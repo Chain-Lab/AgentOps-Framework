@@ -732,6 +732,26 @@ def build_app(
                 runtime_policy_store=runtime_policy_store,
             )
 
+            # Phase 41: Simulation gate evaluator
+            if simulation_config.gates:
+                from agent_app.governance.policy_gate import PolicyGateRule
+                from agent_app.runtime.policy_simulation_gate_evaluator import SimulationGateEvaluator
+
+                gate_rules = [
+                    PolicyGateRule(
+                        name=gc.name,
+                        description=gc.description,
+                        max_changed_decisions=gc.max_changed_decisions,
+                        max_changed_ratio=gc.max_changed_ratio,
+                        max_failed_replays=gc.max_failed_replays,
+                        max_new_denies=gc.max_new_denies,
+                        max_new_approvals=gc.max_new_approvals,
+                        fail_on_missing_required_context=gc.fail_on_missing_required_context,
+                    )
+                    for gc in simulation_config.gates
+                ]
+                app.simulation_gate_evaluator = SimulationGateEvaluator(rules=gate_rules)
+
     app._release_config = release_config
     return app
 

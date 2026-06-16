@@ -47,13 +47,24 @@ class TestPolicyChangeEventType:
             "policy.runtime.rule.created",
             "policy.runtime.rule.enabled",
             "policy.runtime.rule.disabled",
+            "policy.observability.report_generated",
+            "policy.observability.export_generated",
+            "policy.observability.export_failed",
+            "policy.simulation.validation_run",
+            "policy.simulation.replay_run",
+            "policy.simulation.export_generated",
+            "policy.simulation.permission_denied",
+            "policy.simulation.gate_run",
+            "policy.simulation.gate_passed",
+            "policy.simulation.gate_failed",
+            "policy.simulation.gate_permission_denied",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 29 enum members defined."""
-        assert len(PolicyChangeEventType) == 29
+        """Exactly 40 enum members defined."""
+        assert len(PolicyChangeEventType) == 40
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""

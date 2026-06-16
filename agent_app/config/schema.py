@@ -457,6 +457,10 @@ class PolicySimulationConfig(BaseModel):
     """Configuration for policy simulation and validation."""
 
     enabled: bool = Field(default=False, description="Enable policy simulation service")
+    gates: list[PolicyGateRuleConfig] = Field(
+        default_factory=list,
+        description="Simulation gate rules (reuses PolicyGateRuleConfig)",
+    )
 
 
 class PolicyReleaseRuntimeConfig(BaseModel):

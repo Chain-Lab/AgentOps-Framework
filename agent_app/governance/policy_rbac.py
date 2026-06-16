@@ -83,6 +83,8 @@ class PolicyReleasePermission(StrEnum):
     SIMULATION_RUN = "policy.simulation.run"
     SIMULATION_VIEW = "policy.simulation.view"
     SIMULATION_EXPORT = "policy.simulation.export"
+    SIMULATION_GATE_RUN = "policy.simulation.gate.run"
+    SIMULATION_GATE_VIEW = "policy.simulation.gate.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -98,6 +100,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.RUNTIME_POLICY_EVALUATE,
     PolicyReleasePermission.OBSERVABILITY_VIEW,
     PolicyReleasePermission.SIMULATION_VIEW,
+    PolicyReleasePermission.SIMULATION_GATE_VIEW,
 }
 
 
