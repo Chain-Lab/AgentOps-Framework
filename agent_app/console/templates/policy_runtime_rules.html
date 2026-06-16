@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Runtime Policy Rules</h2>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+{% endif %}
+
+{% if rules %}
+<table class="console-table">
+  <thead>
+    <tr>
+      <th>Rule ID</th>
+      <th>Name</th>
+      <th>Action Type</th>
+      <th>Effect</th>
+      <th>Status</th>
+      <th>Tool Name</th>
+      <th>Risk Level</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for rule in rules %}
+    <tr>
+      <td><a href="{{ base_path }}/runtime-rules/{{ rule.rule_id }}">{{ rule.rule_id }}</a></td>
+      <td>{{ rule.name }}</td>
+      <td>{{ rule.action_type }}</td>
+      <td>{{ rule.effect }}</td>
+      <td>{{ rule.status }}</td>
+      <td>{{ rule.tool_name }}</td>
+      <td>{{ rule.risk_level }}</td>
+      <td>
+        {% if rule.status == 'enabled' %}
+        <form method="post" action="{{ base_path }}/runtime-rules/{{ rule.rule_id }}/disable" style="display:inline">
+          <button type="submit">Disable</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ base_path }}/runtime-rules/{{ rule.rule_id }}/enable" style="display:inline">
+          <button type="submit">Enable</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No runtime policy rules found.</p>
+{% endif %}
+
+<h3>Create New Rule</h3>
+<form method="post" action="{{ base_path }}/runtime-rules">
+  <label>Rule ID: <input type="text" name="rule_id" placeholder="rpr_example" required></label>
+  <label>Name: <input type="text" name="name" required></label>
+  <label>Action Type:
+    <select name="action_type">
+      <option value="tool.execute">tool.execute</option>
+      <option value="tool.resume">tool.resume</option>
+      <option value="approval.approve">approval.approve</option>
+      <option value="approval.reject">approval.reject</option>
+      <option value="rollout.step.execute">rollout.step.execute</option>
+      <option value="policy.promotion.execute">policy.promotion.execute</option>
+    </select>
+  </label>
+  <label>Effect:
+    <select name="effect">
+      <option value="allow">allow</option>
+      <option value="deny">deny</option>
+      <option value="require_approval">require_approval</option>
+    </select>
+  </label>
+  <label>Tool Name: <input type="text" name="tool_name" placeholder="(optional)"></label>
+  <label>Risk Level: <input type="text" name="risk_level" placeholder="(optional)"></label>
+  <label>Reason: <input type="text" name="reason" placeholder="(optional)"></label>
+  <button type="submit">Create Rule</button>
+</form>
+{% endblock %}

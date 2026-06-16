@@ -25,7 +25,13 @@ from agent_app.governance.policy_decision_store import (
     PolicyReportingService,
 )
 from agent_app.governance.policy_activation import PolicyActivationStatus
+from agent_app.governance.policy_enforcement import PolicyActionType
 from agent_app.runtime.policy_replay_store import PolicyReplayStore
+
+try:
+    from fastapi.responses import RedirectResponse
+except ImportError:
+    RedirectResponse = None  # type: ignore[assignment,misc]
 
 
 def build_policy_console_router(
@@ -47,6 +53,8 @@ def build_policy_console_router(
     rollout_store: Any = None,
     rollout_service: Any = None,
     approval_store: Any = None,
+    runtime_policy_store: Any = None,
+    policy_enforcement_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -69,6 +77,8 @@ def build_policy_console_router(
         rollout_store: Optional rollout plan store (Phase 35).
         rollout_service: Optional rollout service (Phase 35).
         approval_store: Optional rollout step approval store (Phase 36).
+        runtime_policy_store: Optional runtime policy rule store (Phase 38).
+        policy_enforcement_service: Optional policy enforcement service (Phase 38).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -2044,6 +2054,265 @@ def build_policy_console_router(
                 "plan": plan_detail,
                 "message": message,
                 "error": None if plan_detail else message,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 38 Task 8: Runtime policy pages
+    # -----------------------------------------------------------------------
+
+    def _runtime_rule_to_row(rule: Any) -> dict:
+        """Convert a RuntimePolicyRule to a template row dict."""
+        return {
+            "rule_id": rule.rule_id,
+            "name": rule.name,
+            "effect": rule.effect.value if hasattr(rule.effect, "value") else str(rule.effect),
+            "status": rule.status.value if hasattr(rule.status, "value") else str(rule.status),
+            "action_type": rule.action_type.value if hasattr(rule.action_type, "value") else str(rule.action_type),
+            "tool_name": rule.tool_name or "—",
+            "risk_level": rule.risk_level or "—",
+            "reason": rule.reason or "—",
+        }
+
+    def _runtime_rule_to_detail(rule: Any) -> dict:
+        """Convert a RuntimePolicyRule to a detail page dict."""
+        ap = rule.approval_policy
+        ap_dict = None
+        if ap is not None:
+            ap_dict = {
+                "policy_type": ap.policy_type.value if hasattr(ap.policy_type, "value") else str(ap.policy_type),
+                "required_approvals": ap.required_approvals,
+                "allowed_approver_permissions": list(ap.allowed_approver_permissions) if hasattr(ap, "allowed_approver_permissions") else [],
+                "allowed_approver_roles": list(ap.allowed_approver_roles) if hasattr(ap, "allowed_approver_roles") else [],
+                "prohibit_requester_approval": ap.prohibit_requester_approval,
+                "expires_after_seconds": ap.expires_after_seconds,
+            }
+        return {
+            "rule_id": rule.rule_id,
+            "name": rule.name,
+            "action_type": rule.action_type.value if hasattr(rule.action_type, "value") else str(rule.action_type),
+            "effect": rule.effect.value if hasattr(rule.effect, "value") else str(rule.effect),
+            "status": rule.status.value if hasattr(rule.status, "value") else str(rule.status),
+            "tool_name": rule.tool_name or "—",
+            "risk_level": rule.risk_level or "—",
+            "required_permissions": list(rule.required_permissions),
+            "required_roles": list(rule.required_roles),
+            "approval_policy": ap_dict,
+            "reason": rule.reason or "—",
+            "metadata": rule.metadata or {},
+        }
+
+    @router.get("/runtime-rules", response_class=HTMLResponse)
+    async def runtime_rules_list(request: Request):
+        """List runtime policy rules."""
+        if runtime_policy_store is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        rules = await runtime_policy_store.list()
+        rows = [_runtime_rule_to_row(r) for r in rules]
+        return templates.TemplateResponse(
+            request,
+            "policy_runtime_rules.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rules": rows,
+                "error": None,
+            },
+        )
+
+    @router.get("/runtime-rules/{rule_id}", response_class=HTMLResponse)
+    async def runtime_rule_detail(request: Request, rule_id: str):
+        """Show runtime policy rule detail."""
+        if runtime_policy_store is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        rule = await runtime_policy_store.get(rule_id)
+        if rule is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_runtime_rule_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "rule": None,
+                    "error": f"Rule '{rule_id}' not found.",
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "policy_runtime_rule_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rule": _runtime_rule_to_detail(rule),
+                "error": None,
+            },
+        )
+
+    @router.post("/runtime-rules", response_class=HTMLResponse)
+    async def runtime_rule_create(request: Request):
+        """Create a runtime policy rule."""
+        if runtime_policy_store is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        message = None
+        try:
+            from agent_app.governance.runtime_policy import (
+                RuntimePolicyEffect,
+                RuntimePolicyRule,
+                RuntimePolicyRuleStatus,
+            )
+            form = await request.form()
+            rule_id = form.get("rule_id", "")
+            name = form.get("name", "")
+            action_type_str = form.get("action_type", "tool.execute")
+            effect_str = form.get("effect", "allow")
+            tool_name = form.get("tool_name") or None
+            risk_level = form.get("risk_level") or None
+            reason = form.get("reason") or None
+
+            if not rule_id or not name:
+                message = "rule_id and name are required."
+            else:
+                action_type = PolicyActionType(action_type_str)
+                effect = RuntimePolicyEffect(effect_str)
+                rule = RuntimePolicyRule(
+                    rule_id=rule_id,
+                    name=name,
+                    action_type=action_type,
+                    effect=effect,
+                    tool_name=tool_name,
+                    risk_level=risk_level,
+                    reason=reason,
+                )
+                await runtime_policy_store.create(rule)
+                message = f"Rule '{rule_id}' created."
+        except (ValueError, KeyError) as exc:
+            message = str(exc)
+        except Exception as exc:
+            message = str(exc)
+
+        rules = await runtime_policy_store.list()
+        rows = [_runtime_rule_to_row(r) for r in rules]
+        return templates.TemplateResponse(
+            request,
+            "policy_runtime_rules.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rules": rows,
+                "error": message,
+            },
+        )
+
+    @router.post("/runtime-rules/{rule_id}/enable", response_class=HTMLResponse)
+    async def runtime_rule_enable(request: Request, rule_id: str):
+        """Enable a runtime policy rule."""
+        if runtime_policy_store is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        try:
+            await runtime_policy_store.enable(rule_id)
+        except KeyError:
+            return HTMLResponse("<p>Rule not found.</p>", status_code=404)
+        return RedirectResponse(
+            f"{base_path}/runtime-rules/{rule_id}", status_code=303
+        )
+
+    @router.post("/runtime-rules/{rule_id}/disable", response_class=HTMLResponse)
+    async def runtime_rule_disable(request: Request, rule_id: str):
+        """Disable a runtime policy rule."""
+        if runtime_policy_store is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        try:
+            await runtime_policy_store.disable(rule_id)
+        except KeyError:
+            return HTMLResponse("<p>Rule not found.</p>", status_code=404)
+        return RedirectResponse(
+            f"{base_path}/runtime-rules/{rule_id}", status_code=303
+        )
+
+    @router.get("/runtime-evaluate", response_class=HTMLResponse)
+    async def runtime_evaluate_form(request: Request):
+        """Show runtime policy evaluation form."""
+        return templates.TemplateResponse(
+            request,
+            "policy_runtime_evaluate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "result": None,
+                "message": None,
+            },
+        )
+
+    @router.post("/runtime-evaluate", response_class=HTMLResponse)
+    async def runtime_evaluate_submit(request: Request):
+        """Evaluate a runtime policy decision."""
+        if policy_enforcement_service is None:
+            return HTMLResponse(
+                "<p>Runtime policy not configured.</p>", status_code=404
+            )
+        result = None
+        message = None
+        try:
+            from agent_app.core.context import RunContext
+            from agent_app.runtime.runtime_policy_evaluator import RuntimePolicyEvaluationRequest
+
+            form = await request.form()
+            action_type_str = form.get("action_type", "tool.execute")
+            tool_name = form.get("tool_name") or None
+            risk_level = form.get("risk_level") or None
+            actor_id = form.get("actor_id", "anonymous")
+            permissions_str = form.get("permissions", "")
+            roles_str = form.get("roles", "")
+
+            permissions = [p.strip() for p in permissions_str.split(",") if p.strip()] if permissions_str else []
+            roles = [r.strip() for r in roles_str.split(",") if r.strip()] if roles_str else []
+
+            action_type = PolicyActionType(action_type_str)
+            context = RunContext(
+                run_id=f"console_eval_{actor_id}",
+                user_id=actor_id,
+                tenant_id=form.get("tenant_id") or "default",
+                permissions=permissions,
+                roles=roles,
+            )
+            eval_request = RuntimePolicyEvaluationRequest(
+                action_type=action_type,
+                tool_name=tool_name,
+                risk_level=risk_level,
+                context=context,
+            )
+            decision = await policy_enforcement_service.enforce(eval_request)
+            result = {
+                "decision_id": decision.decision_id,
+                "status": decision.status.value,
+                "action_type": decision.action_type.value,
+                "reason": decision.reason or "—",
+                "required_permissions": list(decision.required_permissions),
+                "required_roles": list(decision.required_roles),
+            }
+        except (ValueError, KeyError) as exc:
+            message = str(exc)
+        except Exception as exc:
+            message = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_runtime_evaluate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "result": result,
+                "message": message,
             },
         )
 

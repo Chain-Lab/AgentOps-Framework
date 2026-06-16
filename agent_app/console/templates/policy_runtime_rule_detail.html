@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Runtime Policy Rule Detail</h2>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+<p><a href="{{ base_path }}/runtime-rules">Back to rules list</a></p>
+{% elif rule %}
+<p><a href="{{ base_path }}/runtime-rules">&larr; Back to rules list</a></p>
+
+<table class="console-table">
+  <tr><th>Rule ID</th><td>{{ rule.rule_id }}</td></tr>
+  <tr><th>Name</th><td>{{ rule.name }}</td></tr>
+  <tr><th>Action Type</th><td>{{ rule.action_type }}</td></tr>
+  <tr><th>Effect</th><td>{{ rule.effect }}</td></tr>
+  <tr><th>Status</th><td>{{ rule.status }}</td></tr>
+  <tr><th>Tool Name</th><td>{{ rule.tool_name }}</td></tr>
+  <tr><th>Risk Level</th><td>{{ rule.risk_level }}</td></tr>
+  <tr><th>Required Permissions</th><td>{{ rule.required_permissions | join(', ') if rule.required_permissions else '—' }}</td></tr>
+  <tr><th>Required Roles</th><td>{{ rule.required_roles | join(', ') if rule.required_roles else '—' }}</td></tr>
+  <tr><th>Reason</th><td>{{ rule.reason }}</td></tr>
+</table>
+
+{% if rule.approval_policy %}
+<h3>Approval Policy</h3>
+<table class="console-table">
+  <tr><th>Policy Type</th><td>{{ rule.approval_policy.policy_type }}</td></tr>
+  <tr><th>Required Approvals</th><td>{{ rule.approval_policy.required_approvals }}</td></tr>
+  <tr><th>Allowed Approver Permissions</th><td>{{ rule.approval_policy.allowed_approver_permissions | join(', ') if rule.approval_policy.allowed_approver_permissions else '—' }}</td></tr>
+  <tr><th>Allowed Approver Roles</th><td>{{ rule.approval_policy.allowed_approver_roles | join(', ') if rule.approval_policy.allowed_approver_roles else '—' }}</td></tr>
+  <tr><th>Prohibit Requester Approval</th><td>{{ rule.approval_policy.prohibit_requester_approval }}</td></tr>
+  <tr><th>Expires After (seconds)</th><td>{{ rule.approval_policy.expires_after_seconds or '—' }}</td></tr>
+</table>
+{% endif %}
+
+<div class="actions">
+  {% if rule.status == 'enabled' %}
+  <form method="post" action="{{ base_path }}/runtime-rules/{{ rule.rule_id }}/disable" style="display:inline">
+    <button type="submit">Disable</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ base_path }}/runtime-rules/{{ rule.rule_id }}/enable" style="display:inline">
+    <button type="submit">Enable</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

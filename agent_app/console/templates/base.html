@@ -25,6 +25,8 @@
       <a href="/policy-console/reload" class="{% if '/reload' in request.url.path %}active{% endif %}">Reload</a>
       <a href="/policy-console/rollouts" class="{% if '/rollouts' in request.url.path and '/rollout-approvals' not in request.url.path %}active{% endif %}">Rollouts</a>
       <a href="/policy-console/rollout-approvals" class="{% if '/rollout-approvals' in request.url.path %}active{% endif %}">Approvals</a>
+      <a href="/policy-console/runtime-rules" class="{% if '/runtime-rules' in request.url.path %}active{% endif %}">Runtime Rules</a>
+      <a href="/policy-console/runtime-evaluate" class="{% if '/runtime-evaluate' in request.url.path %}active{% endif %}">Runtime Eval</a>
       <a href="/policy-console/routing/simulate" class="{% if '/routing/simulate' in request.url.path %}active{% endif %}">Routing Sim</a>
     </nav>
   </header>
@@ -32,7 +34,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="console-footer">
-    <p>Read-only. Policy Console Lite — Phase 26. Promotion write actions — Phase 30.</p>
+    <p>Read-only. Policy Console Lite — Phase 26. Promotion write actions — Phase 30. Runtime policy — Phase 38.</p>
   </footer>
 </body>
 </html>
