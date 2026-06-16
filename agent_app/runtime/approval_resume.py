@@ -34,6 +34,7 @@ class ApprovalResumeService:
         agent_registry: Any,
         audit_logger: AuditLogger | None = None,
         policy_engine: PolicyEngine | None = None,
+        policy_enforcement_service: Any | None = None,
     ) -> None:
         self.app = app
         self.approval_store = approval_store
@@ -42,6 +43,7 @@ class ApprovalResumeService:
         self.agent_registry = agent_registry
         self.audit_logger = audit_logger
         self.policy_engine = policy_engine
+        self._policy_enforcement_service = policy_enforcement_service
 
     async def approve_and_resume(
         self,
@@ -91,6 +93,86 @@ class ApprovalResumeService:
                     "message": "This approval has expired. Please request a new approval.",
                 },
             )
+
+        # Phase 38: Runtime policy enforcement on resume
+        if self._policy_enforcement_service is not None:
+            from agent_app.core.context import RunContext
+            from agent_app.governance.policy_enforcement import (
+                PolicyActionType,
+                PolicyDecisionStatus,
+            )
+            from agent_app.runtime.runtime_policy_evaluator import (
+                RuntimePolicyEvaluationRequest,
+            )
+
+            resume_ctx = RunContext(
+                run_id=approval.run_id or "",
+                user_id=decided_by,
+                tenant_id=approval.tenant_id or "default",
+            )
+
+            enforce_request = RuntimePolicyEvaluationRequest(
+                action_type=PolicyActionType.TOOL_RESUME,
+                subject=f"tool:{approval.tool_name}",
+                tool_name=approval.tool_name,
+                risk_level=str(approval.risk_level),
+                context=resume_ctx,
+            )
+            enforce_decision = await self._policy_enforcement_service.enforce(
+                enforce_request
+            )
+
+            if enforce_decision.status == PolicyDecisionStatus.DENIED:
+                await self._audit(
+                    event_type="run.resume_blocked",
+                    run_id=approval.run_id,
+                    approval_id=approval.approval_id,
+                    tool_name=approval.tool_name,
+                    user_id=decided_by,
+                    tenant_id=approval.tenant_id,
+                    data={
+                        "reason": "runtime_policy_denied",
+                        "decision_id": enforce_decision.decision_id,
+                    },
+                )
+                return AppRunResult(
+                    run_id=approval.run_id or "",
+                    status="failed",
+                    error={
+                        "type": "runtime_policy_denied",
+                        "message": enforce_decision.reason
+                        or "Resume denied by runtime policy",
+                    },
+                )
+
+            if enforce_decision.status == PolicyDecisionStatus.APPROVAL_REQUIRED:
+                await self._audit(
+                    event_type="run.resume_blocked",
+                    run_id=approval.run_id,
+                    approval_id=approval.approval_id,
+                    tool_name=approval.tool_name,
+                    user_id=decided_by,
+                    tenant_id=approval.tenant_id,
+                    data={
+                        "reason": "runtime_policy_approval_required",
+                        "decision_id": enforce_decision.decision_id,
+                    },
+                )
+                return AppRunResult(
+                    run_id=approval.run_id or "",
+                    status="interrupted",
+                    interruptions=[
+                        {
+                            "type": "approval_required",
+                            "approval_id": approval.approval_id,
+                            "tool_name": approval.tool_name,
+                            "decision_id": enforce_decision.decision_id,
+                        }
+                    ],
+                    latency_ms=0,
+                )
+
+            # ALLOWED -> continue to existing resume flow
 
         try:
             interrupted = await self.run_state_store.get(approval.run_id)

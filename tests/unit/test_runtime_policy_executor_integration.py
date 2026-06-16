@@ -13,6 +13,7 @@ from agent_app.governance.policy_enforcement import (
     PolicyActionType,
     PolicyDecisionStatus,
 )
+from agent_app.governance.approval import ApprovalRequest
 from agent_app.governance.risk import RiskLevel, requires_tool_approval
 from agent_app.governance.runtime_policy import (
     RuntimePolicyEffect,
@@ -20,6 +21,7 @@ from agent_app.governance.runtime_policy import (
     RuntimePolicyRuleStatus,
 )
 from agent_app.runtime.approval_store import InMemoryApprovalStore
+from agent_app.runtime.run_state_store import InMemoryRunStateStore
 from agent_app.runtime.policy_enforcement_service import PolicyEnforcementService
 from agent_app.runtime.runtime_policy_evaluator import (
     RuntimePolicyEvaluationRequest,
@@ -328,5 +330,276 @@ class TestToolExecutorRuntimePolicyEnforcement:
             result = await executor.execute("test.tool", {"x": 1}, ctx)
             assert result.status == ToolExecutionStatus.COMPLETED.value
             assert result.output == {"result": "ok"}
+
+        _run_async(_run())
+
+
+# ---------------------------------------------------------------------------
+# Phase 38 Task 5: Resume enforcement + runtime approval extension
+# ---------------------------------------------------------------------------
+
+
+class TestResumePolicyEnforcement:
+    """Phase 38 Task 5: ApprovalResumeService runtime policy enforcement on resume."""
+
+    @staticmethod
+    def _make_approval_resume_service(
+        *,
+        policy_engine=None,
+        policy_enforcement_service=None,
+    ):
+        """Build an ApprovalResumeService with mock dependencies."""
+        from agent_app.core.agent_spec import AgentSpec
+        from agent_app.core.app import AgentApp
+        from agent_app.runtime.approval_resume import ApprovalResumeService
+
+        approvals = InMemoryApprovalStore()
+        run_states = InMemoryRunStateStore()
+        audit = InMemoryAuditLogger()
+
+        class _FakeBackend:
+            def __init__(self):
+                self.resume_calls = []
+
+            async def run(self, *a, **kw):
+                from agent_app.core.result import AppRunResult
+                return AppRunResult(run_id="unused", status="completed")
+
+            async def stream(self, *a, **kw):
+                if False:
+                    yield None
+
+            async def resume(self, agent_spec, context, **kw):
+                self.resume_calls.append({"agent_spec": agent_spec, "context": context, **kw})
+                from agent_app.core.result import AppRunResult
+                return AppRunResult(
+                    run_id=context.run_id,
+                    status="completed",
+                    final_output="resumed by fake backend",
+                )
+
+        backend = _FakeBackend()
+        app = AgentApp(
+            approval_store=approvals,
+            run_state_store=run_states,
+            backend=backend,
+            audit_logger=audit,
+        )
+        app.register_agent(AgentSpec(name="bot", instructions="help"))
+
+        service = ApprovalResumeService(
+            app=app,
+            approval_store=approvals,
+            run_state_store=run_states,
+            backend=backend,
+            agent_registry=app.agent_registry,
+            audit_logger=audit,
+            policy_engine=policy_engine,
+            policy_enforcement_service=policy_enforcement_service,
+        )
+        return service, approvals, run_states, audit, backend
+
+    @staticmethod
+    async def _seed_interrupted_run(store, approval_id="apv_1", run_id="run-1", tenant_id="t1"):
+        from agent_app.runtime.run_state import InterruptedRun
+        run = InterruptedRun(
+            run_id=run_id,
+            agent_name="bot",
+            workflow_name=None,
+            workflow_type=None,
+            input="please do risky thing",
+            context=RunContext(run_id=run_id, user_id="u1", tenant_id=tenant_id),
+            interruptions=[{
+                "type": "approval_required",
+                "approval_id": approval_id,
+                "tool_name": "danger.tool",
+                "arguments": {"path": "/tmp/file"},
+                "risk_level": "high",
+                "sdk_call_id": "call-1",
+            }],
+            approval_ids=[approval_id],
+            backend_name="openai",
+            backend_state={
+                "backend": "openai",
+                "serialization": "json",
+                "value": {"original_input": "please do risky thing"},
+            },
+        )
+        return await store.save_interrupted(run)
+
+    # -- 1. No enforcement service -> resume works as before -----------------
+
+    def test_resume_allowed_under_unchanged_policy(self) -> None:
+        """No enforcement service -> resume works as before (backward compat)."""
+
+        async def _run():
+            service, approvals, run_states, audit, backend = (
+                self._make_approval_resume_service()
+            )
+            await approvals.create(ApprovalRequest(
+                approval_id="apv_1",
+                run_id="run-1",
+                tool_name="danger.tool",
+                risk_level="high",
+                tenant_id="t1",
+            ))
+            await self._seed_interrupted_run(run_states)
+
+            result = await service.approve_and_resume(
+                "apv_1", decided_by="admin", tenant_id="t1",
+            )
+            assert result.status == "completed"
+            assert result.final_output == "resumed by fake backend"
+            assert len(backend.resume_calls) == 1
+
+        _run_async(_run())
+
+    # -- 2. Enforcement service returns DENIED -> resume returns failed ------
+
+    def test_resume_blocked_if_policy_deny(self) -> None:
+        """Enforcement service returns DENIED -> resume returns failed."""
+
+        async def _run():
+            from agent_app.governance.policy_enforcement import (
+                PolicyActionType,
+                PolicyDecisionStatus,
+                PolicyEnforcementDecision,
+            )
+            from datetime import datetime, timezone
+
+            class _DenyEnforcementService:
+                async def enforce(self, request):
+                    return PolicyEnforcementDecision(
+                        decision_id="ped_deny_test",
+                        status=PolicyDecisionStatus.DENIED,
+                        action_type=PolicyActionType.TOOL_RESUME,
+                        subject=f"tool:{request.tool_name}",
+                        reason="Resume blocked by runtime policy",
+                        created_at=datetime.now(timezone.utc),
+                    )
+
+            service, approvals, run_states, audit, backend = (
+                self._make_approval_resume_service(
+                    policy_enforcement_service=_DenyEnforcementService(),
+                )
+            )
+            await approvals.create(ApprovalRequest(
+                approval_id="apv_1",
+                run_id="run-1",
+                tool_name="danger.tool",
+                risk_level="high",
+                tenant_id="t1",
+            ))
+            await self._seed_interrupted_run(run_states)
+
+            result = await service.approve_and_resume(
+                "apv_1", decided_by="admin", tenant_id="t1",
+            )
+            assert result.status == "failed"
+            assert result.error is not None
+            assert result.error["type"] == "runtime_policy_denied"
+            assert "runtime policy" in result.error["message"].lower()
+            assert backend.resume_calls == []
+
+        _run_async(_run())
+
+    # -- 3. Enforcement service returns APPROVAL_REQUIRED -> resume returns interrupted
+
+    def test_resume_re_interrupts_if_policy_approval_required(self) -> None:
+        """Enforcement service returns APPROVAL_REQUIRED -> resume returns interrupted."""
+
+        async def _run():
+            from agent_app.governance.policy_enforcement import (
+                PolicyActionType,
+                PolicyDecisionStatus,
+                PolicyEnforcementDecision,
+            )
+            from datetime import datetime, timezone
+
+            class _ApprovalRequiredEnforcementService:
+                async def enforce(self, request):
+                    return PolicyEnforcementDecision(
+                        decision_id="ped_appr_test",
+                        status=PolicyDecisionStatus.APPROVAL_REQUIRED,
+                        action_type=PolicyActionType.TOOL_RESUME,
+                        subject=f"tool:{request.tool_name}",
+                        reason="Re-approval required by runtime policy",
+                        created_at=datetime.now(timezone.utc),
+                    )
+
+            service, approvals, run_states, audit, backend = (
+                self._make_approval_resume_service(
+                    policy_enforcement_service=_ApprovalRequiredEnforcementService(),
+                )
+            )
+            await approvals.create(ApprovalRequest(
+                approval_id="apv_1",
+                run_id="run-1",
+                tool_name="danger.tool",
+                risk_level="high",
+                tenant_id="t1",
+            ))
+            await self._seed_interrupted_run(run_states)
+
+            result = await service.approve_and_resume(
+                "apv_1", decided_by="admin", tenant_id="t1",
+            )
+            assert result.status == "interrupted"
+            assert len(result.interruptions) == 1
+            assert result.interruptions[0]["type"] == "approval_required"
+            assert result.interruptions[0]["decision_id"] == "ped_appr_test"
+            assert backend.resume_calls == []
+
+        _run_async(_run())
+
+    # -- 4. Enforcement decision is audited ----------------------------------
+
+    def test_resume_enforcement_decision_audited(self) -> None:
+        """Enforcement decision is logged via audit."""
+
+        async def _run():
+            from agent_app.governance.policy_enforcement import (
+                PolicyActionType,
+                PolicyDecisionStatus,
+                PolicyEnforcementDecision,
+            )
+            from datetime import datetime, timezone
+
+            class _DenyEnforcementService:
+                async def enforce(self, request):
+                    return PolicyEnforcementDecision(
+                        decision_id="ped_audit_test",
+                        status=PolicyDecisionStatus.DENIED,
+                        action_type=PolicyActionType.TOOL_RESUME,
+                        subject=f"tool:{request.tool_name}",
+                        reason="Resume blocked by runtime policy",
+                        created_at=datetime.now(timezone.utc),
+                    )
+
+            service, approvals, run_states, audit, backend = (
+                self._make_approval_resume_service(
+                    policy_enforcement_service=_DenyEnforcementService(),
+                )
+            )
+            await approvals.create(ApprovalRequest(
+                approval_id="apv_1",
+                run_id="run-1",
+                tool_name="danger.tool",
+                risk_level="high",
+                tenant_id="t1",
+            ))
+            await self._seed_interrupted_run(run_states)
+
+            await service.approve_and_resume(
+                "apv_1", decided_by="admin", tenant_id="t1",
+            )
+
+            # Check that the enforcement decision was audited
+            blocked_events = audit.list_events(event_type="run.resume_blocked")
+            assert len(blocked_events) >= 1
+            matching = [e for e in blocked_events if e.approval_id == "apv_1"]
+            assert len(matching) >= 1
+            assert matching[0].data["reason"] == "runtime_policy_denied"
+            assert matching[0].data["decision_id"] == "ped_audit_test"
 
         _run_async(_run())

@@ -53,6 +53,21 @@ class ApprovalRequest(BaseModel):
     resolved_at: datetime | None = Field(default=None, description="Resolution timestamp")
     resolved_by: str | None = Field(default=None, description="Resolver identity")
 
+    # Phase 38: Runtime policy support
+    policy: Any | None = Field(
+        default=None, description="Approval policy if set by runtime policy"
+    )
+    decisions: list[Any] = Field(
+        default_factory=list, description="Approval decisions for quorum"
+    )
+    action_type: str | None = Field(
+        default=None, description="Action type that triggered this approval"
+    )
+    subject: str | None = Field(
+        default=None,
+        description="Subject of the approval (e.g., tool:refund)",
+    )
+
 
 class ApprovalStore(Protocol):
     """Protocol for persisting approval requests."""
