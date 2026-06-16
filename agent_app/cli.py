@@ -678,6 +678,31 @@ def main() -> int:
     obs_export_parser.add_argument("--since", default=None, help="Window start (ISO 8601)")
     obs_export_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
 
+    # Phase 40: simulation subcommands
+    simulation_parser = policy_sub.add_parser("simulation", help="Policy simulation commands (Phase 40)")
+    sim_subparsers = simulation_parser.add_subparsers(dest="simulation_command")
+
+    sim_validate_parser = sim_subparsers.add_parser("validate", help="Validate candidate rules from a YAML file")
+    sim_validate_parser.add_argument("--config", default="agentapp.yaml", help="Config file path")
+    sim_validate_parser.add_argument("--rules-file", required=True, help="YAML file with candidate rules")
+
+    sim_replay_parser = sim_subparsers.add_parser("replay", help="Replay candidate rules against audit history")
+    sim_replay_parser.add_argument("--config", default="agentapp.yaml", help="Config file path")
+    sim_replay_parser.add_argument("--rules-file", required=True, help="YAML file with candidate rules")
+    sim_replay_parser.add_argument("--since", default=None, help="Window start (ISO 8601)")
+    sim_replay_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
+    sim_replay_parser.add_argument("--limit", type=int, default=None, help="Max audit cases to replay")
+    sim_replay_parser.add_argument("--json", action="store_true", help="JSON output")
+
+    sim_export_parser = sim_subparsers.add_parser("export", help="Export simulation report to file")
+    sim_export_parser.add_argument("--config", default="agentapp.yaml", help="Config file path")
+    sim_export_parser.add_argument("--rules-file", required=True, help="YAML file with candidate rules")
+    sim_export_parser.add_argument("--format", required=True, choices=["json", "csv"], help="Export format")
+    sim_export_parser.add_argument("--output", required=True, help="Output file path")
+    sim_export_parser.add_argument("--since", default=None, help="Window start (ISO 8601)")
+    sim_export_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
+    sim_export_parser.add_argument("--limit", type=int, default=None, help="Max audit cases to replay")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -985,6 +1010,18 @@ def main() -> int:
             return asyncio.run(_cmd_policy_observability_export(args))
         else:
             observability_parser.print_help()
+            return 1
+
+    # Phase 40: simulation subcommands
+    if args.command == "policy" and args.policy_command == "simulation":
+        if args.simulation_command == "validate":
+            return asyncio.run(_cmd_policy_simulation_validate(args))
+        elif args.simulation_command == "replay":
+            return asyncio.run(_cmd_policy_simulation_replay(args))
+        elif args.simulation_command == "export":
+            return asyncio.run(_cmd_policy_simulation_export(args))
+        else:
+            simulation_parser.print_help()
             return 1
 
     if args.command == "recovery" and args.recovery_command == "scan":
@@ -4993,6 +5030,289 @@ async def _cmd_policy_observability_export(args: argparse.Namespace) -> int:
         with open(args.output, 'w') as f:
             f.write(content)
         print(f"Report exported to {args.output}")
+    except Exception as exc:
+        print(f"Error writing file: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+# --- Phase 40: Policy simulation CLI commands ---
+
+
+def _parse_candidate_rules(rules_file: str) -> list:
+    """Parse candidate rules from a YAML file and return RuntimePolicyRule objects."""
+    import uuid
+    import yaml
+    from agent_app.governance.policy_enforcement import PolicyActionType
+    from agent_app.governance.runtime_policy import RuntimePolicyEffect, RuntimePolicyRule
+
+    with open(rules_file) as f:
+        data = yaml.safe_load(f)
+
+    if not data or "rules" not in data:
+        raise ValueError("YAML file must contain a top-level 'rules' key")
+
+    rules: list[RuntimePolicyRule] = []
+    for raw in data["rules"]:
+        try:
+            action_type = PolicyActionType(raw["action_type"])
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid or missing action_type in rule '{raw.get('name', '?')}': {exc}"
+            ) from exc
+
+        try:
+            effect = RuntimePolicyEffect(raw["effect"])
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid or missing effect in rule '{raw.get('name', '?')}': {exc}"
+            ) from exc
+
+        rules.append(RuntimePolicyRule(
+            rule_id=f"rpr_{uuid.uuid4().hex[:12]}",
+            name=raw["name"],
+            action_type=action_type,
+            effect=effect,
+            tool_name=raw.get("tool_name"),
+            risk_level=raw.get("risk_level"),
+            required_permissions=raw.get("required_permissions", []),
+            required_roles=raw.get("required_roles", []),
+            reason=raw.get("reason"),
+        ))
+
+    return rules
+
+
+async def _cmd_policy_simulation_validate(args: argparse.Namespace) -> int:
+    """Validate candidate rules from a YAML file."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_validation import RuntimePolicyValidator
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    # Parse candidate rules
+    try:
+        rules = _parse_candidate_rules(args.rules_file)
+    except Exception as exc:
+        print(f"Error parsing rules file: {exc}", file=sys.stderr)
+        return 1
+
+    if not rules:
+        print("No rules found in the rules file.", file=sys.stderr)
+        return 1
+
+    validator = RuntimePolicyValidator()
+    report = validator.validate_rules(rules)
+
+    if report.valid and not report.issues:
+        print(f"Validation passed. {len(rules)} rule(s) are valid.")
+        return 0
+
+    for issue in report.issues:
+        level_tag = issue.severity.value.upper()
+        rule_info = f" (rule: {issue.rule_id})" if issue.rule_id else ""
+        print(f"  [{level_tag}]{rule_info} {issue.code}: {issue.message}")
+
+    error_count = sum(1 for i in report.issues if i.severity.value == "error")
+    warning_count = sum(1 for i in report.issues if i.severity.value == "warning")
+
+    print()
+    print(f"  {error_count} error(s), {warning_count} warning(s)")
+
+    if not report.valid:
+        print()
+        print("Validation failed.")
+        return 1
+
+    print()
+    print(f"Validation passed with warnings. {len(rules)} rule(s) validated.")
+    return 0
+
+
+def _parse_window(args: argparse.Namespace) -> tuple:
+    """Parse --since and --until from args, returning (window_start, window_end)."""
+    from datetime import datetime
+
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --since: {args.since}", file=sys.stderr)
+            return None, None, True
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until.replace('Z', '+00:00'))
+        except ValueError:
+            print(f"Invalid datetime format for --until: {args.until}", file=sys.stderr)
+            return None, None, True
+    return window_start, window_end, False
+
+
+async def _cmd_policy_simulation_replay(args: argparse.Namespace) -> int:
+    """Replay candidate rules against audit history."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_simulation_service import PolicySimulationService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    # Parse candidate rules
+    try:
+        rules = _parse_candidate_rules(args.rules_file)
+    except Exception as exc:
+        print(f"Error parsing rules file: {exc}", file=sys.stderr)
+        return 1
+
+    if not rules:
+        print("No rules found in the rules file.", file=sys.stderr)
+        return 1
+
+    # Parse time window
+    window_start, window_end, parse_error = _parse_window(args)
+    if parse_error:
+        return 1
+
+    # Build simulation service from app components
+    audit_logger = getattr(app, "_audit_logger", None)
+    runtime_policy_store = getattr(app, "_runtime_policy_store", None)
+
+    service = PolicySimulationService(
+        audit_logger=audit_logger,
+        runtime_policy_store=runtime_policy_store,
+    )
+
+    try:
+        report = await service.simulate_from_audit(
+            candidate_rules=rules,
+            window_start=window_start,
+            window_end=window_end,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error running simulation: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        from agent_app.runtime.policy_compliance_export import simulation_report_to_json
+        print(simulation_report_to_json(report))
+    else:
+        print("Policy Simulation Report")
+        print("=" * 40)
+        print(f"Simulation ID: {report.simulation_id}")
+        print(f"Generated At:  {report.generated_at.isoformat()}")
+        print(f"Candidate Rules: {len(report.candidate_rule_ids)}")
+        print()
+        print("Summary:")
+        print(f"  Total:                {report.summary.total}")
+        print(f"  Unchanged:            {report.summary.unchanged}")
+        print(f"  Would Allow:          {report.summary.would_allow}")
+        print(f"  Would Deny:           {report.summary.would_deny}")
+        print(f"  Would Require Approval: {report.summary.would_require_approval}")
+        print(f"  Would Change:         {report.summary.would_change}")
+        print(f"  Errors:               {report.summary.errors}")
+
+        if report.results:
+            # Show changed/error results
+            changes = [r for r in report.results if r.outcome.value != "unchanged"]
+            if changes:
+                print()
+                print("Changes:")
+                for r in changes:
+                    print(
+                        f"  {r.case_id}: {r.baseline_status} -> "
+                        f"{r.candidate_status} ({r.outcome.value})"
+                    )
+                    if r.reason:
+                        print(f"    Reason: {r.reason}")
+            else:
+                print()
+                print("  All decisions unchanged. No regressions detected.")
+
+    return 0
+
+
+async def _cmd_policy_simulation_export(args: argparse.Namespace) -> int:
+    """Export simulation report to a file."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_simulation_service import PolicySimulationService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    # Parse candidate rules
+    try:
+        rules = _parse_candidate_rules(args.rules_file)
+    except Exception as exc:
+        print(f"Error parsing rules file: {exc}", file=sys.stderr)
+        return 1
+
+    if not rules:
+        print("No rules found in the rules file.", file=sys.stderr)
+        return 1
+
+    # Parse time window
+    window_start, window_end, parse_error = _parse_window(args)
+    if parse_error:
+        return 1
+
+    # Build simulation service from app components
+    audit_logger = getattr(app, "_audit_logger", None)
+    runtime_policy_store = getattr(app, "_runtime_policy_store", None)
+
+    service = PolicySimulationService(
+        audit_logger=audit_logger,
+        runtime_policy_store=runtime_policy_store,
+    )
+
+    try:
+        report = await service.simulate_from_audit(
+            candidate_rules=rules,
+            window_start=window_start,
+            window_end=window_end,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error running simulation: {exc}", file=sys.stderr)
+        return 1
+
+    # Export
+    if args.format == "json":
+        from agent_app.runtime.policy_compliance_export import simulation_report_to_json
+        content = simulation_report_to_json(report)
+    elif args.format == "csv":
+        import csv
+        import io
+        from agent_app.runtime.policy_compliance_export import simulation_report_to_csv_rows
+        rows = simulation_report_to_csv_rows(report)
+        if not rows:
+            content = "case_id,baseline_status,candidate_status,outcome,reason,decision_id,errors\n"
+        else:
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+            content = output.getvalue()
+    else:
+        print(f"Unsupported format '{args.format}'. Supported: json, csv", file=sys.stderr)
+        return 1
+
+    try:
+        with open(args.output, 'w') as f:
+            f.write(content)
+        print(f"Simulation report exported to {args.output}")
     except Exception as exc:
         print(f"Error writing file: {exc}", file=sys.stderr)
         return 1
