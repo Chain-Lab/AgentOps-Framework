@@ -103,6 +103,7 @@ class ToolExecutor:
         policy_engine: PolicyEngine | None = None,
         trace_events_callback: Callable[[Any], None] | None = None,
         policy_decision_store: PolicyDecisionStore | None = None,
+        policy_enforcement_service: Any | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.approval_store = approval_store
@@ -114,6 +115,7 @@ class ToolExecutor:
         self.policy_engine = policy_engine
         self._trace_events_callback = trace_events_callback
         self._policy_decision_store = policy_decision_store
+        self._policy_enforcement_service = policy_enforcement_service
 
     async def execute(
         self,
@@ -369,6 +371,107 @@ class ToolExecutor:
                 tool_name=tool_name,
                 error=error_detail,
             )
+
+        # -- Phase 38: Runtime policy enforcement --
+        if self._policy_enforcement_service is not None:
+            from agent_app.runtime.runtime_policy_evaluator import RuntimePolicyEvaluationRequest
+            from agent_app.governance.policy_enforcement import PolicyActionType, PolicyDecisionStatus
+
+            enforce_request = RuntimePolicyEvaluationRequest(
+                action_type=PolicyActionType.TOOL_EXECUTE,
+                subject=f"tool:{tool_name}",
+                tool_name=tool_name,
+                risk_level=str(spec.risk_level),
+                context=context,
+            )
+            enforce_decision = await self._policy_enforcement_service.enforce(enforce_request)
+
+            if enforce_decision.status == PolicyDecisionStatus.DENIED:
+                error_detail = {
+                    "type": "policy_enforcement_denied",
+                    "message": enforce_decision.reason or "Denied by runtime policy",
+                    "tool_name": tool_name,
+                    "decision_id": enforce_decision.decision_id,
+                }
+                await self._record_event(
+                    event_type=RunEventType.TOOL_FAILED,
+                    context=context,
+                    tool_name=tool_name,
+                    status="failed",
+                    error=error_detail,
+                )
+                return ToolExecutionResult(
+                    status=ToolExecutionStatus.FAILED.value,
+                    tool_name=tool_name,
+                    error=error_detail,
+                )
+
+            if enforce_decision.status == PolicyDecisionStatus.APPROVAL_REQUIRED:
+                # Check if ToolSpec already requires approval — avoid duplicate
+                tool_spec_already_requires = requires_tool_approval(spec.risk_level, spec.requires_approval) and not _is_tool_call_approval_marker_valid(approved_tool_call, tool_name, arguments)
+
+                if tool_spec_already_requires:
+                    # ToolSpec already triggers approval — skip runtime policy approval
+                    # but include policy_decision_id in metadata when the approval is created below
+                    pass  # Fall through to existing approval gate
+                else:
+                    # Runtime policy requires approval — create approval
+                    from agent_app.governance.approval import ApprovalRequest
+                    from datetime import datetime, timedelta, timezone
+                    sanitized_arguments = sanitize_payload(arguments)
+
+                    # Use approval_policy from enforcement decision if available
+                    approval_policy = enforce_decision.approval_policy
+                    ttl_seconds = approval_policy.expires_after_seconds if approval_policy else None
+
+                    expires_at = None
+                    if ttl_seconds is not None and ttl_seconds > 0:
+                        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+
+                    metadata = {
+                        "argument_keys": sorted(arguments.keys()),
+                        "requester_context": {
+                            "user_id": context.user_id,
+                            "tenant_id": context.tenant_id,
+                            "trace_id": context.trace_id,
+                        },
+                        "policy_decision_id": enforce_decision.decision_id,
+                        "enforcement_reason": enforce_decision.reason,
+                    }
+
+                    approval = ApprovalRequest(
+                        approval_id=f"apv_{secrets.token_hex(16)}",
+                        run_id=context.run_id,
+                        agent_name=None,
+                        tool_name=tool_name,
+                        arguments=sanitized_arguments,
+                        risk_level=spec.risk_level,
+                        tenant_id=context.tenant_id,
+                        metadata=metadata,
+                        expires_at=expires_at,
+                    )
+                    await self.approval_store.create(approval)
+                    await self.audit_logger.log(AuditEvent(
+                        event_id=str(uuid.uuid4()),
+                        run_id=context.run_id,
+                        event_type="policy.runtime.approval_required",
+                        user_id=context.user_id,
+                        tenant_id=context.tenant_id,
+                        tool_name=tool_name,
+                        approval_id=approval.approval_id,
+                        data={
+                            "decision_id": enforce_decision.decision_id,
+                            "reason": enforce_decision.reason,
+                            "risk_level": spec.risk_level,
+                        },
+                    ))
+                    return ToolExecutionResult(
+                        status=ToolExecutionStatus.INTERRUPTED.value,
+                        tool_name=tool_name,
+                        approval_request=approval,
+                    )
+
+            # ALLOWED → continue to existing approval gate
 
         # -- 3. Approval gate --
         if requires_tool_approval(
