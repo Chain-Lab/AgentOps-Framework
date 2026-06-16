@@ -58,6 +58,7 @@ def build_policy_console_router(
     policy_enforcement_service: Any = None,
     observability_service: Any = None,
     simulation_service: Any = None,
+    simulation_gate_evaluator: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -84,6 +85,7 @@ def build_policy_console_router(
         policy_enforcement_service: Optional policy enforcement service (Phase 38).
         observability_service: Optional policy observability service (Phase 39).
         simulation_service: Optional policy simulation service (Phase 40).
+        simulation_gate_evaluator: Optional simulation gate evaluator (Phase 41).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -2816,6 +2818,272 @@ def build_policy_console_router(
                 "title": title,
                 "base_path": base_path,
                 "report": report_dict,
+                "error": None,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 41 Task 6: Simulation gate pages
+    # -----------------------------------------------------------------------
+
+    def _parse_gate_rules_yaml(yaml_text: str) -> tuple[list, str | None]:
+        """Parse gate rules from YAML text.
+
+        Returns (rules, error_message).  If parsing fails, rules is empty
+        and error_message describes the problem.
+        """
+        if not yaml_text or not yaml_text.strip():
+            return [], None  # gate rules are optional
+        try:
+            import yaml
+        except ImportError:
+            return [], "PyYAML is not installed. Install with: pip install pyyaml"
+        try:
+            data = yaml.safe_load(yaml_text)
+        except yaml.YAMLError as exc:
+            return [], f"Invalid gate rules YAML: {exc}"
+        if data is None:
+            return [], None
+        if isinstance(data, dict):
+            data = data.get("gate_rules", data.get("gates", [data]))
+        if not isinstance(data, list):
+            data = [data]
+        from agent_app.governance.policy_gate import PolicyGateRule
+        rules: list[PolicyGateRule] = []
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                return [], f"Gate rule at index {i} is not a mapping."
+            try:
+                rule = PolicyGateRule(
+                    name=item.get("name", f"gate_rule_{i + 1}"),
+                    description=item.get("description"),
+                    max_changed_decisions=item.get("max_changed_decisions"),
+                    max_changed_ratio=item.get("max_changed_ratio"),
+                    max_failed_replays=item.get("max_failed_replays"),
+                    max_new_denies=item.get("max_new_denies"),
+                    max_new_approvals=item.get("max_new_approvals"),
+                    fail_on_missing_required_context=item.get("fail_on_missing_required_context", False),
+                )
+                rules.append(rule)
+            except (ValueError, KeyError) as exc:
+                return [], f"Invalid gate rule at index {i}: {exc}"
+        return rules, None
+
+    @router.get("/simulation/gate", response_class=HTMLResponse)
+    async def simulation_gate_page(request: Request):
+        """Simulation gate form page."""
+        return templates.TemplateResponse(
+            request,
+            "policy_simulation_gate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "error": None,
+            },
+        )
+
+    @router.post("/simulation/gate", response_class=HTMLResponse)
+    async def simulation_gate_submit(request: Request):
+        """Run simulation gate and return result."""
+        if simulation_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": "Policy simulation service not configured.",
+                },
+            )
+
+        form = await request.form()
+        candidate_yaml = form.get("candidate_rules_yaml", "")
+        gate_rules_yaml = form.get("gate_rules_yaml", "")
+        since_str = form.get("since", "")
+        until_str = form.get("until", "")
+        limit_str = form.get("limit", "")
+
+        # Parse candidate rules
+        candidate_rules, parse_error = _parse_candidate_rules_yaml(candidate_yaml)
+        if parse_error:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": parse_error,
+                },
+            )
+
+        # Parse gate rules (optional; fallback to evaluator's rules)
+        gate_rules, gate_parse_error = _parse_gate_rules_yaml(gate_rules_yaml)
+        if gate_parse_error:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": gate_parse_error,
+                },
+            )
+
+        # If no gate rules provided, try using the evaluator's rules
+        if not gate_rules and simulation_gate_evaluator is not None:
+            gate_rules = simulation_gate_evaluator._rules
+
+        if not gate_rules:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": "No gate rules provided and no default gate evaluator configured.",
+                },
+            )
+
+        # Parse optional time window / limit
+        window_start = None
+        window_end = None
+        limit = None
+        error = None
+
+        if since_str:
+            try:
+                window_start = datetime.fromisoformat(
+                    since_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for since: {since_str}"
+        if until_str:
+            try:
+                window_end = datetime.fromisoformat(
+                    until_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for until: {until_str}"
+        if limit_str:
+            try:
+                limit = int(limit_str)
+            except ValueError:
+                error = f"Invalid limit: {limit_str}"
+
+        if error:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": error,
+                },
+            )
+
+        try:
+            sim_report, validation_report, gate_result = await simulation_service.validate_and_gate(
+                candidate_rules=candidate_rules,
+                gate_rules=gate_rules,
+                window_start=window_start,
+                window_end=window_end,
+                limit=limit,
+            )
+
+            report_dict = {
+                "simulation_id": sim_report.simulation_id,
+                "name": sim_report.name,
+                "generated_at": sim_report.generated_at.isoformat() if hasattr(sim_report.generated_at, "isoformat") else str(sim_report.generated_at),
+                "candidate_rule_ids": sim_report.candidate_rule_ids,
+                "summary": {
+                    "total": sim_report.summary.total,
+                    "unchanged": sim_report.summary.unchanged,
+                    "would_allow": sim_report.summary.would_allow,
+                    "would_deny": sim_report.summary.would_deny,
+                    "would_require_approval": sim_report.summary.would_require_approval,
+                    "would_change": sim_report.summary.would_change,
+                    "errors": sim_report.summary.errors,
+                },
+                "results": [
+                    {
+                        "case_id": r.case_id,
+                        "baseline_status": r.baseline_status or "",
+                        "candidate_status": r.candidate_status or "",
+                        "outcome": r.outcome.value if hasattr(r.outcome, "value") else str(r.outcome),
+                        "reason": r.reason or "",
+                        "decision_id": r.decision_id or "",
+                        "errors": r.errors,
+                    }
+                    for r in sim_report.results
+                ],
+            }
+
+            validation_dict = {
+                "valid": validation_report.valid,
+                "issues": [
+                    {
+                        "severity": issue.severity.value,
+                        "code": issue.code,
+                        "message": issue.message,
+                        "rule_id": issue.rule_id or "",
+                        "field": issue.field or "",
+                    }
+                    for issue in validation_report.issues
+                ],
+            }
+
+            gate_dict = {
+                "gate_result_id": gate_result.gate_result_id,
+                "status": gate_result.status,
+                "passed": gate_result.passed,
+                "total_decisions": gate_result.total_decisions,
+                "changed_decisions": gate_result.changed_decisions,
+                "failed_replays": gate_result.failed_replays,
+                "changed_ratio": gate_result.changed_ratio,
+                "new_denies": gate_result.new_denies,
+                "new_approvals": gate_result.new_approvals,
+                "missing_context_count": gate_result.missing_context_count,
+                "rule_results": gate_result.rule_results,
+                "summary": gate_result.summary,
+            }
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_gate_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "gate_result": None,
+                    "validation_report": None,
+                    "error": str(exc),
+                },
+            )
+
+        return templates.TemplateResponse(
+            request,
+            "policy_simulation_gate_report.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report_dict,
+                "gate_result": gate_dict,
+                "validation_report": validation_dict,
                 "error": None,
             },
         )

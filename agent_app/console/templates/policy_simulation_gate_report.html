@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Simulation Gate Report</h2>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+<p><a href="{{ base_path }}/simulation/gate">Back to Simulation Gate</a></p>
+{% endif %}
+
+{% if report %}
+
+<p><em>Simulation ID: {{ report.simulation_id }} | Generated: {{ report.generated_at }}</em></p>
+{% if report.name %}
+<p><em>Name: {{ report.name }}</em></p>
+{% endif %}
+
+<!-- Simulation summary cards -->
+<section class="report-section">
+  <h2>Simulation Summary</h2>
+  <div class="summary-cards">
+    <div class="card">
+      <h3>Total</h3>
+      <p class="card-value">{{ report.summary.total }}</p>
+    </div>
+    <div class="card">
+      <h3>Unchanged</h3>
+      <p class="card-value">{{ report.summary.unchanged }}</p>
+    </div>
+    <div class="card">
+      <h3>Would Deny</h3>
+      <p class="card-value">{{ report.summary.would_deny }}</p>
+    </div>
+    <div class="card">
+      <h3>Would Allow</h3>
+      <p class="card-value">{{ report.summary.would_allow }}</p>
+    </div>
+    <div class="card">
+      <h3>Would Require Approval</h3>
+      <p class="card-value">{{ report.summary.would_require_approval }}</p>
+    </div>
+    <div class="card">
+      <h3>Would Change</h3>
+      <p class="card-value">{{ report.summary.would_change }}</p>
+    </div>
+    <div class="card">
+      <h3>Errors</h3>
+      <p class="card-value">{{ report.summary.errors }}</p>
+    </div>
+  </div>
+</section>
+
+<!-- Validation issues -->
+{% if validation_report and validation_report.issues %}
+<section class="report-section">
+  <h2>Validation Issues</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Code</th>
+        <th>Rule ID</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for issue in validation_report.issues %}
+      <tr>
+        <td>
+          {% if issue.severity == "error" %}
+          <span class="badge badge-error">ERROR</span>
+          {% elif issue.severity == "warning" %}
+          <span class="badge badge-warning">WARNING</span>
+          {% else %}
+          <span class="badge badge-info">{{ issue.severity | upper }}</span>
+          {% endif %}
+        </td>
+        <td>{{ issue.code }}</td>
+        <td>{{ issue.rule_id }}</td>
+        <td>{{ issue.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- Gate result -->
+{% if gate_result %}
+<section class="report-section">
+  <h2>Gate Result</h2>
+  <div class="summary-cards">
+    <div class="card">
+      <h3>Status</h3>
+      <p class="card-value">
+        {% if gate_result.status == "passed" %}
+        <span class="badge badge-success">PASSED</span>
+        {% elif gate_result.status == "failed" %}
+        <span class="badge badge-error">FAILED</span>
+        {% elif gate_result.status == "warning" %}
+        <span class="badge badge-warning">WARNING</span>
+        {% else %}
+        <span class="badge">{{ gate_result.status | upper }}</span>
+        {% endif %}
+      </p>
+    </div>
+    <div class="card">
+      <h3>Gate Result ID</h3>
+      <p class="card-value">{{ gate_result.gate_result_id }}</p>
+    </div>
+    <div class="card">
+      <h3>Changed Decisions</h3>
+      <p class="card-value">{{ gate_result.changed_decisions }}</p>
+    </div>
+    <div class="card">
+      <h3>Changed Ratio</h3>
+      <p class="card-value">{{ gate_result.changed_ratio }}</p>
+    </div>
+    <div class="card">
+      <h3>Failed Replays</h3>
+      <p class="card-value">{{ gate_result.failed_replays }}</p>
+    </div>
+    <div class="card">
+      <h3>New Denies</h3>
+      <p class="card-value">{{ gate_result.new_denies }}</p>
+    </div>
+    <div class="card">
+      <h3>New Approvals</h3>
+      <p class="card-value">{{ gate_result.new_approvals }}</p>
+    </div>
+  </div>
+
+  <!-- Per-rule results -->
+  {% if gate_result.rule_results %}
+  <h3>Per-Rule Results</h3>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Rule</th>
+        <th>Status</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rr in gate_result.rule_results %}
+      <tr{% if rr.status == "failed" %} class="row-error"{% endif %}>
+        <td>{{ rr.name }}</td>
+        <td>
+          {% if rr.status == "passed" %}
+          <span class="badge badge-success">PASSED</span>
+          {% elif rr.status == "failed" %}
+          <span class="badge badge-error">FAILED</span>
+          {% elif rr.status == "warning" %}
+          <span class="badge badge-warning">WARNING</span>
+          {% else %}
+          <span class="badge">{{ rr.status | upper }}</span>
+          {% endif %}
+        </td>
+        <td>{{ rr.message | default('—') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- Changed cases table -->
+{% set changed = report.results | selectattr('outcome', 'ne', 'unchanged') | list %}
+{% if changed %}
+<section class="report-section">
+  <h2>Changed Cases</h2>
+  <table class="console-table">
+    <thead>
+      <tr>
+        <th>Case ID</th>
+        <th>Baseline</th>
+        <th>Candidate</th>
+        <th>Outcome</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in changed %}
+      <tr>
+        <td>{{ r.case_id }}</td>
+        <td>{{ r.baseline_status or '—' }}</td>
+        <td>{{ r.candidate_status or '—' }}</td>
+        <td>
+          {% if r.outcome == "would_deny" %}
+          <span class="badge badge-error">WOULD DENY</span>
+          {% elif r.outcome == "would_allow" %}
+          <span class="badge badge-warning">WOULD ALLOW</span>
+          {% elif r.outcome == "would_require_approval" %}
+          <span class="badge badge-info">WOULD REQUIRE APPROVAL</span>
+          {% elif r.outcome == "would_change" %}
+          <span class="badge badge-warning">WOULD CHANGE</span>
+          {% elif r.outcome == "error" %}
+          <span class="badge badge-error">ERROR</span>
+          {% else %}
+          <span class="badge">{{ r.outcome }}</span>
+          {% endif %}
+        </td>
+        <td>{{ r.reason or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<p><a href="{{ base_path }}/simulation/gate">Back to Simulation Gate</a></p>
+<p><a href="{{ base_path }}/simulation">Back to Simulation</a></p>
+
+{% endif %}
+{% endblock %}
