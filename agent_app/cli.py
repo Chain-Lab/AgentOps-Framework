@@ -703,6 +703,17 @@ def main() -> int:
     sim_export_parser.add_argument("--until", default=None, help="Window end (ISO 8601)")
     sim_export_parser.add_argument("--limit", type=int, default=None, help="Max audit cases to replay")
 
+    # Phase 41: simulation gate subcommand
+    sim_gate_parser = sim_subparsers.add_parser("gate", help="Run simulation gate (validate + replay + gate)")
+    sim_gate_parser.add_argument("--config", default="agentapp.yaml", help="Config file path")
+    sim_gate_parser.add_argument("--rules-file", required=True, help="YAML file with candidate runtime policy rules")
+    sim_gate_parser.add_argument("--gate-rules-file", required=False, help="YAML file with simulation gate rules")
+    sim_gate_parser.add_argument("--since", help="ISO 8601 datetime for audit window start")
+    sim_gate_parser.add_argument("--until", help="ISO 8601 datetime for audit window end")
+    sim_gate_parser.add_argument("--limit", type=int, default=None, help="Max audit cases to replay")
+    sim_gate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    sim_gate_parser.add_argument("--output", help="Write output to file")
+
     # recovery commands (Phase 16.5)
     recovery_parser = subparsers.add_parser("recovery", help="Recovery commands")
     recovery_sub = recovery_parser.add_subparsers(dest="recovery_command")
@@ -1020,6 +1031,8 @@ def main() -> int:
             return asyncio.run(_cmd_policy_simulation_replay(args))
         elif args.simulation_command == "export":
             return asyncio.run(_cmd_policy_simulation_export(args))
+        elif args.simulation_command == "gate":
+            return asyncio.run(_cmd_policy_simulation_gate(args))
         else:
             simulation_parser.print_help()
             return 1
@@ -5318,6 +5331,197 @@ async def _cmd_policy_simulation_export(args: argparse.Namespace) -> int:
         return 1
 
     return 0
+
+
+# --- Phase 41: Policy simulation gate CLI commands ---
+
+
+def _parse_gate_rules(path: str) -> list:
+    """Parse gate rules from a YAML file."""
+    import yaml
+    from agent_app.governance.policy_gate import PolicyGateRule
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    if data is None:
+        return []
+
+    if isinstance(data, dict):
+        data = data.get("gate_rules", data.get("gates", [data]))
+
+    if not isinstance(data, list):
+        data = [data]
+
+    rules = []
+    for item in data:
+        rules.append(PolicyGateRule(
+            name=item.get("name", ""),
+            description=item.get("description"),
+            max_changed_decisions=item.get("max_changed_decisions"),
+            max_changed_ratio=item.get("max_changed_ratio"),
+            max_failed_replays=item.get("max_failed_replays"),
+            max_new_denies=item.get("max_new_denies"),
+            max_new_approvals=item.get("max_new_approvals"),
+            fail_on_missing_required_context=item.get("fail_on_missing_required_context", False),
+        ))
+    return rules
+
+
+async def _cmd_policy_simulation_gate(args: argparse.Namespace) -> int:
+    """Run simulation gate: validate candidate rules, replay, and evaluate gate.
+
+    Exit 0 if gate passes, non-zero if gate fails.
+    """
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_simulation_service import PolicySimulationService
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    # Parse candidate rules
+    try:
+        candidate_rules = _parse_candidate_rules(args.rules_file)
+    except Exception as exc:
+        print(f"Error parsing rules file: {exc}", file=sys.stderr)
+        return 1
+
+    if not candidate_rules:
+        print("No rules found in the rules file.", file=sys.stderr)
+        return 1
+
+    # Parse gate rules from file or app config
+    gate_rules = None
+    if args.gate_rules_file:
+        try:
+            gate_rules = _parse_gate_rules(args.gate_rules_file)
+        except Exception as exc:
+            print(f"Error parsing gate rules file: {exc}", file=sys.stderr)
+            return 1
+    else:
+        # Try to get gate rules from app config
+        evaluator = getattr(app, "simulation_gate_evaluator", None)
+        if evaluator is not None:
+            gate_rules = getattr(evaluator, "_rules", None)
+            if gate_rules is None:
+                inner = getattr(evaluator, "_gate_evaluator", None)
+                if inner is not None:
+                    gate_rules = getattr(inner, "_rules", None)
+
+    if not gate_rules:
+        print("No gate rules available. Provide --gate-rules-file or configure gates in app config.", file=sys.stderr)
+        return 1
+
+    # Parse time window
+    window_start, window_end, parse_error = _parse_window(args)
+    if parse_error:
+        return 1
+
+    # Get or build simulation service
+    service = getattr(app, "policy_simulation_service", None)
+    if service is None:
+        audit_logger = getattr(app, "_audit_logger", None)
+        runtime_policy_store = getattr(app, "_runtime_policy_store", None)
+        service = PolicySimulationService(
+            audit_logger=audit_logger,
+            runtime_policy_store=runtime_policy_store,
+        )
+
+    # Run validate + replay + gate
+    try:
+        sim_report, val_report, gate_result = await service.validate_and_gate(
+            candidate_rules=candidate_rules,
+            gate_rules=gate_rules,
+            window_start=window_start,
+            window_end=window_end,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error running simulation gate: {exc}", file=sys.stderr)
+        return 1
+
+    # Prepare output data
+    output_data = {
+        "simulation_report": {
+            "simulation_id": sim_report.simulation_id,
+            "generated_at": sim_report.generated_at.isoformat(),
+            "candidate_rule_ids": sim_report.candidate_rule_ids,
+            "summary": {
+                "total": sim_report.summary.total,
+                "unchanged": sim_report.summary.unchanged,
+                "would_allow": sim_report.summary.would_allow,
+                "would_deny": sim_report.summary.would_deny,
+                "would_require_approval": sim_report.summary.would_require_approval,
+                "would_change": sim_report.summary.would_change,
+                "errors": sim_report.summary.errors,
+            },
+        },
+        "validation_report": {
+            "valid": val_report.valid,
+            "issues_count": len(val_report.issues),
+        },
+        "gate_result": {
+            "gate_result_id": gate_result.gate_result_id,
+            "status": gate_result.status,
+            "passed": gate_result.passed,
+            "total_decisions": gate_result.total_decisions,
+            "changed_decisions": gate_result.changed_decisions,
+            "failed_replays": gate_result.failed_replays,
+            "changed_ratio": gate_result.changed_ratio,
+            "new_denies": gate_result.new_denies,
+            "new_approvals": gate_result.new_approvals,
+            "missing_context_count": gate_result.missing_context_count,
+            "rule_results": gate_result.rule_results,
+        },
+    }
+
+    # Output
+    if getattr(args, "json", False):
+        print(json.dumps(output_data, indent=2, default=str))
+    else:
+        # Text output
+        s = sim_report.summary
+        print("Simulation Gate Report")
+        print("=" * 40)
+        print(f"Simulation ID: {sim_report.simulation_id}")
+        print()
+        print("Simulation Summary:")
+        print(f"  Total:                  {s.total}")
+        print(f"  Unchanged:              {s.unchanged}")
+        print(f"  Would Allow:            {s.would_allow}")
+        print(f"  Would Deny:             {s.would_deny}")
+        print(f"  Would Require Approval: {s.would_require_approval}")
+        print(f"  Would Change:           {s.would_change}")
+        print(f"  Errors:                 {s.errors}")
+        print()
+        print(f"Validation Issues: {len(val_report.issues)}")
+        print()
+        print(f"Gate Status: {gate_result.status.upper()}")
+        print(f"Gate Passed: {gate_result.passed}")
+
+        if gate_result.rule_results:
+            failed_rules = [r for r in gate_result.rule_results if r.get("status") == "failed"]
+            if failed_rules:
+                print()
+                print("Failed Gate Rules:")
+                for r in failed_rules:
+                    print(f"  {r['rule_name']}: {', '.join(r.get('failures', []))}")
+
+    # Write output file if requested
+    if getattr(args, "output", None):
+        try:
+            with open(args.output, "w") as f:
+                json.dump(output_data, f, indent=2, default=str)
+            if not getattr(args, "json", False):
+                print(f"\nOutput written to {args.output}")
+        except Exception as exc:
+            print(f"Error writing output file: {exc}", file=sys.stderr)
+            return 1
+
+    return 0 if gate_result.passed else 1
 
 
 async def _cmd_policy_runtime_list(args: argparse.Namespace) -> int:
