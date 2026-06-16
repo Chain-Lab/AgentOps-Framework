@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -14,6 +15,7 @@ from agent_app.governance.policy_observability import (
     PolicyObservabilityReport,
     PolicyToolSummary,
 )
+from agent_app.runtime.policy_compliance_export import report_to_csv_rows, report_to_json
 from tests.conftest import _run_async
 
 
@@ -548,3 +550,94 @@ class TestPolicyObservabilityService:
         assert latency.min_seconds == 30.0
         assert latency.max_seconds == 120.0
         assert latency.average_seconds == 70.0
+
+
+class TestComplianceExport:
+    """Tests for compliance export helpers (Phase 39 Task 3)."""
+
+    def test_json_export_works(self):
+        """report_to_json returns valid JSON string with report_id."""
+        report = PolicyObservabilityReport(
+            report_id="por_exp1",
+            generated_at=datetime.now(timezone.utc),
+            total_decisions=5,
+        )
+        json_str = report_to_json(report)
+        data = json.loads(json_str)
+        assert data["report_id"] == "por_exp1"
+        assert data["total_decisions"] == 5
+
+    def test_csv_rows_include_action_summaries(self):
+        """CSV rows contain action section entries."""
+        report = PolicyObservabilityReport(
+            report_id="por_exp2",
+            generated_at=datetime.now(timezone.utc),
+            actions=[
+                PolicyActionSummary(
+                    action_type="tool.execute",
+                    allowed=3,
+                    denied=1,
+                    approval_required=1,
+                    total=5,
+                ),
+            ],
+        )
+        rows = report_to_csv_rows(report)
+        action_rows = [r for r in rows if r["section"] == "action"]
+        assert len(action_rows) == 1
+        assert action_rows[0]["key"] == "tool.execute"
+        assert action_rows[0]["allowed"] == 3
+        assert action_rows[0]["denied"] == 1
+        assert action_rows[0]["approval_required"] == 1
+        assert action_rows[0]["total"] == 5
+
+    def test_csv_rows_include_actor_summaries(self):
+        """CSV rows contain actor section entries."""
+        report = PolicyObservabilityReport(
+            report_id="por_exp3",
+            generated_at=datetime.now(timezone.utc),
+            actors=[
+                PolicyActorSummary(
+                    actor_id="user_1",
+                    allowed=2,
+                    denied=1,
+                    total=3,
+                ),
+            ],
+        )
+        rows = report_to_csv_rows(report)
+        actor_rows = [r for r in rows if r["section"] == "actor"]
+        assert len(actor_rows) == 1
+        assert actor_rows[0]["key"] == "user_1"
+        assert actor_rows[0]["allowed"] == 2
+        assert actor_rows[0]["denied"] == 1
+        assert actor_rows[0]["total"] == 3
+
+    def test_csv_rows_include_tool_summaries(self):
+        """CSV rows contain tool section entries."""
+        report = PolicyObservabilityReport(
+            report_id="por_exp4",
+            generated_at=datetime.now(timezone.utc),
+            tools=[
+                PolicyToolSummary(
+                    tool_name="refund.request",
+                    denied=2,
+                    total=2,
+                ),
+            ],
+        )
+        rows = report_to_csv_rows(report)
+        tool_rows = [r for r in rows if r["section"] == "tool"]
+        assert len(tool_rows) == 1
+        assert tool_rows[0]["key"] == "refund.request"
+        assert tool_rows[0]["denied"] == 2
+        assert tool_rows[0]["total"] == 2
+
+    def test_csv_rows_empty_report(self):
+        """Empty report produces empty CSV rows."""
+        report = PolicyObservabilityReport(
+            report_id="por_exp5",
+            generated_at=datetime.now(timezone.utc),
+        )
+        rows = report_to_csv_rows(report)
+        assert rows == []
