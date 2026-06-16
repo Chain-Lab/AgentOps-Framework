@@ -800,6 +800,8 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         policy_enforcement_service=getattr(agent_app, "_policy_enforcement_service", None),
         # Phase 39: policy observability service
         observability_service=getattr(agent_app, "policy_observability_service", None),
+        # Phase 40: policy simulation service
+        simulation_service=getattr(agent_app, "policy_simulation_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

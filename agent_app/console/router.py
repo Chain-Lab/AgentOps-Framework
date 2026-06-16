@@ -57,6 +57,7 @@ def build_policy_console_router(
     runtime_policy_store: Any = None,
     policy_enforcement_service: Any = None,
     observability_service: Any = None,
+    simulation_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -81,6 +82,8 @@ def build_policy_console_router(
         approval_store: Optional rollout step approval store (Phase 36).
         runtime_policy_store: Optional runtime policy rule store (Phase 38).
         policy_enforcement_service: Optional policy enforcement service (Phase 38).
+        observability_service: Optional policy observability service (Phase 39).
+        simulation_service: Optional policy simulation service (Phase 40).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -2565,6 +2568,255 @@ def build_policy_console_router(
                 "store_available": approval_store is not None,
                 "approval": approval_dict,
                 "error": error_msg,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 40 Task 8: Simulation pages
+    # -----------------------------------------------------------------------
+
+    def _parse_candidate_rules_yaml(yaml_text: str) -> tuple[list, str | None]:
+        """Parse candidate rules from YAML text.
+
+        Returns (rules, error_message).  If parsing fails, rules is empty
+        and error_message describes the problem.
+        """
+        if not yaml_text or not yaml_text.strip():
+            return [], "Candidate rules YAML is required."
+        try:
+            import yaml
+        except ImportError:
+            return [], "PyYAML is not installed. Install with: pip install pyyaml"
+        try:
+            parsed = yaml.safe_load(yaml_text)
+        except yaml.YAMLError as exc:
+            return [], f"Invalid YAML: {exc}"
+        if not isinstance(parsed, list):
+            return [], "YAML must be a list of rule objects."
+        from agent_app.governance.runtime_policy import (
+            RuntimePolicyEffect,
+            RuntimePolicyRule,
+        )
+        rules: list[RuntimePolicyRule] = []
+        for i, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                return [], f"Rule at index {i} is not a mapping."
+            try:
+                rule_id = item.get("rule_id", f"candidate_{i + 1}")
+                # Auto-prefix rpr_ if missing — candidate YAML from the
+                # console doesn't require knowledge of internal prefixes.
+                if not rule_id.startswith("rpr_"):
+                    rule_id = f"rpr_{rule_id}"
+                name = item.get("name", f"Candidate Rule {i + 1}")
+                action_type = PolicyActionType(item.get("action_type", "tool.execute"))
+                effect = RuntimePolicyEffect(item.get("effect", "allow"))
+                rule = RuntimePolicyRule(
+                    rule_id=rule_id,
+                    name=name,
+                    action_type=action_type,
+                    effect=effect,
+                    tool_name=item.get("tool_name"),
+                    risk_level=item.get("risk_level"),
+                    reason=item.get("reason"),
+                )
+                rules.append(rule)
+            except (ValueError, KeyError) as exc:
+                return [], f"Invalid rule at index {i}: {exc}"
+        return rules, None
+
+    @router.get("/simulation", response_class=HTMLResponse)
+    async def simulation_page(request: Request):
+        """Main simulation page with textarea for candidate YAML rules."""
+        return templates.TemplateResponse(
+            request,
+            "policy_simulation.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": None,
+                "error": None,
+            },
+        )
+
+    @router.post("/simulation/validate", response_class=HTMLResponse)
+    async def simulation_validate(request: Request):
+        """Validate candidate rules and return validation report."""
+        form = await request.form()
+        candidate_yaml = form.get("candidate_yaml", "")
+
+        rules, parse_error = _parse_candidate_rules_yaml(candidate_yaml)
+        if parse_error:
+            return templates.TemplateResponse(
+                request,
+                "policy_validation_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": parse_error,
+                },
+            )
+
+        try:
+            from agent_app.runtime.policy_validation import RuntimePolicyValidator
+            validator = RuntimePolicyValidator()
+            report = validator.validate_rules(rules)
+            # Convert report to dict for template rendering
+            report_dict = {
+                "valid": report.valid,
+                "issues": [
+                    {
+                        "severity": issue.severity.value,
+                        "code": issue.code,
+                        "message": issue.message,
+                        "rule_id": issue.rule_id or "",
+                        "field": issue.field or "",
+                    }
+                    for issue in report.issues
+                ],
+            }
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request,
+                "policy_validation_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": str(exc),
+                },
+            )
+
+        return templates.TemplateResponse(
+            request,
+            "policy_validation_report.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report_dict,
+                "error": None,
+            },
+        )
+
+    @router.post("/simulation/replay", response_class=HTMLResponse)
+    async def simulation_replay(request: Request):
+        """Run simulation replay and return simulation report."""
+        if simulation_service is None:
+            return HTMLResponse(
+                "<p>Policy simulation service not configured.</p>",
+                status_code=404,
+            )
+
+        form = await request.form()
+        candidate_yaml = form.get("candidate_yaml", "")
+        since_str = form.get("since", "")
+        until_str = form.get("until", "")
+        limit_str = form.get("limit", "")
+
+        rules, parse_error = _parse_candidate_rules_yaml(candidate_yaml)
+        if parse_error:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": parse_error,
+                },
+            )
+
+        window_start = None
+        window_end = None
+        limit = None
+        error = None
+
+        if since_str:
+            try:
+                window_start = datetime.fromisoformat(
+                    since_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for since: {since_str}"
+        if until_str:
+            try:
+                window_end = datetime.fromisoformat(
+                    until_str.replace("Z", "+00:00")
+                )
+            except ValueError:
+                error = f"Invalid datetime format for until: {until_str}"
+        if limit_str:
+            try:
+                limit = int(limit_str)
+            except ValueError:
+                error = f"Invalid limit: {limit_str}"
+
+        if error:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": error,
+                },
+            )
+
+        try:
+            report = await simulation_service.simulate_from_audit(
+                candidate_rules=rules,
+                window_start=window_start,
+                window_end=window_end,
+                limit=limit,
+            )
+            report_dict = {
+                "simulation_id": report.simulation_id,
+                "name": report.name,
+                "generated_at": report.generated_at.isoformat() if hasattr(report.generated_at, "isoformat") else str(report.generated_at),
+                "candidate_rule_ids": report.candidate_rule_ids,
+                "summary": {
+                    "total": report.summary.total,
+                    "unchanged": report.summary.unchanged,
+                    "would_allow": report.summary.would_allow,
+                    "would_deny": report.summary.would_deny,
+                    "would_require_approval": report.summary.would_require_approval,
+                    "would_change": report.summary.would_change,
+                    "errors": report.summary.errors,
+                },
+                "results": [
+                    {
+                        "case_id": r.case_id,
+                        "baseline_status": r.baseline_status or "",
+                        "candidate_status": r.candidate_status or "",
+                        "outcome": r.outcome.value if hasattr(r.outcome, "value") else str(r.outcome),
+                        "reason": r.reason or "",
+                        "decision_id": r.decision_id or "",
+                        "errors": r.errors,
+                    }
+                    for r in report.results
+                ],
+            }
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request,
+                "policy_simulation_report.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "error": str(exc),
+                },
+            )
+
+        return templates.TemplateResponse(
+            request,
+            "policy_simulation_report.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report_dict,
+                "error": None,
             },
         )
 

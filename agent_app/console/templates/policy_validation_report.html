@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Validation Report</h2>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+<p><a href="{{ base_path }}/simulation">Back to Simulation</a></p>
+{% endif %}
+
+{% if report %}
+
+{% if report.valid %}
+<p class="success">All candidate rules are valid. No errors found.</p>
+{% else %}
+<p class="error">Validation found errors in candidate rules.</p>
+{% endif %}
+
+{% if report.issues %}
+<table class="console-table">
+  <thead>
+    <tr>
+      <th>Severity</th>
+      <th>Code</th>
+      <th>Message</th>
+      <th>Rule ID</th>
+      <th>Field</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for issue in report.issues %}
+    <tr>
+      <td>
+        {% if issue.severity == "error" %}
+        <span class="badge badge-error">ERROR</span>
+        {% elif issue.severity == "warning" %}
+        <span class="badge badge-warning">WARNING</span>
+        {% else %}
+        <span class="badge badge-info">INFO</span>
+        {% endif %}
+      </td>
+      <td>{{ issue.code }}</td>
+      <td>{{ issue.message }}</td>
+      <td>{{ issue.rule_id or '—' }}</td>
+      <td>{{ issue.field or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No issues found.</p>
+{% endif %}
+
+<p><a href="{{ base_path }}/simulation">Back to Simulation</a></p>
+
+{% endif %}
+{% endblock %}

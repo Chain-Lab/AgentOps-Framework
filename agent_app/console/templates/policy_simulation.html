@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Simulation</h2>
+
+<p>Test candidate runtime policy rules against historical audit data. Enter candidate rules as YAML below.</p>
+
+<form method="post" action="{{ base_path }}/simulation/validate" style="margin-bottom: 1em;">
+  <fieldset>
+    <legend>Validate Candidate Rules</legend>
+    <label for="candidate_yaml">Candidate Rules (YAML):</label><br>
+    <textarea id="candidate_yaml" name="candidate_yaml" rows="12" cols="80" placeholder="- rule_id: rule_1
+  name: Deny High Risk
+  action_type: tool.execute
+  effect: deny
+  risk_level: high
+  reason: High risk tools must be denied"></textarea><br>
+    <button type="submit">Validate Rules</button>
+  </fieldset>
+</form>
+
+<form method="post" action="{{ base_path }}/simulation/replay">
+  <fieldset>
+    <legend>Run Simulation Replay</legend>
+    <label for="replay_yaml">Candidate Rules (YAML):</label><br>
+    <textarea id="replay_yaml" name="candidate_yaml" rows="12" cols="80" placeholder="- rule_id: rule_1
+  name: Deny High Risk
+  action_type: tool.execute
+  effect: deny
+  risk_level: high
+  reason: High risk tools must be denied"></textarea><br>
+    <label>Since (ISO datetime): <input type="text" name="since" placeholder="2026-01-01T00:00:00Z"></label><br>
+    <label>Until (ISO datetime): <input type="text" name="until" placeholder="2026-12-31T23:59:59Z"></label><br>
+    <label>Limit: <input type="number" name="limit" placeholder="100" min="1"></label><br>
+    <button type="submit">Run Simulation</button>
+  </fieldset>
+</form>
+
+{% endblock %}
