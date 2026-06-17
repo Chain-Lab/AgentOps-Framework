@@ -12,6 +12,7 @@ from agent_app.governance.policy_change_event import (
 )
 from agent_app.governance.policy_rbac import PolicyReleasePermission
 from agent_app.governance.policy_rollout import (
+    RolloutGateMode,
     RolloutPlan,
     RolloutPlanStatus,
     RolloutStep,
@@ -32,6 +33,7 @@ from agent_app.runtime.policy_rollout_approval_policy import (
 )
 from agent_app.governance.audit import AuditEvent
 from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+from agent_app.governance.policy_rollout_gate import RolloutGateExecutionStatus
 
 
 class RolloutService:
@@ -53,6 +55,7 @@ class RolloutService:
         approval_require_reason: bool = False,
         approval_policy: RolloutApprovalPolicy | None = None,
         release_gate_automation_service: Any = None,
+        rollout_gate_automation_service: Any = None,
     ) -> None:
         self._rollout_store = rollout_store
         self._release_service = release_service
@@ -64,6 +67,7 @@ class RolloutService:
         self._approval_require_reason = approval_require_reason
         self._approval_policy = approval_policy
         self._release_gate_automation_service = release_gate_automation_service
+        self._rollout_gate_automation_service = rollout_gate_automation_service
 
     # --- Permission check ---
     async def _check_permission(
@@ -267,6 +271,144 @@ class RolloutService:
                 )
                 return plan
 
+        # Phase 43: Rollout gate automation (enhanced over Phase 42 manual blocking)
+        if (
+            self._rollout_gate_automation_service is not None
+            and (
+                next_step.requires_simulation_gate
+                or next_step.simulation_gate_mode != RolloutGateMode.DISABLED
+            )
+        ):
+            gate_result = await self._rollout_gate_automation_service.ensure_step_gate(
+                plan, next_step, context,
+            )
+
+            if gate_result.status == RolloutGateExecutionStatus.SATISFIED:
+                # Update step with gate IDs
+                next_step = next_step.model_copy(update={
+                    "simulation_gate_requirement_id": gate_result.requirement_id or next_step.simulation_gate_requirement_id,
+                    "simulation_gate_result_id": gate_result.gate_result_id or next_step.simulation_gate_result_id,
+                })
+
+            elif gate_result.status == RolloutGateExecutionStatus.BLOCKED:
+                blocked_step = next_step.model_copy(update={
+                    "status": RolloutStepStatus.BLOCKED,
+                    "error": {
+                        "type": "simulation_gate_required",
+                        "message": gate_result.reason or "Simulation gate blocked",
+                        "action_taken": gate_result.action_taken,
+                    },
+                    "simulation_gate_requirement_id": gate_result.requirement_id or next_step.simulation_gate_requirement_id,
+                })
+                updated_steps = [
+                    blocked_step if s.step_id == blocked_step.step_id else s
+                    for s in plan.steps
+                ]
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                await self._rollout_store.update(plan)
+                await self._write_audit(
+                    "policy.rollout.step_blocked",
+                    user_id=actor_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "rollout_id": rollout_id,
+                        "step_id": next_step.step_id,
+                        "reason": "simulation_gate_blocked",
+                        "gate_action": gate_result.action_taken,
+                    },
+                )
+                return plan
+
+            elif gate_result.status == RolloutGateExecutionStatus.FAILED:
+                failed_step = next_step.model_copy(update={
+                    "status": RolloutStepStatus.FAILED,
+                    "error": {
+                        "type": "simulation_gate_failed",
+                        "message": gate_result.reason or "Simulation gate failed",
+                        "action_taken": gate_result.action_taken,
+                    },
+                    "simulation_gate_requirement_id": gate_result.requirement_id or next_step.simulation_gate_requirement_id,
+                })
+                updated_steps = [
+                    failed_step if s.step_id == failed_step.step_id else s
+                    for s in plan.steps
+                ]
+                now = datetime.now(timezone.utc)
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "status": RolloutPlanStatus.FAILED,
+                    "updated_at": now,
+                })
+                await self._rollout_store.update(plan)
+                await self._write_audit(
+                    "policy.rollout.step_failed",
+                    user_id=actor_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "rollout_id": rollout_id,
+                        "step_id": next_step.step_id,
+                        "reason": "simulation_gate_failed",
+                        "gate_action": gate_result.action_taken,
+                    },
+                )
+                return plan
+
+            elif gate_result.status == RolloutGateExecutionStatus.SKIPPED:
+                skipped_step = next_step.model_copy(update={
+                    "status": RolloutStepStatus.SKIPPED,
+                    "simulation_gate_requirement_id": gate_result.requirement_id or next_step.simulation_gate_requirement_id,
+                })
+                updated_steps = [
+                    skipped_step if s.step_id == skipped_step.step_id else s
+                    for s in plan.steps
+                ]
+                now = datetime.now(timezone.utc)
+                # If all steps done (succeeded or skipped), complete the plan
+                all_done = all(
+                    s.status in (RolloutStepStatus.SUCCEEDED, RolloutStepStatus.SKIPPED)
+                    for s in updated_steps
+                )
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "status": RolloutPlanStatus.COMPLETED if all_done else plan.status,
+                    "updated_at": now,
+                })
+                await self._rollout_store.update(plan)
+                await self._write_audit(
+                    "policy.rollout.step_skipped",
+                    user_id=actor_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "rollout_id": rollout_id,
+                        "step_id": next_step.step_id,
+                        "reason": "simulation_gate_skipped",
+                    },
+                )
+                return plan
+
+            elif gate_result.status == RolloutGateExecutionStatus.ERROR:
+                # ERROR: treat as BLOCKED (conservative)
+                blocked_step = next_step.model_copy(update={
+                    "status": RolloutStepStatus.BLOCKED,
+                    "error": {
+                        "type": "simulation_gate_error",
+                        "message": gate_result.error.get("message", "Gate evaluation error") if gate_result.error else "Gate evaluation error",
+                    },
+                })
+                updated_steps = [
+                    blocked_step if s.step_id == blocked_step.step_id else s
+                    for s in plan.steps
+                ]
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                await self._rollout_store.update(plan)
+                return plan
+
         # Execute the step
         executed_step = await self._execute_step(plan, next_step, actor_id, context)
 
@@ -388,6 +530,9 @@ class RolloutService:
             step = next((s for s in plan.steps if s.step_id == next_step.step_id), None)
             if step and step.status == RolloutStepStatus.BLOCKED:
                 break
+            # If the step was skipped, continue to next step
+            if step and step.status == RolloutStepStatus.SKIPPED:
+                continue
 
         return plan
 
