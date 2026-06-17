@@ -61,6 +61,8 @@ def build_policy_console_router(
     simulation_gate_evaluator: Any = None,
     release_gate_automation_service: Any = None,
     rollout_gate_automation_service: Any = None,
+    notification_service: Any = None,
+    expiration_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -90,6 +92,8 @@ def build_policy_console_router(
         simulation_gate_evaluator: Optional simulation gate evaluator (Phase 41).
         release_gate_automation_service: Optional release gate automation service (Phase 42).
         rollout_gate_automation_service: Optional rollout gate automation service (Phase 43).
+        notification_service: Optional notification service (Phase 44).
+        expiration_service: Optional expiration service (Phase 44).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -3572,6 +3576,278 @@ def build_policy_console_router(
                 "step_id": step_id,
                 "gate_result": gate_result_dict,
                 "error": error,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 44 Task 7: Notification and expiration pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/notifications", response_class=HTMLResponse)
+    async def notifications_page(request: Request):
+        """Notifications list page."""
+        notifications_list: list[dict] = []
+        if notification_service is not None:
+            try:
+                notifications = await notification_service.list_notifications(limit=page_size)
+                for n in notifications:
+                    notifications_list.append({
+                        "notification_id": n.notification_id,
+                        "event_type": n.event_type,
+                        "severity": n.severity.value if hasattr(n.severity, "value") else str(n.severity),
+                        "title": n.title,
+                        "status": n.status.value if hasattr(n.status, "value") else str(n.status),
+                        "created_at": n.created_at.isoformat() if n.created_at and hasattr(n.created_at, "isoformat") else "",
+                        "sent_at": n.sent_at.isoformat() if n.sent_at and hasattr(n.sent_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_notifications.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notifications": notifications_list,
+                "store_available": notification_service is not None,
+                "message": None,
+            },
+        )
+
+    @router.post("/notifications/send-pending")
+    async def notifications_send_pending(request: Request):
+        """Send pending notifications."""
+        message = None
+        notifications_list: list[dict] = []
+        if notification_service is None:
+            message = "Notification service not configured."
+        else:
+            try:
+                sent = await notification_service.send_pending()
+                message = f"Sent {len(sent)} pending notification(s)."
+            except Exception as exc:
+                message = f"Error sending pending notifications: {exc}"
+
+        # Re-fetch notifications for display
+        if notification_service is not None:
+            try:
+                notifications = await notification_service.list_notifications(limit=page_size)
+                for n in notifications:
+                    notifications_list.append({
+                        "notification_id": n.notification_id,
+                        "event_type": n.event_type,
+                        "severity": n.severity.value if hasattr(n.severity, "value") else str(n.severity),
+                        "title": n.title,
+                        "status": n.status.value if hasattr(n.status, "value") else str(n.status),
+                        "created_at": n.created_at.isoformat() if n.created_at and hasattr(n.created_at, "isoformat") else "",
+                        "sent_at": n.sent_at.isoformat() if n.sent_at and hasattr(n.sent_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_notifications.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notifications": notifications_list,
+                "store_available": notification_service is not None,
+                "message": message,
+            },
+        )
+
+    @router.get("/notification-rules", response_class=HTMLResponse)
+    async def notification_rules_page(request: Request):
+        """Notification rules list page."""
+        rules_list: list[dict] = []
+        if notification_service is not None:
+            rule_store = getattr(notification_service, "_rule_store", None)
+            if rule_store is not None:
+                try:
+                    rules = await rule_store.list()
+                    for r in rules:
+                        rules_list.append({
+                            "rule_id": r.rule_id,
+                            "name": r.name,
+                            "event_types": list(r.event_types) if hasattr(r.event_types, "__iter__") else [],
+                            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                            "channels": list(r.channels) if hasattr(r.channels, "__iter__") else [],
+                            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+                        })
+                except Exception:
+                    pass
+        return templates.TemplateResponse(
+            request,
+            "policy_notification_rules.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rules": rules_list,
+                "store_available": notification_service is not None,
+                "message": None,
+            },
+        )
+
+    @router.post("/notification-rules/{rule_id}/enable")
+    async def notification_rule_enable(request: Request, rule_id: str):
+        """Enable a notification rule."""
+        message = None
+        rules_list: list[dict] = []
+        if notification_service is None:
+            message = "Notification service not configured."
+        else:
+            rule_store = getattr(notification_service, "_rule_store", None)
+            if rule_store is None:
+                message = "Notification rule store not available."
+            else:
+                try:
+                    await rule_store.enable(rule_id)
+                    message = f"Rule '{rule_id}' enabled."
+                except KeyError:
+                    message = f"Rule '{rule_id}' not found."
+                except Exception as exc:
+                    message = f"Error enabling rule: {exc}"
+
+        # Re-fetch rules for display
+        if notification_service is not None:
+            rule_store = getattr(notification_service, "_rule_store", None)
+            if rule_store is not None:
+                try:
+                    rules = await rule_store.list()
+                    for r in rules:
+                        rules_list.append({
+                            "rule_id": r.rule_id,
+                            "name": r.name,
+                            "event_types": list(r.event_types) if hasattr(r.event_types, "__iter__") else [],
+                            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                            "channels": list(r.channels) if hasattr(r.channels, "__iter__") else [],
+                            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+                        })
+                except Exception:
+                    pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_notification_rules.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rules": rules_list,
+                "store_available": notification_service is not None,
+                "message": message,
+            },
+        )
+
+    @router.post("/notification-rules/{rule_id}/disable")
+    async def notification_rule_disable(request: Request, rule_id: str):
+        """Disable a notification rule."""
+        message = None
+        rules_list: list[dict] = []
+        if notification_service is None:
+            message = "Notification service not configured."
+        else:
+            rule_store = getattr(notification_service, "_rule_store", None)
+            if rule_store is None:
+                message = "Notification rule store not available."
+            else:
+                try:
+                    await rule_store.disable(rule_id)
+                    message = f"Rule '{rule_id}' disabled."
+                except KeyError:
+                    message = f"Rule '{rule_id}' not found."
+                except Exception as exc:
+                    message = f"Error disabling rule: {exc}"
+
+        # Re-fetch rules for display
+        if notification_service is not None:
+            rule_store = getattr(notification_service, "_rule_store", None)
+            if rule_store is not None:
+                try:
+                    rules = await rule_store.list()
+                    for r in rules:
+                        rules_list.append({
+                            "rule_id": r.rule_id,
+                            "name": r.name,
+                            "event_types": list(r.event_types) if hasattr(r.event_types, "__iter__") else [],
+                            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                            "channels": list(r.channels) if hasattr(r.channels, "__iter__") else [],
+                            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+                        })
+                except Exception:
+                    pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_notification_rules.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rules": rules_list,
+                "store_available": notification_service is not None,
+                "message": message,
+            },
+        )
+
+    @router.get("/expiration", response_class=HTMLResponse)
+    async def expiration_page(request: Request):
+        """Expiration page showing last sweep info."""
+        return templates.TemplateResponse(
+            request,
+            "policy_expiration.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "last_sweep": None,
+                "store_available": expiration_service is not None,
+                "message": None,
+            },
+        )
+
+    @router.post("/expiration/sweep")
+    async def expiration_sweep(request: Request):
+        """Run expiration sweep."""
+        message = None
+        last_sweep = None
+        if expiration_service is None:
+            message = "Expiration service not configured."
+        else:
+            try:
+                report = await expiration_service.sweep()
+                expired_count = sum(1 for r in report.results if hasattr(r.action, "value") and r.action.value == "expired")
+                error_count = sum(1 for r in report.results if hasattr(r.action, "value") and r.action.value == "error")
+                skipped_count = len(report.results) - expired_count - error_count
+                last_sweep = {
+                    "sweep_id": report.sweep_id,
+                    "started_at": report.started_at.isoformat() if report.started_at and hasattr(report.started_at, "isoformat") else "",
+                    "completed_at": report.completed_at.isoformat() if report.completed_at and hasattr(report.completed_at, "isoformat") else "",
+                    "total_results": len(report.results),
+                    "expired_count": expired_count,
+                    "skipped_count": skipped_count,
+                    "error_count": error_count,
+                    "results": [
+                        {
+                            "target_type": r.target_type.value if hasattr(r.target_type, "value") else str(r.target_type),
+                            "target_id": r.target_id,
+                            "action": r.action.value if hasattr(r.action, "value") else str(r.action),
+                            "reason": r.reason or "",
+                        }
+                        for r in report.results
+                    ],
+                }
+                message = f"Sweep completed: {expired_count} expired, {skipped_count} skipped, {error_count} errors."
+            except Exception as exc:
+                message = f"Error running sweep: {exc}"
+
+        return templates.TemplateResponse(
+            request,
+            "policy_expiration.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "last_sweep": last_sweep,
+                "store_available": expiration_service is not None,
+                "message": message,
             },
         )
 

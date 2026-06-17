@@ -680,6 +680,49 @@ def main() -> int:
     rollout_gate_attach_parser.add_argument("--actor-id", required=True, help="Actor ID")
     rollout_gate_attach_parser.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
 
+    # Phase 44: policy notification subcommands
+    notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
+    notification_sub = notification_parser.add_subparsers(dest="notification_command")
+
+    notification_list_parser = notification_sub.add_parser("list", help="List policy notifications")
+    notification_list_parser.add_argument("--config", required=True, help="Config file path")
+    notification_list_parser.add_argument("--status", default=None, help="Filter by status")
+    notification_list_parser.add_argument("--event-type", default=None, help="Filter by event type")
+    notification_list_parser.add_argument("--limit", type=int, default=20, help="Max results")
+    notification_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    notification_send_pending_parser = notification_sub.add_parser("send-pending", help="Send pending notifications")
+    notification_send_pending_parser.add_argument("--config", required=True, help="Config file path")
+    notification_send_pending_parser.add_argument("--limit", type=int, default=None, help="Max notifications to send")
+    notification_send_pending_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    notification_rule_parser = notification_sub.add_parser("rule", help="Notification rule commands")
+    notification_rule_sub = notification_rule_parser.add_subparsers(dest="notification_rule_command")
+
+    notification_rule_list_parser = notification_rule_sub.add_parser("list", help="List notification rules")
+    notification_rule_list_parser.add_argument("--config", required=True, help="Config file path")
+    notification_rule_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    notification_rule_enable_parser = notification_rule_sub.add_parser("enable", help="Enable a notification rule")
+    notification_rule_enable_parser.add_argument("--config", required=True, help="Config file path")
+    notification_rule_enable_parser.add_argument("--rule-id", required=True, help="Rule ID to enable")
+
+    notification_rule_disable_parser = notification_rule_sub.add_parser("disable", help="Disable a notification rule")
+    notification_rule_disable_parser.add_argument("--config", required=True, help="Config file path")
+    notification_rule_disable_parser.add_argument("--rule-id", required=True, help="Rule ID to disable")
+
+    # Phase 44: policy expiration subcommands
+    expiration_parser = policy_sub.add_parser("expiration", help="Policy expiration commands (Phase 44)")
+    expiration_sub = expiration_parser.add_subparsers(dest="expiration_command")
+
+    expiration_sweep_parser = expiration_sub.add_parser("sweep", help="Run expiration sweep")
+    expiration_sweep_parser.add_argument("--config", required=True, help="Config file path")
+    expiration_sweep_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    expiration_run_once_parser = expiration_sub.add_parser("run-once", help="Run expiration sweep once")
+    expiration_run_once_parser.add_argument("--config", required=True, help="Config file path")
+    expiration_run_once_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
     # Phase 38: runtime policy subcommands
     runtime_parser = policy_sub.add_parser("runtime", help="Runtime policy management (Phase 38)")
     runtime_sub = runtime_parser.add_subparsers(dest="runtime_command")
@@ -1076,6 +1119,31 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_rollout_gate_status(args))
             if args.rollout_gate_command == "attach":
                 return asyncio.run(_cmd_policy_rollout_gate_attach(args))
+
+    # Phase 44: policy notification subcommands
+    if args.command == "policy" and args.policy_command == "notification":
+        if args.notification_command == "list":
+            return asyncio.run(_cmd_policy_notification_list(args))
+        if args.notification_command == "send-pending":
+            return asyncio.run(_cmd_policy_notification_send_pending(args))
+        if args.notification_command == "rule":
+            if args.notification_rule_command == "list":
+                return asyncio.run(_cmd_policy_notification_rule_list(args))
+            if args.notification_rule_command == "enable":
+                return asyncio.run(_cmd_policy_notification_rule_enable(args))
+            if args.notification_rule_command == "disable":
+                return asyncio.run(_cmd_policy_notification_rule_disable(args))
+        notification_parser.print_help()
+        return 1
+
+    # Phase 44: policy expiration subcommands
+    if args.command == "policy" and args.policy_command == "expiration":
+        if args.expiration_command == "sweep":
+            return asyncio.run(_cmd_policy_expiration_sweep(args))
+        if args.expiration_command == "run-once":
+            return asyncio.run(_cmd_policy_expiration_run_once(args))
+        expiration_parser.print_help()
+        return 1
 
     # Phase 38: runtime policy subcommands
     if args.command == "policy" and args.policy_command == "runtime":
@@ -6303,6 +6371,308 @@ async def _cmd_policy_rollout_gate_attach(args: argparse.Namespace) -> int:
     if req.status == ReleaseGateRequirementStatus.SATISFIED:
         return 0
     return 1
+
+
+# -- Phase 44: Notification and expiration commands --
+
+
+async def _cmd_policy_notification_list(args: argparse.Namespace) -> int:
+    """List policy notifications."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_notification import PolicyNotificationStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "notification_service", None)
+    if service is None:
+        print("Notification service not configured.", file=sys.stderr)
+        return 1
+
+    status_filter = None
+    if args.status:
+        try:
+            status_filter = PolicyNotificationStatus(args.status)
+        except ValueError:
+            print(f"Invalid status: {args.status}. Valid values: {', '.join(s.value for s in PolicyNotificationStatus)}", file=sys.stderr)
+            return 1
+
+    try:
+        notifications = await service.list_notifications(
+            status=status_filter,
+            event_type=args.event_type,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing notifications: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = []
+        for n in notifications:
+            data.append({
+                "notification_id": n.notification_id,
+                "event_type": n.event_type,
+                "severity": n.severity.value if hasattr(n.severity, "value") else str(n.severity),
+                "title": n.title,
+                "status": n.status.value if hasattr(n.status, "value") else str(n.status),
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+                "sent_at": n.sent_at.isoformat() if n.sent_at else None,
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        if not notifications:
+            print("No notifications found.")
+            return 0
+        print(f"{'ID':<20} {'Event Type':<30} {'Severity':<10} {'Title':<30} {'Status':<12} {'Created At'}")
+        print("-" * 120)
+        for n in notifications:
+            nid = n.notification_id[:20]
+            etype = n.event_type[:30]
+            sev = (n.severity.value if hasattr(n.severity, "value") else str(n.severity))[:10]
+            title = n.title[:30]
+            status = (n.status.value if hasattr(n.status, "value") else str(n.status))[:12]
+            created = n.created_at.isoformat()[:19] if n.created_at else "?"
+            print(f"{nid:<20} {etype:<30} {sev:<10} {title:<30} {status:<12} {created}")
+
+    return 0
+
+
+async def _cmd_policy_notification_send_pending(args: argparse.Namespace) -> int:
+    """Send pending notifications."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "notification_service", None)
+    if service is None:
+        print("Notification service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        sent = await service.send_pending(limit=args.limit)
+    except Exception as exc:
+        print(f"Error sending pending notifications: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = []
+        for n in sent:
+            data.append({
+                "notification_id": n.notification_id,
+                "status": n.status.value if hasattr(n.status, "value") else str(n.status),
+                "sent_at": n.sent_at.isoformat() if n.sent_at else None,
+            })
+        print(json.dumps({"sent_count": len(sent), "notifications": data}, indent=2, default=str))
+    else:
+        print(f"Sent {len(sent)} pending notification(s).")
+        for n in sent:
+            status_str = n.status.value if hasattr(n.status, "value") else str(n.status)
+            print(f"  {n.notification_id}: {status_str}")
+
+    return 0
+
+
+async def _cmd_policy_notification_rule_list(args: argparse.Namespace) -> int:
+    """List notification rules."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "notification_service", None)
+    if service is None:
+        print("Notification service not configured.", file=sys.stderr)
+        return 1
+
+    rule_store = getattr(service, "_rule_store", None)
+    if rule_store is None:
+        print("Notification rule store not available.", file=sys.stderr)
+        return 1
+
+    try:
+        rules = await rule_store.list()
+    except Exception as exc:
+        print(f"Error listing notification rules: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = []
+        for r in rules:
+            data.append({
+                "rule_id": r.rule_id,
+                "name": r.name,
+                "event_types": list(r.event_types) if hasattr(r.event_types, "__iter__") else [],
+                "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                "channels": list(r.channels) if hasattr(r.channels, "__iter__") else [],
+                "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            })
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        if not rules:
+            print("No notification rules found.")
+            return 0
+        print(f"{'ID':<20} {'Name':<25} {'Event Types':<30} {'Severity':<10} {'Channels':<20} {'Status':<10}")
+        print("-" * 115)
+        for r in rules:
+            rid = r.rule_id[:20]
+            name = r.name[:25]
+            etypes = ", ".join(r.event_types)[:30] if hasattr(r.event_types, "__iter__") else ""
+            sev = (r.severity.value if hasattr(r.severity, "value") else str(r.severity))[:10]
+            ch = ", ".join(r.channels)[:20] if hasattr(r.channels, "__iter__") else ""
+            st = (r.status.value if hasattr(r.status, "value") else str(r.status))[:10]
+            print(f"{rid:<20} {name:<25} {etypes:<30} {sev:<10} {ch:<20} {st:<10}")
+
+    return 0
+
+
+async def _cmd_policy_notification_rule_enable(args: argparse.Namespace) -> int:
+    """Enable a notification rule."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "notification_service", None)
+    if service is None:
+        print("Notification service not configured.", file=sys.stderr)
+        return 1
+
+    rule_store = getattr(service, "_rule_store", None)
+    if rule_store is None:
+        print("Notification rule store not available.", file=sys.stderr)
+        return 1
+
+    try:
+        rule = await rule_store.enable(args.rule_id)
+    except KeyError:
+        print(f"Rule '{args.rule_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error enabling rule: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = rule.status.value if hasattr(rule.status, "value") else str(rule.status)
+    print(f"Rule '{rule.rule_id}' ({rule.name}) enabled. Status: {status_str}")
+    return 0
+
+
+async def _cmd_policy_notification_rule_disable(args: argparse.Namespace) -> int:
+    """Disable a notification rule."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "notification_service", None)
+    if service is None:
+        print("Notification service not configured.", file=sys.stderr)
+        return 1
+
+    rule_store = getattr(service, "_rule_store", None)
+    if rule_store is None:
+        print("Notification rule store not available.", file=sys.stderr)
+        return 1
+
+    try:
+        rule = await rule_store.disable(args.rule_id)
+    except KeyError:
+        print(f"Rule '{args.rule_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error disabling rule: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = rule.status.value if hasattr(rule.status, "value") else str(rule.status)
+    print(f"Rule '{rule.rule_id}' ({rule.name}) disabled. Status: {status_str}")
+    return 0
+
+
+async def _cmd_policy_expiration_sweep(args: argparse.Namespace) -> int:
+    """Run expiration sweep."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "expiration_service", None)
+    if service is None:
+        print("Expiration service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        report = await service.sweep()
+    except Exception as exc:
+        print(f"Error running expiration sweep: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "sweep_id": report.sweep_id,
+            "started_at": report.started_at.isoformat() if report.started_at else None,
+            "completed_at": report.completed_at.isoformat() if report.completed_at else None,
+            "total_results": len(report.results),
+            "results": [
+                {
+                    "target_type": r.target_type.value if hasattr(r.target_type, "value") else str(r.target_type),
+                    "target_id": r.target_id,
+                    "action": r.action.value if hasattr(r.action, "value") else str(r.action),
+                    "reason": r.reason,
+                }
+                for r in report.results
+            ],
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Expiration sweep completed")
+        print()
+        print(f"Sweep ID:     {report.sweep_id}")
+        print(f"Started At:   {report.started_at.isoformat() if report.started_at else '?'}")
+        print(f"Completed At: {report.completed_at.isoformat() if report.completed_at else '?'}")
+        print(f"Total Results: {len(report.results)}")
+
+        expired_count = sum(1 for r in report.results if hasattr(r.action, "value") and r.action.value == "expired")
+        error_count = sum(1 for r in report.results if hasattr(r.action, "value") and r.action.value == "error")
+        skipped_count = len(report.results) - expired_count - error_count
+
+        print(f"Expired: {expired_count}")
+        print(f"Skipped: {skipped_count}")
+        print(f"Errors:  {error_count}")
+
+        if report.results:
+            print()
+            for r in report.results:
+                target_type = r.target_type.value if hasattr(r.target_type, "value") else str(r.target_type)
+                action = r.action.value if hasattr(r.action, "value") else str(r.action)
+                print(f"  [{action}] {target_type}: {r.target_id}")
+                if r.reason:
+                    print(f"    Reason: {r.reason}")
+
+    return 0
+
+
+async def _cmd_policy_expiration_run_once(args: argparse.Namespace) -> int:
+    """Run expiration sweep once (same as sweep)."""
+    return await _cmd_policy_expiration_sweep(args)
 
 
 if __name__ == "__main__":

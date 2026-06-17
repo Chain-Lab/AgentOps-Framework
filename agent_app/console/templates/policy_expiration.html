@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Expiration</h2>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+<form method="post" action="{{ base_path }}/expiration/sweep" style="margin-bottom: 1em;">
+  <button type="submit" class="btn btn-primary">Run Sweep</button>
+</form>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Expiration service not configured.</p>
+</div>
+{% elif last_sweep %}
+<section class="report-section">
+  <h3>Last Sweep Results</h3>
+  <div class="summary-cards">
+    <div class="card">
+      <h4>Sweep ID</h4>
+      <p class="card-value">{{ last_sweep.sweep_id }}</p>
+    </div>
+    <div class="card">
+      <h4>Expired</h4>
+      <p class="card-value">{{ last_sweep.expired_count }}</p>
+    </div>
+    <div class="card">
+      <h4>Skipped</h4>
+      <p class="card-value">{{ last_sweep.skipped_count }}</p>
+    </div>
+    <div class="card">
+      <h4>Errors</h4>
+      <p class="card-value">{{ last_sweep.error_count }}</p>
+    </div>
+  </div>
+  <p>Started: {{ last_sweep.started_at }} | Completed: {{ last_sweep.completed_at }}</p>
+</section>
+
+{% if last_sweep.results %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Target Type</th>
+      <th>Target ID</th>
+      <th>Action</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in last_sweep.results %}
+    <tr>
+      <td>{{ r.target_type }}</td>
+      <td>{{ r.target_id }}</td>
+      <td>{{ r.action }}</td>
+      <td>{{ r.reason }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <p>No sweep has been run yet. Click "Run Sweep" to start.</p>
+</div>
+{% endif %}
+{% endblock %}

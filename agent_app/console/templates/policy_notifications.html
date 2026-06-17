@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Policy Notifications</h2>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+<form method="post" action="{{ base_path }}/notifications/send-pending" style="margin-bottom: 1em;">
+  <button type="submit" class="btn btn-primary">Send Pending</button>
+</form>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification service not configured.</p>
+</div>
+{% elif not notifications %}
+<div class="empty-state">
+  <p>No notifications found.</p>
+</div>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Event Type</th>
+      <th>Severity</th>
+      <th>Title</th>
+      <th>Status</th>
+      <th>Created At</th>
+      <th>Sent At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for n in notifications %}
+    <tr>
+      <td>{{ n.notification_id }}</td>
+      <td>{{ n.event_type }}</td>
+      <td>{{ n.severity }}</td>
+      <td>{{ n.title }}</td>
+      <td>{{ n.status }}</td>
+      <td>{{ n.created_at }}</td>
+      <td>{{ n.sent_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

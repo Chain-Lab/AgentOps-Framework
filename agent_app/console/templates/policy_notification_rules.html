@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Notification Rules</h2>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification service not configured.</p>
+</div>
+{% elif not rules %}
+<div class="empty-state">
+  <p>No notification rules found.</p>
+</div>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Name</th>
+      <th>Event Types</th>
+      <th>Severity</th>
+      <th>Channels</th>
+      <th>Status</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rules %}
+    <tr>
+      <td>{{ r.rule_id }}</td>
+      <td>{{ r.name }}</td>
+      <td>{{ r.event_types | join(', ') }}</td>
+      <td>{{ r.severity }}</td>
+      <td>{{ r.channels | join(', ') }}</td>
+      <td>{{ r.status }}</td>
+      <td>
+        {% if r.status == 'enabled' %}
+        <form method="post" action="{{ base_path }}/notification-rules/{{ r.rule_id }}/disable" style="display:inline;">
+          <button type="submit" class="btn btn-warning btn-sm">Disable</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ base_path }}/notification-rules/{{ r.rule_id }}/enable" style="display:inline;">
+          <button type="submit" class="btn btn-success btn-sm">Enable</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
