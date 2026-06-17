@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Simulation Gate &mdash; Promotion {{ promotion_id }}</h2>
+
+{% if error %}
+<div class="error-box" style="border:1px solid #c00;padding:8px;margin:8px 0;background:#fee;color:#c00;">
+  Error: {{ error }}
+</div>
+{% endif %}
+
+{% if requirement %}
+<div class="status-card" style="border:1px solid #ccc;padding:12px;margin:8px 0;">
+  <h3>Current Requirement</h3>
+  <table>
+    <tr><th>Requirement ID</th><td>{{ requirement.requirement_id }}</td></tr>
+    <tr><th>Status</th><td>{{ requirement.status }}</td></tr>
+    <tr><th>Gate Result ID</th><td>{{ requirement.gate_result_id or "&mdash;" }}</td></tr>
+    <tr><th>Simulation ID</th><td>{{ requirement.simulation_id or "&mdash;" }}</td></tr>
+    <tr><th>Max Age (s)</th><td>{{ requirement.max_age_seconds or "&mdash;" }}</td></tr>
+    <tr><th>Created At</th><td>{{ requirement.created_at }}</td></tr>
+    <tr><th>Satisfied At</th><td>{{ requirement.satisfied_at or "&mdash;" }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+<form method="post" action="{{ base_path }}/promotions/{{ promotion_id }}/gate/require">
+  <fieldset>
+    <legend>Require Gate</legend>
+    <label>Max Age (seconds, optional): <input type="number" name="max_age_seconds" placeholder="3600" min="1"></label><br>
+  </fieldset>
+  <button type="submit">Require Gate</button>
+</form>
+
+<form method="post" action="{{ base_path }}/promotions/{{ promotion_id }}/gate/run">
+  <fieldset>
+    <legend>Run Simulation Gate</legend>
+    <label for="candidate_rules">Candidate Rules (YAML, required):</label><br>
+    <textarea id="candidate_rules" name="candidate_rules" rows="10" cols="80" placeholder="- rule_id: rule_1
+  name: Deny High Risk
+  action_type: tool.execute
+  effect: deny
+  risk_level: high
+  reason: High risk tools must be denied"></textarea><br>
+
+    <label for="gate_rules">Gate Rules (YAML, optional):</label><br>
+    <textarea id="gate_rules" name="gate_rules" rows="8" cols="80" placeholder="gate_rules:
+  - name: no_excessive_changes
+    max_changed_decisions: 10
+    max_changed_ratio: 0.1
+    max_failed_replays: 0
+    max_new_denies: 5"></textarea><br>
+    <p><em>If omitted and a default gate evaluator is configured, its rules will be used.</em></p>
+
+    <label>Actor ID: <input type="text" name="actor_id" value="console_user"></label><br>
+    <label>Tenant ID: <input type="text" name="tenant_id" value="default"></label><br>
+  </fieldset>
+  <button type="submit">Run Simulation Gate</button>
+</form>
+
+<form method="post" action="{{ base_path }}/promotions/{{ promotion_id }}/gate/attach">
+  <fieldset>
+    <legend>Attach Existing Gate Result</legend>
+    <label>Gate Result ID (required): <input type="text" name="gate_result_id" placeholder="pgr_..."></label><br>
+    <label>Simulation ID (optional): <input type="text" name="simulation_id" placeholder="sim_..."></label><br>
+  </fieldset>
+  <button type="submit">Attach Gate Result</button>
+</form>
+
+<p><a href="{{ base_path }}/promotions/{{ promotion_id }}">Back to Promotion</a></p>
+
+{% endblock %}

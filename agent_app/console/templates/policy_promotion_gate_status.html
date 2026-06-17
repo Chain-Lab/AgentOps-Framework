@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Gate Result &mdash; Promotion {{ promotion_id }}</h2>
+
+{% if error %}
+<div class="error-box" style="border:1px solid #c00;padding:8px;margin:8px 0;background:#fee;color:#c00;">
+  Error: {{ error }}
+</div>
+{% endif %}
+
+{% if requirement %}
+<div class="status-cards" style="display:flex;gap:16px;margin:8px 0;flex-wrap:wrap;">
+
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Requirement ID</strong><br>
+    {{ requirement.requirement_id }}
+  </div>
+
+  {% set status = requirement.status %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;
+    {% if status == 'satisfied' %}background:#d4edda;color:#155724;{% elif status == 'failed' %}background:#f8d7da;color:#721c24;{% elif status == 'expired' %}background:#fff3cd;color:#856404;{% elif status == 'required' %}background:#cce5ff;color:#004085;{% else %}background:#f8f9fa;{% endif %}">
+    <strong>Status</strong><br>
+    {{ status | upper }}
+  </div>
+
+  {% if requirement.gate_result_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Gate Result ID</strong><br>
+    {{ requirement.gate_result_id }}
+  </div>
+  {% endif %}
+
+  {% if requirement.simulation_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Simulation ID</strong><br>
+    {{ requirement.simulation_id }}
+  </div>
+  {% endif %}
+
+</div>
+
+<table style="margin:8px 0;">
+  <tr><th>Max Age (s)</th><td>{{ requirement.max_age_seconds or "&mdash;" }}</td></tr>
+  <tr><th>Created At</th><td>{{ requirement.created_at }}</td></tr>
+  <tr><th>Satisfied At</th><td>{{ requirement.satisfied_at or "&mdash;" }}</td></tr>
+</table>
+
+{% elif not error %}
+<p>No gate requirement found for this promotion.</p>
+{% endif %}
+
+<p><a href="{{ base_path }}/promotions/{{ promotion_id }}/gate">Back to Gate Form</a> |
+   <a href="{{ base_path }}/promotions/{{ promotion_id }}">Back to Promotion</a></p>
+
+{% endblock %}

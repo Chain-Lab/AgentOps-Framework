@@ -59,6 +59,7 @@ def build_policy_console_router(
     observability_service: Any = None,
     simulation_service: Any = None,
     simulation_gate_evaluator: Any = None,
+    release_gate_automation_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -86,6 +87,7 @@ def build_policy_console_router(
         observability_service: Optional policy observability service (Phase 39).
         simulation_service: Optional policy simulation service (Phase 40).
         simulation_gate_evaluator: Optional simulation gate evaluator (Phase 41).
+        release_gate_automation_service: Optional release gate automation service (Phase 42).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -3085,6 +3087,212 @@ def build_policy_console_router(
                 "gate_result": gate_dict,
                 "validation_report": validation_dict,
                 "error": None,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 42 Task 8: Promotion gate lifecycle pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/promotions/{promotion_id}/gate", response_class=HTMLResponse)
+    async def promotion_gate_page(request: Request, promotion_id: str):
+        """Promotion gate form page — shows current requirement and gate forms."""
+        requirement = None
+        if release_gate_automation_service is not None:
+            requirement = await release_gate_automation_service.check_requirement(
+                source_type="promotion",
+                source_id=promotion_id,
+            )
+
+        requirement_dict = None
+        if requirement is not None:
+            requirement_dict = {
+                "requirement_id": requirement.requirement_id,
+                "source_type": requirement.source_type,
+                "source_id": requirement.source_id,
+                "status": requirement.status.value,
+                "gate_result_id": requirement.gate_result_id or "",
+                "simulation_id": requirement.simulation_id or "",
+                "max_age_seconds": requirement.max_age_seconds,
+                "created_at": requirement.created_at.isoformat() if hasattr(requirement.created_at, "isoformat") else str(requirement.created_at),
+                "satisfied_at": requirement.satisfied_at.isoformat() if requirement.satisfied_at and hasattr(requirement.satisfied_at, "isoformat") else "",
+            }
+
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_gate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotion_id": promotion_id,
+                "requirement": requirement_dict,
+                "error": None,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/gate/require", response_class=HTMLResponse)
+    async def promotion_gate_require(request: Request, promotion_id: str):
+        """Create a gate requirement for a promotion."""
+        requirement_dict = None
+        error = None
+
+        if release_gate_automation_service is None:
+            error = "Release gate automation service not configured."
+        else:
+            try:
+                form = await request.form()
+                max_age_str = form.get("max_age_seconds", "")
+                max_age_seconds = int(max_age_str) if max_age_str else None
+                requirement = await release_gate_automation_service.require_gate_for_promotion(
+                    promotion_id=promotion_id,
+                    max_age_seconds=max_age_seconds,
+                )
+                requirement_dict = {
+                    "requirement_id": requirement.requirement_id,
+                    "source_type": requirement.source_type,
+                    "source_id": requirement.source_id,
+                    "status": requirement.status.value,
+                    "gate_result_id": requirement.gate_result_id or "",
+                    "simulation_id": requirement.simulation_id or "",
+                    "max_age_seconds": requirement.max_age_seconds,
+                    "created_at": requirement.created_at.isoformat() if hasattr(requirement.created_at, "isoformat") else str(requirement.created_at),
+                    "satisfied_at": requirement.satisfied_at.isoformat() if requirement.satisfied_at and hasattr(requirement.satisfied_at, "isoformat") else "",
+                }
+            except Exception as exc:
+                error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_gate_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotion_id": promotion_id,
+                "requirement": requirement_dict,
+                "error": error,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/gate/run", response_class=HTMLResponse)
+    async def promotion_gate_run(request: Request, promotion_id: str):
+        """Run simulation+gate for a promotion and attach the result."""
+        requirement_dict = None
+        error = None
+
+        if release_gate_automation_service is None:
+            error = "Release gate automation service not configured."
+        else:
+            try:
+                form = await request.form()
+                candidate_yaml = form.get("candidate_rules", "")
+                gate_rules_yaml = form.get("gate_rules", "")
+
+                # Parse candidate rules
+                candidate_rules, parse_error = _parse_candidate_rules_yaml(candidate_yaml)
+                if parse_error:
+                    error = parse_error
+                else:
+                    # Parse gate rules (optional)
+                    gate_rules, gate_parse_error = _parse_gate_rules_yaml(gate_rules_yaml)
+                    if gate_parse_error:
+                        error = gate_parse_error
+                    else:
+                        # If no gate rules, use evaluator's rules
+                        if not gate_rules and simulation_gate_evaluator is not None:
+                            gate_rules = simulation_gate_evaluator._rules
+                        if not gate_rules:
+                            error = "No gate rules provided and no default gate evaluator configured."
+                        else:
+                            from agent_app.core.context import RunContext
+                            actor_id = form.get("actor_id", "console_user")
+                            context = RunContext(
+                                run_id=f"console_gate_{actor_id}",
+                                user_id=actor_id,
+                                tenant_id=form.get("tenant_id") or "default",
+                                permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                            )
+                            requirement = await release_gate_automation_service.run_and_attach_simulation_gate_for_promotion(
+                                promotion_id=promotion_id,
+                                candidate_rules=candidate_rules,
+                                gate_rules=gate_rules,
+                                context=context,
+                            )
+                            requirement_dict = {
+                                "requirement_id": requirement.requirement_id,
+                                "source_type": requirement.source_type,
+                                "source_id": requirement.source_id,
+                                "status": requirement.status.value,
+                                "gate_result_id": requirement.gate_result_id or "",
+                                "simulation_id": requirement.simulation_id or "",
+                                "max_age_seconds": requirement.max_age_seconds,
+                                "created_at": requirement.created_at.isoformat() if hasattr(requirement.created_at, "isoformat") else str(requirement.created_at),
+                                "satisfied_at": requirement.satisfied_at.isoformat() if requirement.satisfied_at and hasattr(requirement.satisfied_at, "isoformat") else "",
+                            }
+            except RuntimeError as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_gate_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotion_id": promotion_id,
+                "requirement": requirement_dict,
+                "error": error,
+            },
+        )
+
+    @router.post("/promotions/{promotion_id}/gate/attach", response_class=HTMLResponse)
+    async def promotion_gate_attach(request: Request, promotion_id: str):
+        """Attach an existing gate result to a promotion's requirement."""
+        requirement_dict = None
+        error = None
+
+        if release_gate_automation_service is None:
+            error = "Release gate automation service not configured."
+        else:
+            try:
+                form = await request.form()
+                gate_result_id = form.get("gate_result_id", "")
+                simulation_id = form.get("simulation_id") or None
+
+                if not gate_result_id:
+                    error = "gate_result_id is required."
+                else:
+                    requirement = await release_gate_automation_service.attach_gate_result(
+                        source_type="promotion",
+                        source_id=promotion_id,
+                        gate_result_id=gate_result_id,
+                        simulation_id=simulation_id,
+                    )
+                    requirement_dict = {
+                        "requirement_id": requirement.requirement_id,
+                        "source_type": requirement.source_type,
+                        "source_id": requirement.source_id,
+                        "status": requirement.status.value,
+                        "gate_result_id": requirement.gate_result_id or "",
+                        "simulation_id": requirement.simulation_id or "",
+                        "max_age_seconds": requirement.max_age_seconds,
+                        "created_at": requirement.created_at.isoformat() if hasattr(requirement.created_at, "isoformat") else str(requirement.created_at),
+                        "satisfied_at": requirement.satisfied_at.isoformat() if requirement.satisfied_at and hasattr(requirement.satisfied_at, "isoformat") else "",
+                    }
+            except KeyError as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_promotion_gate_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "promotion_id": promotion_id,
+                "requirement": requirement_dict,
+                "error": error,
             },
         )
 
