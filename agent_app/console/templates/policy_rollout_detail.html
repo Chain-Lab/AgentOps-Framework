@@ -47,6 +47,11 @@
 {% endif %}
 
 <h3>Actions</h3>
+<p>
+  <a href="/policy-console/rollouts/{{ plan.rollout_id }}/history">History</a>
+  &nbsp;|&nbsp;
+  <a href="/policy-console/rollouts/{{ plan.rollout_id }}/timeline">Timeline</a>
+</p>
 {% if plan.status == "draft" %}
 <form method="POST" action="/policy-console/rollouts/{{ plan.rollout_id }}/start">
   <input name="actor_id" placeholder="Actor ID">

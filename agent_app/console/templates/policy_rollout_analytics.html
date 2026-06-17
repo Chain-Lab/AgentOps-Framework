@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout Analytics</h2>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Rollout history service not configured.</p>
+</div>
+{% else %}
+
+<form method="post" action="{{ base_path }}/rollout-analytics" style="margin-bottom: 1em;">
+  <label for="since">Since:</label>
+  <input type="datetime-local" name="since" id="since" value="{{ since_default or '' }}">
+  <label for="until">Until:</label>
+  <input type="datetime-local" name="until" id="until" value="{{ until_default or '' }}">
+  <button type="submit" class="btn btn-primary">Run Report</button>
+</form>
+
+{% if report %}
+<section class="report-section">
+  <h3>Summary</h3>
+  <div class="summary-cards">
+    <div class="card">
+      <h4>Total Rollouts</h4>
+      <p class="card-value">{{ report.total_rollouts }}</p>
+    </div>
+    <div class="card">
+      <h4>Completed</h4>
+      <p class="card-value">{{ report.completed_rollouts }}</p>
+    </div>
+    <div class="card">
+      <h4>Failed</h4>
+      <p class="card-value">{{ report.failed_rollouts }}</p>
+    </div>
+    <div class="card">
+      <h4>Blocked</h4>
+      <p class="card-value">{{ report.blocked_rollouts }}</p>
+    </div>
+    <div class="card">
+      <h4>Gate Failures</h4>
+      <p class="card-value">{{ report.gate_outcomes.failed }}</p>
+    </div>
+    <div class="card">
+      <h4>Avg Approval Latency</h4>
+      <p class="card-value">{% if report.approval_outcomes.average_latency_seconds is not none %}{{ "%.1f"|format(report.approval_outcomes.average_latency_seconds) }}s{% else %}—{% endif %}</p>
+    </div>
+  </div>
+</section>
+
+<section class="report-section">
+  <h3>Gate Outcomes</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Total</th><th>Satisfied</th><th>Blocked</th><th>Failed</th><th>Skipped</th><th>Expired</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ report.gate_outcomes.total }}</td>
+        <td>{{ report.gate_outcomes.satisfied }}</td>
+        <td>{{ report.gate_outcomes.blocked }}</td>
+        <td>{{ report.gate_outcomes.failed }}</td>
+        <td>{{ report.gate_outcomes.skipped }}</td>
+        <td>{{ report.gate_outcomes.expired }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="report-section">
+  <h3>Approval Outcomes</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Total</th><th>Pending</th><th>Approved</th><th>Rejected</th><th>Expired</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ report.approval_outcomes.total }}</td>
+        <td>{{ report.approval_outcomes.pending }}</td>
+        <td>{{ report.approval_outcomes.approved }}</td>
+        <td>{{ report.approval_outcomes.rejected }}</td>
+        <td>{{ report.approval_outcomes.expired }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+{% if report.top_blocked_steps %}
+<section class="report-section">
+  <h3>Top Blocked Steps</h3>
+  <table class="table">
+    <thead><tr><th>Step ID</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for s in report.top_blocked_steps %}
+      <tr><td>{{ s.step_id }}</td><td>{{ s.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.top_failed_gates %}
+<section class="report-section">
+  <h3>Top Failed Gates</h3>
+  <table class="table">
+    <thead><tr><th>Step ID</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for g in report.top_failed_gates %}
+      <tr><td>{{ g.step_id }}</td><td>{{ g.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.environment_summary %}
+<section class="report-section">
+  <h3>Environment Summary</h3>
+  <table class="table">
+    <thead><tr><th>Environment</th><th>Event Count</th></tr></thead>
+    <tbody>
+      {% for e in report.environment_summary %}
+      <tr><td>{{ e.environment }}</td><td>{{ e.event_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.ring_summary %}
+<section class="report-section">
+  <h3>Ring Summary</h3>
+  <table class="table">
+    <thead><tr><th>Ring</th><th>Event Count</th></tr></thead>
+    <tbody>
+      {% for r in report.ring_summary %}
+      <tr><td>{{ r.ring_name }}</td><td>{{ r.event_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<p>
+  <a href="{{ base_path }}/rollout-analytics?export=json">Export as JSON</a>
+  &nbsp;|&nbsp;
+  <a href="{{ base_path }}/rollout-analytics?export=csv">Export as CSV</a>
+</p>
+
+{% else %}
+<div class="empty-state">
+  <p>No analytics report generated yet. Click "Run Report" to generate one.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

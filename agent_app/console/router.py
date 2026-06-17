@@ -63,6 +63,7 @@ def build_policy_console_router(
     rollout_gate_automation_service: Any = None,
     notification_service: Any = None,
     expiration_service: Any = None,
+    rollout_history_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -94,6 +95,7 @@ def build_policy_console_router(
         rollout_gate_automation_service: Optional rollout gate automation service (Phase 43).
         notification_service: Optional notification service (Phase 44).
         expiration_service: Optional expiration service (Phase 44).
+        rollout_history_service: Optional rollout history service (Phase 45).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -3848,6 +3850,334 @@ def build_policy_console_router(
                 "last_sweep": last_sweep,
                 "store_available": expiration_service is not None,
                 "message": message,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 45 Task 7: Rollout history, timeline, and analytics pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/rollouts/{rollout_id}/history", response_class=HTMLResponse)
+    async def rollout_history(request: Request, rollout_id: str):
+        """Show rollout history events."""
+        events_list: list[dict] = []
+        event_types: list[str] = []
+        selected_type = request.query_params.get("event_type", "")
+
+        if rollout_history_service is not None:
+            try:
+                from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
+                event_types = [e.value for e in RolloutHistoryEventType]
+
+                event_type_filter = None
+                if selected_type:
+                    try:
+                        event_type_filter = RolloutHistoryEventType(selected_type)
+                    except ValueError:
+                        selected_type = ""
+
+                events = await rollout_history_service.list_history_events(
+                    rollout_id=rollout_id,
+                    event_type=event_type_filter,
+                )
+                for e in events:
+                    events_list.append({
+                        "history_event_id": e.history_event_id,
+                        "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                        "step_id": e.step_id,
+                        "actor_id": e.actor_id,
+                        "environment": e.environment,
+                        "ring_name": e.ring_name,
+                        "message": e.message,
+                        "created_at": e.created_at.isoformat() if e.created_at and hasattr(e.created_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_history.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollout_id": rollout_id,
+                "events": events_list,
+                "event_types": event_types,
+                "selected_type": selected_type,
+                "store_available": rollout_history_service is not None,
+                "message": None,
+            },
+        )
+
+    @router.get("/rollouts/{rollout_id}/timeline", response_class=HTMLResponse)
+    async def rollout_timeline(request: Request, rollout_id: str):
+        """Show rollout timeline."""
+        timeline_dict = None
+        export = request.query_params.get("export", "")
+
+        if rollout_history_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_timeline.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "rollout_id": rollout_id,
+                    "timeline": None,
+                    "store_available": False,
+                    "message": None,
+                },
+            )
+
+        try:
+            timeline_obj = await rollout_history_service.get_timeline(rollout_id)
+
+            # JSON export
+            if export == "json":
+                from fastapi.responses import JSONResponse
+                return JSONResponse(content=timeline_obj.model_dump(mode="json"))
+
+            # Build dict for template rendering
+            steps_dicts: list[dict] = []
+            for s in timeline_obj.steps:
+                steps_dicts.append({
+                    "step_id": s.step_id,
+                    "step_type": s.step_type,
+                    "status": s.status,
+                    "gate_status": s.gate_status,
+                    "approval_status": s.approval_status,
+                    "duration_seconds": s.duration_seconds,
+                    "environment": s.environment,
+                    "ring_name": s.ring_name,
+                    "started_at": s.started_at.isoformat() if s.started_at and hasattr(s.started_at, "isoformat") else None,
+                    "completed_at": s.completed_at.isoformat() if s.completed_at and hasattr(s.completed_at, "isoformat") else None,
+                    "events": [
+                        {
+                            "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                            "step_id": e.step_id,
+                            "actor_id": e.actor_id,
+                            "message": e.message,
+                            "created_at": e.created_at.isoformat() if e.created_at and hasattr(e.created_at, "isoformat") else "",
+                        }
+                        for e in s.events
+                    ],
+                })
+
+            events_dicts: list[dict] = []
+            for e in timeline_obj.events:
+                events_dicts.append({
+                    "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                    "step_id": e.step_id,
+                    "actor_id": e.actor_id,
+                    "message": e.message,
+                    "created_at": e.created_at.isoformat() if e.created_at and hasattr(e.created_at, "isoformat") else "",
+                })
+
+            timeline_dict = {
+                "rollout_id": timeline_obj.rollout_id,
+                "name": timeline_obj.name,
+                "bundle_id": timeline_obj.bundle_id,
+                "status": timeline_obj.status,
+                "created_at": timeline_obj.created_at.isoformat() if timeline_obj.created_at and hasattr(timeline_obj.created_at, "isoformat") else None,
+                "started_at": timeline_obj.started_at.isoformat() if timeline_obj.started_at and hasattr(timeline_obj.started_at, "isoformat") else None,
+                "completed_at": timeline_obj.completed_at.isoformat() if timeline_obj.completed_at and hasattr(timeline_obj.completed_at, "isoformat") else None,
+                "duration_seconds": timeline_obj.duration_seconds,
+                "steps": steps_dicts,
+                "events": events_dicts,
+            }
+        except Exception:
+            pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_timeline.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollout_id": rollout_id,
+                "timeline": timeline_dict,
+                "store_available": rollout_history_service is not None,
+                "message": None,
+            },
+        )
+
+    @router.get("/rollout-analytics", response_class=HTMLResponse)
+    async def rollout_analytics_get(request: Request):
+        """Show rollout analytics dashboard."""
+        report_dict = None
+        export = request.query_params.get("export", "")
+
+        if rollout_history_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": False,
+                    "message": None,
+                    "since_default": "",
+                    "until_default": "",
+                },
+            )
+
+        # If export requested, generate report and return raw data
+        if export in ("json", "csv"):
+            try:
+                report_obj = await rollout_history_service.generate_report()
+                if export == "json":
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(content=report_obj.model_dump(mode="json"))
+                if export == "csv":
+                    # Simple CSV export of summary stats
+                    import io
+                    buf = io.StringIO()
+                    buf.write("metric,value\n")
+                    buf.write(f"total_rollouts,{report_obj.total_rollouts}\n")
+                    buf.write(f"completed_rollouts,{report_obj.completed_rollouts}\n")
+                    buf.write(f"failed_rollouts,{report_obj.failed_rollouts}\n")
+                    buf.write(f"blocked_rollouts,{report_obj.blocked_rollouts}\n")
+                    buf.write(f"gate_satisfied,{report_obj.gate_outcomes.satisfied}\n")
+                    buf.write(f"gate_blocked,{report_obj.gate_outcomes.blocked}\n")
+                    buf.write(f"gate_failed,{report_obj.gate_outcomes.failed}\n")
+                    buf.write(f"approval_approved,{report_obj.approval_outcomes.approved}\n")
+                    buf.write(f"approval_rejected,{report_obj.approval_outcomes.rejected}\n")
+                    buf.write(f"avg_approval_latency_seconds,{report_obj.approval_outcomes.average_latency_seconds or ''}\n")
+                    from fastapi.responses import StreamingResponse
+                    return StreamingResponse(
+                        iter([buf.getvalue()]),
+                        media_type="text/csv",
+                        headers={"Content-Disposition": "attachment; filename=rollout_analytics.csv"},
+                    )
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_analytics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": None,
+                "store_available": rollout_history_service is not None,
+                "message": None,
+                "since_default": "",
+                "until_default": "",
+            },
+        )
+
+    @router.post("/rollout-analytics", response_class=HTMLResponse)
+    async def rollout_analytics_post(request: Request):
+        """Generate rollout analytics report with time window."""
+        message = None
+        report_dict = None
+
+        if rollout_history_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": False,
+                    "message": "Rollout history service not configured.",
+                    "since_default": "",
+                    "until_default": "",
+                },
+            )
+
+        # Parse form data
+        form = await request.form()
+        since_str = form.get("since", "")
+        until_str = form.get("until", "")
+        since_dt = None
+        until_dt = None
+        since_default = str(since_str) if since_str else ""
+        until_default = str(until_str) if until_str else ""
+
+        if since_str:
+            try:
+                from datetime import datetime as _dt
+                since_dt = _dt.fromisoformat(str(since_str))
+            except (ValueError, TypeError):
+                message = "Invalid 'since' datetime format."
+        if until_str:
+            try:
+                from datetime import datetime as _dt
+                until_dt = _dt.fromisoformat(str(until_str))
+            except (ValueError, TypeError):
+                if message:
+                    message += " Invalid 'until' datetime format."
+                else:
+                    message = "Invalid 'until' datetime format."
+
+        if message and (since_dt is None and until_dt is None):
+            # Both datetime fields failed, still render with error
+            return templates.TemplateResponse(
+                request,
+                "policy_rollout_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": rollout_history_service is not None,
+                    "message": message,
+                    "since_default": since_default,
+                    "until_default": until_default,
+                },
+            )
+
+        try:
+            report_obj = await rollout_history_service.generate_report(
+                window_start=since_dt,
+                window_end=until_dt,
+            )
+            # Build report dict for template rendering
+            report_dict = {
+                "report_id": report_obj.report_id,
+                "generated_at": report_obj.generated_at.isoformat() if report_obj.generated_at and hasattr(report_obj.generated_at, "isoformat") else "",
+                "total_rollouts": report_obj.total_rollouts,
+                "completed_rollouts": report_obj.completed_rollouts,
+                "failed_rollouts": report_obj.failed_rollouts,
+                "cancelled_rollouts": report_obj.cancelled_rollouts,
+                "blocked_rollouts": report_obj.blocked_rollouts,
+                "gate_outcomes": {
+                    "total": report_obj.gate_outcomes.total,
+                    "satisfied": report_obj.gate_outcomes.satisfied,
+                    "blocked": report_obj.gate_outcomes.blocked,
+                    "failed": report_obj.gate_outcomes.failed,
+                    "skipped": report_obj.gate_outcomes.skipped,
+                    "expired": report_obj.gate_outcomes.expired,
+                },
+                "approval_outcomes": {
+                    "total": report_obj.approval_outcomes.total,
+                    "pending": report_obj.approval_outcomes.pending,
+                    "approved": report_obj.approval_outcomes.approved,
+                    "rejected": report_obj.approval_outcomes.rejected,
+                    "expired": report_obj.approval_outcomes.expired,
+                    "average_latency_seconds": report_obj.approval_outcomes.average_latency_seconds,
+                },
+                "top_blocked_steps": report_obj.top_blocked_steps,
+                "top_failed_gates": report_obj.top_failed_gates,
+                "environment_summary": report_obj.environment_summary,
+                "ring_summary": report_obj.ring_summary,
+            }
+        except Exception as exc:
+            message = f"Error generating report: {exc}"
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_analytics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report_dict,
+                "store_available": rollout_history_service is not None,
+                "message": message,
+                "since_default": since_default,
+                "until_default": until_default,
             },
         )
 

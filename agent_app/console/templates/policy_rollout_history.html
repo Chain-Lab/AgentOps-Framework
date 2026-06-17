@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout History: {{ rollout_id }}</h2>
+
+<p><a href="{{ base_path }}/rollouts/{{ rollout_id }}">&larr; Back to Rollout Detail</a></p>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Rollout history service not configured.</p>
+</div>
+{% else %}
+
+<form method="get" action="{{ base_path }}/rollouts/{{ rollout_id }}/history" style="margin-bottom: 1em;">
+  <label for="event_type">Filter by Event Type:</label>
+  <select name="event_type" id="event_type">
+    <option value="">All</option>
+    {% for et in event_types %}
+    <option value="{{ et }}" {% if et == selected_type %}selected{% endif %}>{{ et }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-secondary">Filter</button>
+</form>
+
+{% if not events %}
+<div class="empty-state">
+  <p>No history events found for this rollout.</p>
+</div>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Type</th>
+      <th>Step ID</th>
+      <th>Actor</th>
+      <th>Environment</th>
+      <th>Ring</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.created_at }}</td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.step_id or "—" }}</td>
+      <td>{{ e.actor_id or "—" }}</td>
+      <td>{{ e.environment or "—" }}</td>
+      <td>{{ e.ring_name or "—" }}</td>
+      <td>{{ e.message or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+{% endblock %}

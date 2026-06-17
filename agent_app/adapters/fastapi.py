@@ -811,6 +811,8 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 44: notification and expiration services
         notification_service=getattr(agent_app, "notification_service", None),
         expiration_service=getattr(agent_app, "expiration_service", None),
+        # Phase 45: rollout history service
+        rollout_history_service=getattr(agent_app, "rollout_history_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

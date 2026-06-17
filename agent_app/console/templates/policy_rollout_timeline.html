@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout Timeline: {{ rollout_id }}</h2>
+
+<p><a href="{{ base_path }}/rollouts/{{ rollout_id }}">&larr; Back to Rollout Detail</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Rollout history service not configured.</p>
+</div>
+{% else %}
+
+{% if timeline %}
+<section class="report-section">
+  <h3>Rollout Metadata</h3>
+  <div class="summary-cards">
+    <div class="card">
+      <h4>Name</h4>
+      <p class="card-value">{{ timeline.name or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Bundle ID</h4>
+      <p class="card-value">{{ timeline.bundle_id or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Status</h4>
+      <p class="card-value">{{ timeline.status or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Created At</h4>
+      <p class="card-value">{{ timeline.created_at or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Duration</h4>
+      <p class="card-value">{% if timeline.duration_seconds is not none %}{{ "%.1f"|format(timeline.duration_seconds) }}s{% else %}—{% endif %}</p>
+    </div>
+  </div>
+</section>
+
+{% if timeline.steps %}
+<section class="report-section">
+  <h3>Steps</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Step ID</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Gate</th>
+        <th>Approval</th>
+        <th>Duration</th>
+        <th>Environment</th>
+        <th>Ring</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in timeline.steps %}
+      <tr>
+        <td>{{ s.step_id }}</td>
+        <td>{{ s.step_type or "—" }}</td>
+        <td>{{ s.status or "—" }}</td>
+        <td>{{ s.gate_status or "—" }}</td>
+        <td>{{ s.approval_status or "—" }}</td>
+        <td>{% if s.duration_seconds is not none %}{{ "%.1f"|format(s.duration_seconds) }}s{% else %}—{% endif %}</td>
+        <td>{{ s.environment or "—" }}</td>
+        <td>{{ s.ring_name or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if timeline.events %}
+<section class="report-section">
+  <h3>Events</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Type</th>
+        <th>Step ID</th>
+        <th>Actor</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in timeline.events %}
+      <tr>
+        <td>{{ e.created_at }}</td>
+        <td>{{ e.event_type }}</td>
+        <td>{{ e.step_id or "—" }}</td>
+        <td>{{ e.actor_id or "—" }}</td>
+        <td>{{ e.message or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<p><a href="{{ base_path }}/rollouts/{{ rollout_id }}/timeline?export=json">Export as JSON</a></p>
+
+{% else %}
+<div class="empty-state">
+  <p>No timeline data available for this rollout.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
