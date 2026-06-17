@@ -137,6 +137,16 @@ class AgentApp:
         """Phase 36: Return the rollout approval store, if configured."""
         return self._rollout_approval_store
 
+    @property
+    def rollout_gate_automation_service(self) -> Any:
+        """Phase 43: Return the rollout gate automation service, if configured."""
+        return getattr(self, "_rollout_gate_automation_service", None)
+
+    @rollout_gate_automation_service.setter
+    def rollout_gate_automation_service(self, value: Any) -> None:
+        """Phase 43: Set the rollout gate automation service."""
+        self._rollout_gate_automation_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

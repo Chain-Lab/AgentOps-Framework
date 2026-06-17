@@ -793,6 +793,44 @@ def build_app(
         app._release_gate_requirement_store = release_gate_requirement_store
         app._release_gate_automation_service = release_gate_automation_service
 
+        # Phase 43: Rollout gate automation
+        rollout_gate_config = getattr(release_config, 'rollout_gate_automation', None) if release_config else None
+        if rollout_gate_config is not None and rollout_gate_config.enabled:
+            from agent_app.runtime.policy_rollout_gate_service import RolloutGateAutomationService
+            from agent_app.governance.policy_gate import PolicyGateRule
+
+            # Convert config gate rules to PolicyGateRule objects
+            default_gate_rules = []
+            for rule_cfg in rollout_gate_config.default_gate_rules:
+                rule_kwargs = {"name": rule_cfg.name}
+                if "changed_ratio" in rule_cfg.metric:
+                    rule_kwargs["max_changed_ratio"] = float(rule_cfg.threshold)
+                elif "errors" in rule_cfg.metric:
+                    rule_kwargs["max_failed_replays"] = int(rule_cfg.threshold)
+                elif "deny" in rule_cfg.metric:
+                    rule_kwargs["max_new_denies"] = int(rule_cfg.threshold)
+                elif "approval" in rule_cfg.metric or "require_approval" in rule_cfg.metric:
+                    rule_kwargs["max_new_approvals"] = int(rule_cfg.threshold)
+                else:
+                    rule_kwargs["max_changed_ratio"] = float(rule_cfg.threshold)
+                default_gate_rules.append(PolicyGateRule(**rule_kwargs))
+
+            rollout_gate_automation_service = RolloutGateAutomationService(
+                release_gate_automation_service=release_gate_automation_service,
+                simulation_service=getattr(app, 'policy_simulation_service', None),
+                simulation_gate_evaluator=getattr(app, 'simulation_gate_evaluator', None),
+                audit_logger=audit_logger,
+                event_store=event_store,
+                default_gate_rules=default_gate_rules,
+                default_max_age_seconds=rollout_gate_config.default_max_age_seconds,
+            )
+
+            # Set on RolloutService if available
+            if rollout_service is not None:
+                rollout_service._rollout_gate_automation_service = rollout_gate_automation_service
+
+            app._rollout_gate_automation_service = rollout_gate_automation_service
+
     app._release_config = release_config
     return app
 

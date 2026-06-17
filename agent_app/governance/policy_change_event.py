@@ -60,6 +60,13 @@ class PolicyChangeEventType(StrEnum):
     PROMOTION_GATE_EXPIRED = "policy.promotion.gate.expired"
     PROMOTION_GATE_EXECUTION_BLOCKED = "policy.promotion.gate.execution_blocked"
     PROMOTION_GATE_PERMISSION_DENIED = "policy.promotion.gate.permission_denied"
+    ROLLOUT_GATE_RUN = "policy.rollout.gate.run"
+    ROLLOUT_GATE_SATISFIED = "policy.rollout.gate.satisfied"
+    ROLLOUT_GATE_BLOCKED = "policy.rollout.gate.blocked"
+    ROLLOUT_GATE_FAILED = "policy.rollout.gate.failed"
+    ROLLOUT_GATE_SKIPPED = "policy.rollout.gate.skipped"
+    ROLLOUT_GATE_ATTACHED = "policy.rollout.gate.attached"
+    ROLLOUT_GATE_PERMISSION_DENIED = "policy.rollout.gate.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

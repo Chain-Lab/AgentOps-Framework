@@ -506,6 +506,27 @@ class SimulationGateEnforcementConfig(BaseModel):
     )
 
 
+class SimulationGateRuleConfig(BaseModel):
+    """Default gate rule from rollout YAML config."""
+
+    name: str = Field(..., description="Gate rule name")
+    metric: str = Field(default="simulation.changed_ratio", description="Metric path")
+    operator: str = Field(default="lte", description="Comparison operator")
+    threshold: float | int = Field(default=0.05, description="Threshold value")
+
+
+class RolloutGateAutomationConfig(BaseModel):
+    """Rollout gate automation configuration."""
+
+    enabled: bool = Field(default=False, description="Enable rollout gate automation")
+    default_mode: str = Field(default="manual", description="Default gate mode: disabled, manual, auto")
+    default_failure_action: str = Field(default="block", description="Default failure action: block, fail, skip")
+    default_max_age_seconds: int | None = Field(default=None, description="Default gate result max age")
+    default_gate_rules: list[SimulationGateRuleConfig] = Field(
+        default_factory=list, description="Default gate rules for auto mode"
+    )
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -568,6 +589,10 @@ class PolicyReleaseConfig(BaseModel):
     simulation_gate_enforcement: SimulationGateEnforcementConfig | None = Field(
         default=None,
         description="Simulation gate enforcement config (Phase 42)",
+    )
+    rollout_gate_automation: RolloutGateAutomationConfig | None = Field(
+        default=None,
+        description="Rollout gate automation config (Phase 43)",
     )
 
 

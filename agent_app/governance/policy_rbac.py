@@ -91,6 +91,7 @@ class PolicyReleasePermission(StrEnum):
     PROMOTION_GATE_VIEW = "policy.promotion.gate.view"
     ROLLOUT_GATE_ATTACH = "policy.rollout.gate.attach"
     ROLLOUT_GATE_VIEW = "policy.rollout.gate.view"
+    ROLLOUT_GATE_RUN = "policy.rollout.gate.run"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
