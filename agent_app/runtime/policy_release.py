@@ -20,6 +20,7 @@ from agent_app.governance.policy_change_event import PolicyChangeEvent, PolicyCh
 from agent_app.governance.policy_rbac import PolicyReleasePermission, PolicyReleasePermissionChecker
 from agent_app.governance.policy_promotion import PromotionRequest, PromotionRequestStatus
 from agent_app.governance.audit import AuditEvent
+from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,9 @@ class PolicyReleaseService:
         event_store: Any = None,
         reload_manager: Any = None,
         strict: bool = False,
+        release_gate_automation_service: Any = None,
+        require_simulation_gate_for_promotion: bool = False,
+        simulation_gate_max_age_seconds: int | None = None,
     ) -> None:
         self._bundle_store = bundle_store
         self._replay_runner = replay_runner
@@ -91,6 +95,9 @@ class PolicyReleaseService:
         self._event_store = event_store
         self._reload_manager = reload_manager
         self._strict = strict
+        self._release_gate_automation_service = release_gate_automation_service
+        self._require_simulation_gate_for_promotion = require_simulation_gate_for_promotion
+        self._simulation_gate_max_age_seconds = simulation_gate_max_age_seconds
 
     async def _check_permission(
         self, permission: PolicyReleasePermission, context: RunContext
@@ -430,6 +437,23 @@ class PolicyReleaseService:
         if self._promotion_store is not None:
             request = await self._promotion_store.create(request)
 
+        # Phase 42: Auto-create simulation gate requirement if configured
+        if self._require_simulation_gate_for_promotion and self._release_gate_automation_service is not None:
+            gate_req = await self._release_gate_automation_service.require_gate_for_promotion(
+                request.promotion_id,
+                max_age_seconds=self._simulation_gate_max_age_seconds,
+            )
+            # Store requirement_id on the request if possible
+            try:
+                request = request.model_copy(update={
+                    "simulation_gate_required": True,
+                    "simulation_gate_requirement_id": gate_req.requirement_id,
+                })
+                if self._promotion_store is not None:
+                    request = await self._promotion_store.update(request)
+            except Exception:
+                pass  # If store doesn't support update, just proceed
+
         await self._write_audit(
             "policy.promotion.requested",
             user_id=context.user_id,
@@ -598,6 +622,36 @@ class PolicyReleaseService:
                 f"Cannot execute promotion '{promotion_id}': "
                 f"request status is '{request.status}', must be approved."
             )
+
+        # Phase 42: Check simulation gate requirement
+        if self._require_simulation_gate_for_promotion and self._release_gate_automation_service is not None:
+            gate_req = await self._release_gate_automation_service.check_requirement(
+                "promotion", promotion_id
+            )
+            if gate_req.status == ReleaseGateRequirementStatus.REQUIRED:
+                await self._write_audit(
+                    "policy.promotion.gate.execution_blocked",
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    data={
+                        "promotion_id": promotion_id,
+                        "reason": "simulation_gate_required",
+                    },
+                )
+                raise ValueError(
+                    f"Cannot execute promotion '{promotion_id}': "
+                    f"simulation gate is required but no gate result has been attached."
+                )
+            elif gate_req.status == ReleaseGateRequirementStatus.FAILED:
+                raise ValueError(
+                    f"Cannot execute promotion '{promotion_id}': "
+                    f"simulation gate failed."
+                )
+            elif gate_req.status == ReleaseGateRequirementStatus.EXPIRED:
+                raise ValueError(
+                    f"Cannot execute promotion '{promotion_id}': "
+                    f"simulation gate result has expired."
+                )
 
         # Check latest gate result for the bundle
         gate_results = await self._gate_store.list(bundle_id=request.bundle_id, limit=1)

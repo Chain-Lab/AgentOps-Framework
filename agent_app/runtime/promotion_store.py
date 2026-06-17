@@ -68,6 +68,10 @@ class PromotionRequestStore(Protocol):
         """List promotion requests, optionally filtered by status and tenant_id."""
         ...
 
+    async def update(self, request: PromotionRequest) -> PromotionRequest:
+        """Update an existing promotion request (e.g. to set simulation_gate fields)."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # InMemoryPromotionRequestStore
@@ -173,6 +177,15 @@ class InMemoryPromotionRequestStore:
                 continue
             results.append(r)
         return results
+
+    async def update(self, request: PromotionRequest) -> PromotionRequest:
+        """Update an existing promotion request."""
+        if request.promotion_id not in self._requests:
+            raise KeyError(
+                f"Promotion request '{request.promotion_id}' not found in store."
+            )
+        self._requests[request.promotion_id] = request
+        return request
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +439,45 @@ class SQLitePromotionRequestStore:
             val = data.get(ts_field)
             data[ts_field] = datetime.fromisoformat(val) if val else None
         return PromotionRequest(**data)
+
+    async def update(self, request: PromotionRequest) -> PromotionRequest:
+        """Update an existing promotion request."""
+        row = self._conn.execute(
+            "SELECT * FROM policy_promotion_requests WHERE promotion_id = ?",
+            (request.promotion_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(
+                f"Promotion request '{request.promotion_id}' not found in store."
+            )
+        # Re-create with all current fields (upsert)
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO policy_promotion_requests
+                (promotion_id, bundle_id, gate_result_id, requested_by,
+                 tenant_id, status, reason, approval_reason, rejection_reason,
+                 created_at, resolved_at, resolved_by, executed_at, executed_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request.promotion_id,
+                request.bundle_id,
+                request.gate_result_id,
+                request.requested_by,
+                request.tenant_id,
+                request.status,
+                request.reason,
+                request.approval_reason,
+                request.rejection_reason,
+                request.created_at.isoformat(),
+                request.resolved_at.isoformat() if request.resolved_at else None,
+                request.resolved_by,
+                request.executed_at.isoformat() if request.executed_at else None,
+                request.executed_by,
+            ),
+        )
+        self._conn.commit()
+        return request
 
     def close(self) -> None:
         """Close the database connection."""

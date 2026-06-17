@@ -31,6 +31,7 @@ from agent_app.runtime.policy_rollout_approval_policy import (
     RolloutApprovalPolicyEvaluator,
 )
 from agent_app.governance.audit import AuditEvent
+from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
 
 
 class RolloutService:
@@ -51,6 +52,7 @@ class RolloutService:
         approval_store: Any | None = None,
         approval_require_reason: bool = False,
         approval_policy: RolloutApprovalPolicy | None = None,
+        release_gate_automation_service: Any = None,
     ) -> None:
         self._rollout_store = rollout_store
         self._release_service = release_service
@@ -61,6 +63,7 @@ class RolloutService:
         self._approval_store = approval_store
         self._approval_require_reason = approval_require_reason
         self._approval_policy = approval_policy
+        self._release_gate_automation_service = release_gate_automation_service
 
     # --- Permission check ---
     async def _check_permission(
@@ -226,6 +229,43 @@ class RolloutService:
         next_step = self._find_next_runnable_step(plan)
         if next_step is None:
             return plan  # No runnable step available
+
+        # Phase 42: Check simulation gate requirement for step
+        if next_step.requires_simulation_gate and self._release_gate_automation_service is not None:
+            gate_req = await self._release_gate_automation_service.check_requirement(
+                "rollout_step", next_step.step_id
+            )
+            if gate_req.status != ReleaseGateRequirementStatus.SATISFIED:
+                # Mark step as BLOCKED
+                blocked_step = next_step.model_copy(update={
+                    "status": RolloutStepStatus.BLOCKED,
+                    "error": {
+                        "type": "simulation_gate_required",
+                        "message": f"Simulation gate is {gate_req.status.value}, step requires SATISFIED",
+                        "requirement_status": gate_req.status.value,
+                    },
+                    "simulation_gate_requirement_id": gate_req.requirement_id if gate_req.requirement_id != "rgr_none" else None,
+                })
+                # Update plan and return
+                updated_steps = [
+                    blocked_step if s.step_id == blocked_step.step_id else s
+                    for s in plan.steps
+                ]
+                plan = plan.model_copy(update={
+                    "steps": updated_steps,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                await self._rollout_store.update(plan)
+                await self._write_audit(
+                    "policy.rollout.step_blocked",
+                    user_id=actor_id,
+                    data={
+                        "rollout_id": rollout_id,
+                        "step_id": next_step.step_id,
+                        "reason": f"simulation_gate_{gate_req.status.value}",
+                    },
+                )
+                return plan
 
         # Execute the step
         executed_step = await self._execute_step(plan, next_step, actor_id, context)
