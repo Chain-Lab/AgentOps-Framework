@@ -3092,3 +3092,93 @@ These can be overridden at the CLI level via `--gate-rules-file`.
 6. **No external risk engine** — Gate rules are simple threshold comparisons.
    There is no integration with external risk scoring engines or ML-based
    anomaly detection.
+
+---
+
+## Phase 42: Policy Release Automation and Simulation Gate Enforcement
+
+### Purpose
+
+Phase 41 added simulation gate evaluation, but enforcement was CLI-level only — users had to manually run the simulation gate before promotion. Phase 42 integrates simulation gate results into the release workflow so promotion and rollout execution can require a passing simulation gate before proceeding.
+
+### Promotion Gate Requirement Lifecycle
+
+A `ReleaseGateRequirement` tracks whether a promotion (or rollout step) needs a passing simulation gate:
+
+1. **REQUIRED** — A requirement is created when `simulation_gate_enforcement.require_for_promotion=true` in config, or manually via CLI/console
+2. **SATISFIED** — A passing gate result is attached (via `attach_gate_result` or `run_and_attach_simulation_gate_for_promotion`)
+3. **FAILED** — A failing gate result is attached
+4. **EXPIRED** — The gate result is older than `max_age_seconds`
+
+### Enforcement Behavior
+
+When `require_simulation_gate_for_promotion=true`:
+- `request_promotion()` auto-creates a gate requirement
+- `execute_promotion()` checks the requirement before proceeding:
+  - REQUIRED → blocked (no gate result attached)
+  - FAILED → blocked (gate failed)
+  - EXPIRED → blocked (gate result too old)
+  - SATISFIED → allowed
+
+### CLI Flow
+
+```bash
+# Create a gate requirement
+agentapp policy promotion gate require \
+  --promotion-id pr_abc123 \
+  --max-age-seconds 86400
+
+# Run simulation + gate and attach result
+agentapp policy promotion gate run \
+  --promotion-id pr_abc123 \
+  --rules-file candidate_rules.yaml \
+  --gate-rules-file simulation_gates.yaml
+
+# Or attach an existing gate result
+agentapp policy promotion gate attach \
+  --promotion-id pr_abc123 \
+  --gate-result-id pg_xyz789 \
+  --simulation-id psim_def456
+
+# Check gate status
+agentapp policy promotion gate status \
+  --promotion-id pr_abc123
+
+# Execute promotion (blocked if gate not satisfied)
+agentapp policy promotion execute pr_abc123 --executed-by admin
+```
+
+### Console Flow
+
+Navigate to `/policy-console/promotions/{promotion_id}/gate` to:
+- View current gate requirement status
+- Require a gate
+- Run simulation + gate
+- Attach an existing gate result
+
+### Configuration
+
+```yaml
+governance:
+  policy_release:
+    simulation_gate_enforcement:
+      require_for_promotion: true
+      max_age_seconds: 86400
+      requirement_store:
+        type: sqlite
+        path: .agent_app/policy_release_gate_requirements.db
+```
+
+### Relationship to Phase 41
+
+Phase 41 created the `SimulationGateEvaluator` and `PolicySimulationService.validate_and_gate()` for evaluating simulation gates. Phase 42 wraps that evaluation into the `ReleaseGateAutomationService` and enforces the result in the promotion/rollout workflow.
+
+### Known Limitations
+
+- Enforcement is framework-level, not CI/CD-native
+- Simulation still uses historical audit, not live traffic
+- Gate freshness uses `max_age_seconds`, not external attestation
+- No distributed execution lock
+- No automatic production rollback
+- Rollout integration is MVP-level (step blocking only)
+- External CI pipelines must call CLI/API explicitly

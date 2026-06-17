@@ -1254,3 +1254,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 39**: Policy Observability, Analytics, and Compliance Reporting — enforcement decision analytics, approval latency, JSON/CSV export, console dashboard
 - **Phase 40**: Policy Testing, Validation, and Historical Replay — simulation framework, audit-to-case extraction, candidate policy stores, policy validation, CLI/console simulation
 - **Phase 41**: Policy Gate Integration and Automated Safeguards — simulation gate evaluator, configurable threshold rules, blocking CLI exit codes, gate reports, CI/CD integration
+- **Phase 42**: Policy Release Automation and Simulation Gate Enforcement — gate requirement lifecycle, promotion/rollout enforcement, release gate automation service, CLI gate commands, console gate pages

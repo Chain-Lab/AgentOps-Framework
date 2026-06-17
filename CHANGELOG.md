@@ -2,6 +2,21 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.30.0 — Phase 42: Policy Release Automation and Simulation Gate Enforcement
+
+- ReleaseGateRequirement model and store (InMemory + SQLite)
+- ReleaseGateAutomationService (require, attach, run+attach, check)
+- PromotionRequest extension with simulation gate fields
+- RolloutStep extension with simulation gate fields
+- PolicyReleaseService enforcement (block execution when gate required/failed/expired)
+- RolloutService step gate blocking
+- SimulationGateEnforcementConfig in schema
+- Config loader wiring for requirement store/service/enforcement flags
+- CLI commands: policy promotion gate require/run/attach/status
+- Console promotion gate pages
+- RBAC: PROMOTION_GATE_REQUIRE, PROMOTION_GATE_RUN, PROMOTION_GATE_ATTACH, PROMOTION_GATE_VIEW, ROLLOUT_GATE_ATTACH, ROLLOUT_GATE_VIEW
+- Change events: PROMOTION_GATE_REQUIRED, PROMOTION_GATE_SATISFIED, PROMOTION_GATE_FAILED, PROMOTION_GATE_EXPIRED, etc.
+
 ## v0.29.0 (2026-06-16)
 
 ### Phase 41: Policy Gate Integration and Automated Safeguards
