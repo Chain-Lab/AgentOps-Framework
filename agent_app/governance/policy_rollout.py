@@ -39,6 +39,22 @@ class RolloutStepType(StrEnum):
     PROMOTE_RING = "promote_ring"
 
 
+class RolloutGateMode(StrEnum):
+    """Gate automation mode for rollout steps."""
+
+    DISABLED = "disabled"
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
+class RolloutGateFailureAction(StrEnum):
+    """Action to take when simulation gate fails for a rollout step."""
+
+    BLOCK = "block"
+    FAIL = "fail"
+    SKIP = "skip"
+
+
 class RolloutStep(BaseModel):
     """A single step within a rollout plan."""
 
@@ -68,6 +84,43 @@ class RolloutStep(BaseModel):
     simulation_gate_result_id: str | None = Field(
         default=None,
         description="Simulation gate result ID (Phase 42)",
+    )
+    # Phase 43: Rollout gate automation
+    simulation_gate_mode: RolloutGateMode = Field(
+        default=RolloutGateMode.DISABLED,
+        description="Gate automation mode: disabled, manual, or auto (Phase 43)",
+    )
+    simulation_gate_failure_action: RolloutGateFailureAction = Field(
+        default=RolloutGateFailureAction.BLOCK,
+        description="Action when gate fails: block, fail, or skip (Phase 43)",
+    )
+    simulation_candidate_rules: list[Any] = Field(
+        default_factory=list,
+        description="Candidate runtime policy rules for auto gate (Phase 43)",
+    )
+    simulation_gate_rules: list[Any] = Field(
+        default_factory=list,
+        description="Gate rules for auto gate evaluation (Phase 43)",
+    )
+    simulation_window_start: datetime | None = Field(
+        default=None,
+        description="Audit window start for simulation (Phase 43)",
+    )
+    simulation_window_end: datetime | None = Field(
+        default=None,
+        description="Audit window end for simulation (Phase 43)",
+    )
+    simulation_limit: int | None = Field(
+        default=None,
+        description="Max audit cases for simulation (Phase 43)",
+    )
+    simulation_include_base: bool = Field(
+        default=True,
+        description="Include base rules alongside candidates in simulation (Phase 43)",
+    )
+    simulation_gate_max_age_seconds: int | None = Field(
+        default=None,
+        description="Max age in seconds for gate result freshness (Phase 43)",
     )
     started_at: datetime | None = None
     completed_at: datetime | None = None
