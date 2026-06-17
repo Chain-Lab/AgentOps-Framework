@@ -2,6 +2,28 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## [v0.32.0] - 2026-06-17
+
+### Phase 44: Notification Hooks and Expiration Workers
+
+**Added:**
+- `PolicyNotificationMessage` and `PolicyNotificationRule` models
+- `PolicyNotificationSeverity` and `PolicyNotificationStatus` enums
+- `PolicyNotificationStore` (InMemory + SQLite) for notification delivery persistence
+- `PolicyNotificationRuleStore` (InMemory + SQLite) for rule persistence
+- `LogNotificationChannel` and `InMemoryNotificationChannel` built-in channels
+- `PolicyNotificationService` with `notify_event`, `send_pending`, `list_notifications`
+- `PolicyExpirationResult` and `PolicyExpirationSweepReport` models
+- `PolicyExpirationService` with `sweep`, `expire_rollout_approvals`, `expire_gate_requirements`
+- `PolicyExpirationWorker` with `start`/`stop`/`run_once` (does not auto-start)
+- 7 new RBAC permissions for notification and expiration operations
+- 10 new change event types for notification and expiration lifecycle
+- `NotificationConfig` and `ExpirationConfig` in schema
+- Config loader wiring for notification and expiration services
+- CLI commands: `policy notification list/send-pending/rule list/enable/disable`
+- CLI commands: `policy expiration sweep/run-once`
+- Console pages for notifications, notification rules, and expiration
+
 ## v0.31.0 — Phase 43: Policy Rollout Automation with Simulation Gates
 
 - RolloutGateMode enum (DISABLED/MANUAL/AUTO) and RolloutGateFailureAction enum (BLOCK/FAIL/SKIP)

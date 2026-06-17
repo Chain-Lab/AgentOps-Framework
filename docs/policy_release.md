@@ -3346,3 +3346,111 @@ Phase 42's manual blocking remains fully backward compatible — steps with `req
 - No distributed execution lock
 - No automatic production rollback
 - Candidate rule YAML parsing remains MVP-level
+
+---
+
+## Phase 44: Notification Hooks and Expiration Workers
+
+### Purpose
+
+Make governance states actionable by providing framework-level notification hooks and expiration sweep services. Pending approvals, blocked/failed/expired gate requirements, and other governance states that require operator attention now trigger notifications and can be swept for expiration.
+
+### Notification Architecture
+
+The notification system follows a rule-based, channel-driven model:
+
+1. **PolicyNotificationRule** — Matches policy events by event_type and source_type. Each rule specifies severity, delivery channels, and optional title/body templates.
+2. **PolicyNotificationService** — Matches enabled rules against incoming events, creates notification messages, delivers through configured channels, and tracks delivery status.
+3. **PolicyNotificationChannel** — Protocol for delivery. Built-in channels: `log` (stdlib logging), `memory` (in-memory for testing).
+
+### Notification Rules
+
+Rules are configured in YAML or created programmatically:
+
+```yaml
+governance:
+  policy_release:
+    notifications:
+      enabled: true
+      rules:
+        - name: rollout_gate_failed
+          event_types:
+            - policy.rollout.gate.failed
+          severity: error
+          channels:
+            - log
+          title_template: "Rollout gate failed: {rollout_id}/{step_id}"
+```
+
+### Built-in Channels
+
+| Channel | Description |
+|---------|-------------|
+| `log` | Writes to standard library logging |
+| `memory` | Stores in memory for testing |
+
+### Expiration Sweep Service
+
+The `PolicyExpirationService` sweeps two target types:
+
+1. **Rollout approvals** — Calls `RolloutStepApprovalStore.expire_pending()` to mark past-due approvals as EXPIRED
+2. **Gate requirements** — Checks `max_age_seconds` against satisfied_at/created_at for REQUIRED requirements
+
+Sweeps are explicit (CLI or API). No background scheduler is started automatically.
+
+### Optional In-Process Worker
+
+`PolicyExpirationWorker` provides start/stop/run_once lifecycle:
+
+```python
+worker = PolicyExpirationWorker(expiration_service, interval_seconds=300)
+await worker.start()   # starts background loop
+await worker.run_once()  # single sweep (preferred for tests)
+await worker.stop()    # safe to call multiple times
+```
+
+The worker does NOT start automatically on import or instantiation.
+
+### CLI Commands
+
+```bash
+# Notifications
+agentapp policy notification list --config agentapp.yaml
+agentapp policy notification list --status failed --limit 20 --config agentapp.yaml
+agentapp policy notification send-pending --config agentapp.yaml
+agentapp policy notification rule list --config agentapp.yaml
+agentapp policy notification rule enable --rule-id pnr_... --config agentapp.yaml
+agentapp policy notification rule disable --rule-id pnr_... --config agentapp.yaml
+
+# Expiration
+agentapp policy expiration sweep --config agentapp.yaml
+agentapp policy expiration run-once --config agentapp.yaml
+```
+
+### Console Workflow
+
+- `/policy-console/notifications` — List and send notifications
+- `/policy-console/notification-rules` — List and enable/disable rules
+- `/policy-console/expiration` — Run and view sweep results
+
+### RBAC Permissions
+
+| Permission | Description | Default |
+|-----------|-------------|---------|
+| `policy.notification.view` | View notifications | Yes |
+| `policy.notification.send` | Send notifications | No |
+| `policy.notification.rule.view` | View notification rules | No |
+| `policy.notification.rule.enable` | Enable rules | No |
+| `policy.notification.rule.disable` | Disable rules | No |
+| `policy.expiration.sweep` | Run expiration sweep | No |
+| `policy.expiration.view` | View expiration status | Yes |
+
+### Known Limitations
+
+- No Slack/Jira/email integration
+- No external webhook delivery
+- No distributed queue
+- No durable retry backoff beyond stored failed status
+- No production scheduler
+- Worker is local-process only
+- Notifications depend on rules and event coverage
