@@ -680,6 +680,33 @@ def main() -> int:
     rollout_gate_attach_parser.add_argument("--actor-id", required=True, help="Actor ID")
     rollout_gate_attach_parser.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
 
+    # Phase 45: rollout history/timeline/analytics subcommands
+    rollout_history_parser = rollout_sub.add_parser("history", help="Show rollout history events (Phase 45)")
+    rollout_history_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_history_parser.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_history_parser.add_argument("--limit", type=int, default=50, help="Max events to show")
+    rollout_history_parser.add_argument("--event-type", default=None, help="Filter by event type")
+
+    rollout_timeline_parser = rollout_sub.add_parser("timeline", help="Show rollout timeline (Phase 45)")
+    rollout_timeline_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_timeline_parser.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_timeline_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    rollout_analytics_parser = rollout_sub.add_parser("analytics", help="Show rollout analytics report (Phase 45)")
+    rollout_analytics_sub = rollout_analytics_parser.add_subparsers(dest="rollout_analytics_command")
+
+    rollout_analytics_show_parser = rollout_analytics_sub.add_parser("show", help="Show rollout analytics report")
+    rollout_analytics_show_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_analytics_show_parser.add_argument("--since", default=None, help="Window start (ISO datetime)")
+    rollout_analytics_show_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
+
+    rollout_analytics_export_parser = rollout_analytics_sub.add_parser("export", help="Export rollout analytics report")
+    rollout_analytics_export_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_analytics_export_parser.add_argument("--format", required=True, choices=["json", "csv"], help="Export format")
+    rollout_analytics_export_parser.add_argument("--output", required=True, help="Output file path")
+    rollout_analytics_export_parser.add_argument("--since", default=None, help="Window start (ISO datetime)")
+    rollout_analytics_export_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
+
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
     notification_sub = notification_parser.add_subparsers(dest="notification_command")
@@ -1119,6 +1146,15 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_rollout_gate_status(args))
             if args.rollout_gate_command == "attach":
                 return asyncio.run(_cmd_policy_rollout_gate_attach(args))
+        # Phase 45: rollout history/timeline/analytics subcommands
+        if args.rollout_command == "history":
+            return asyncio.run(_cmd_policy_rollout_history(args))
+        if args.rollout_command == "timeline":
+            return asyncio.run(_cmd_policy_rollout_timeline(args))
+        if args.rollout_command == "analytics":
+            if args.rollout_analytics_command == "export":
+                return asyncio.run(_cmd_policy_rollout_analytics_export(args))
+            return asyncio.run(_cmd_policy_rollout_analytics(args))
 
     # Phase 44: policy notification subcommands
     if args.command == "policy" and args.policy_command == "notification":
@@ -6673,6 +6709,277 @@ async def _cmd_policy_expiration_sweep(args: argparse.Namespace) -> int:
 async def _cmd_policy_expiration_run_once(args: argparse.Namespace) -> int:
     """Run expiration sweep once (same as sweep)."""
     return await _cmd_policy_expiration_sweep(args)
+
+
+# ---------------------------------------------------------------------------
+# Phase 45: Rollout history / timeline / analytics CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_rollout_history(args: argparse.Namespace) -> int:
+    """Show history events for a rollout."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "rollout_history_service", None)
+    if service is None:
+        print("Rollout history not configured.", file=sys.stderr)
+        return 1
+
+    event_type_filter = None
+    if args.event_type:
+        try:
+            event_type_filter = RolloutHistoryEventType(args.event_type)
+        except ValueError:
+            valid = [e.value for e in RolloutHistoryEventType]
+            print(f"Invalid event type: {args.event_type}. Valid values: {', '.join(valid)}", file=sys.stderr)
+            return 1
+
+    try:
+        events = await service.list_history_events(
+            rollout_id=args.rollout_id,
+            event_type=event_type_filter,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing rollout history: {exc}", file=sys.stderr)
+        return 1
+
+    if not events:
+        print(f"No history events found for rollout '{args.rollout_id}'.")
+        return 0
+
+    print(f"{'Event ID':<22} {'Type':<35} {'Step ID':<12} {'Actor':<15} {'Message':<30} {'Time'}")
+    print("-" * 130)
+    for e in events:
+        eid = e.history_event_id[:22]
+        etype = (e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type))[:35]
+        step = (e.step_id or "")[:12]
+        actor = (e.actor_id or "")[:15]
+        msg = (e.message or "")[:30]
+        ts = e.created_at.isoformat()[:19] if e.created_at else "?"
+        print(f"{eid:<22} {etype:<35} {step:<12} {actor:<15} {msg:<30} {ts}")
+
+    return 0
+
+
+async def _cmd_policy_rollout_timeline(args: argparse.Namespace) -> int:
+    """Show rollout timeline."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "rollout_history_service", None)
+    if service is None:
+        print("Rollout history not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        timeline = await service.get_timeline(args.rollout_id)
+    except Exception as exc:
+        print(f"Error fetching rollout timeline: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        from agent_app.runtime.policy_compliance_export import rollout_timeline_to_json
+        print(rollout_timeline_to_json(timeline))
+        return 0
+
+    # Text output
+    name = timeline.name or args.rollout_id
+    status = timeline.status or "unknown"
+    print(f"Rollout: {name} ({args.rollout_id})")
+    print(f"Status: {status}")
+    if timeline.bundle_id:
+        print(f"Bundle: {timeline.bundle_id}")
+    if timeline.started_at:
+        print(f"Started: {timeline.started_at.isoformat()[:19]}")
+    if timeline.completed_at:
+        print(f"Completed: {timeline.completed_at.isoformat()[:19]}")
+    if timeline.duration_seconds is not None:
+        print(f"Duration: {timeline.duration_seconds:.1f}s")
+
+    if timeline.steps:
+        print()
+        print(f"{'Step':<12} {'Status':<12} {'Gate':<12} {'Approval':<12} {'Duration':<10}")
+        print("-" * 60)
+        for step in timeline.steps:
+            sid = step.step_id[:12]
+            st = (step.status or "-")[:12]
+            gate = (step.gate_status or "-")[:12]
+            approval = (step.approval_status or "-")[:12]
+            dur = f"{step.duration_seconds:.1f}s" if step.duration_seconds is not None else "-"
+            print(f"{sid:<12} {st:<12} {gate:<12} {approval:<12} {dur:<10}")
+
+    return 0
+
+
+async def _cmd_policy_rollout_analytics(args: argparse.Namespace) -> int:
+    """Show rollout analytics report."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "rollout_history_service", None)
+    if service is None:
+        print("Rollout history not configured.", file=sys.stderr)
+        return 1
+
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since)
+        except ValueError:
+            print(f"Invalid --since datetime: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until)
+        except ValueError:
+            print(f"Invalid --until datetime: {args.until}", file=sys.stderr)
+            return 1
+
+    try:
+        report = await service.generate_report(
+            window_start=window_start,
+            window_end=window_end,
+        )
+    except Exception as exc:
+        print(f"Error generating analytics report: {exc}", file=sys.stderr)
+        return 1
+
+    # Summary cards
+    print("Rollout Analytics Report")
+    print(f"  Report ID: {report.report_id}")
+    print(f"  Total: {report.total_rollouts}  Completed: {report.completed_rollouts}  "
+          f"Failed: {report.failed_rollouts}  Blocked: {report.blocked_rollouts}  "
+          f"Cancelled: {report.cancelled_rollouts}")
+
+    # Gate outcomes
+    print(f"\nGate Outcomes: {report.gate_outcomes.total} total")
+    print(f"  Satisfied: {report.gate_outcomes.satisfied}  Blocked: {report.gate_outcomes.blocked}  "
+          f"Failed: {report.gate_outcomes.failed}  Skipped: {report.gate_outcomes.skipped}  "
+          f"Expired: {report.gate_outcomes.expired}")
+
+    # Approval outcomes
+    avg_lat = f"{report.approval_outcomes.average_latency_seconds:.1f}s" if report.approval_outcomes.average_latency_seconds is not None else "-"
+    print(f"\nApproval Outcomes: {report.approval_outcomes.total} total")
+    print(f"  Pending: {report.approval_outcomes.pending}  Approved: {report.approval_outcomes.approved}  "
+          f"Rejected: {report.approval_outcomes.rejected}  Expired: {report.approval_outcomes.expired}  "
+          f"Avg Latency: {avg_lat}")
+
+    # Top blocked steps
+    if report.top_blocked_steps:
+        print("\nTop Blocked Steps:")
+        for item in report.top_blocked_steps:
+            print(f"  {item.get('step_id', '?')}: {item.get('count', 0)}")
+
+    # Top failed gates
+    if report.top_failed_gates:
+        print("\nTop Failed Gates:")
+        for item in report.top_failed_gates:
+            print(f"  {item.get('step_id', '?')}: {item.get('count', 0)}")
+
+    return 0
+
+
+async def _cmd_policy_rollout_analytics_export(args: argparse.Namespace) -> int:
+    """Export rollout analytics report to file."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_compliance_export import (
+        rollout_analytics_report_to_json,
+        rollout_analytics_report_to_csv_rows,
+    )
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "rollout_history_service", None)
+    if service is None:
+        print("Rollout history not configured.", file=sys.stderr)
+        return 1
+
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since)
+        except ValueError:
+            print(f"Invalid --since datetime: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until)
+        except ValueError:
+            print(f"Invalid --until datetime: {args.until}", file=sys.stderr)
+            return 1
+
+    try:
+        report = await service.generate_report(
+            window_start=window_start,
+            window_end=window_end,
+        )
+    except Exception as exc:
+        print(f"Error generating analytics report: {exc}", file=sys.stderr)
+        return 1
+
+    fmt = args.format
+    try:
+        if fmt == "json":
+            content = rollout_analytics_report_to_json(report)
+        elif fmt == "csv":
+            rows = rollout_analytics_report_to_csv_rows(report)
+            if rows:
+                import csv as csv_mod
+                from io import StringIO
+                # Collect all unique fieldnames across all rows
+                all_keys: set[str] = set()
+                for r in rows:
+                    all_keys.update(r.keys())
+                fieldnames = sorted(all_keys)
+                buf = StringIO()
+                writer = csv_mod.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+                content = buf.getvalue()
+            else:
+                content = ""
+        else:
+            print(f"Unsupported export format: {fmt}", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"Error formatting export: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(args.output, "w") as f:
+            f.write(content)
+    except OSError as exc:
+        print(f"Error writing to {args.output}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Analytics report exported to {args.output} ({fmt}).")
+    return 0
 
 
 if __name__ == "__main__":
