@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class RolloutPlanStatus(StrEnum):
@@ -57,6 +57,18 @@ class RolloutStep(BaseModel):
     assignment_id: str | None = None
     approval_id: str | None = None
     error: dict[str, Any] | None = None
+    requires_simulation_gate: bool = Field(
+        default=False,
+        description="Whether simulation gate is required for this step (Phase 42)",
+    )
+    simulation_gate_requirement_id: str | None = Field(
+        default=None,
+        description="Release gate requirement ID (Phase 42)",
+    )
+    simulation_gate_result_id: str | None = Field(
+        default=None,
+        description="Simulation gate result ID (Phase 42)",
+    )
     started_at: datetime | None = None
     completed_at: datetime | None = None
 

@@ -69,3 +69,19 @@ class PromotionRequest(BaseModel):
     resolved_by: str | None = Field(default=None, description="Identity of resolver")
     executed_at: datetime | None = Field(default=None, description="Execution timestamp")
     executed_by: str | None = Field(default=None, description="Identity of executor")
+    simulation_gate_required: bool = Field(
+        default=False,
+        description="Whether simulation gate is required for this promotion (Phase 42)",
+    )
+    simulation_gate_requirement_id: str | None = Field(
+        default=None,
+        description="Release gate requirement ID (rgr_ prefix, Phase 42)",
+    )
+    simulation_gate_result_id: str | None = Field(
+        default=None,
+        description="Simulation gate result ID (pg_ prefix, Phase 42)",
+    )
+    simulation_id: str | None = Field(
+        default=None,
+        description="Simulation ID (psim_ prefix, Phase 42)",
+    )
