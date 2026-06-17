@@ -373,6 +373,41 @@ def main() -> int:
     promo_execute_parser.add_argument("--reason", default=None, help="Activation reason (Phase 31)")
     promo_execute_parser.add_argument("--json", action="store_true")
 
+    # Phase 42: policy promotion gate subcommands
+    promo_gate_parser = promo_sub.add_parser("gate", help="Promotion gate lifecycle commands")
+    promo_gate_sub = promo_gate_parser.add_subparsers(dest="promotion_gate_command")
+
+    gate_require_parser = promo_gate_sub.add_parser("require", help="Create a gate requirement for a promotion")
+    gate_require_parser.add_argument("--config", required=True)
+    gate_require_parser.add_argument("--promotion-id", required=True)
+    gate_require_parser.add_argument("--max-age-seconds", type=int, default=None)
+    gate_require_parser.add_argument("--actor-id", default=None)
+    gate_require_parser.add_argument("--permissions", action="append", default=[])
+
+    gate_run_parser = promo_gate_sub.add_parser("run", help="Run simulation + gate and attach to promotion")
+    gate_run_parser.add_argument("--config", required=True)
+    gate_run_parser.add_argument("--promotion-id", required=True)
+    gate_run_parser.add_argument("--rules-file", required=True, help="YAML file with candidate rules")
+    gate_run_parser.add_argument("--gate-rules-file", default=None, help="YAML file with gate rules")
+    gate_run_parser.add_argument("--actor-id", default=None)
+    gate_run_parser.add_argument("--permissions", action="append", default=[])
+    gate_run_parser.add_argument("--since", default=None, help="ISO 8601 datetime for audit window start")
+    gate_run_parser.add_argument("--until", default=None, help="ISO 8601 datetime for audit window end")
+    gate_run_parser.add_argument("--limit", type=int, default=None, help="Max audit cases to replay")
+
+    gate_attach_parser = promo_gate_sub.add_parser("attach", help="Attach an existing gate result to a promotion")
+    gate_attach_parser.add_argument("--config", required=True)
+    gate_attach_parser.add_argument("--promotion-id", required=True)
+    gate_attach_parser.add_argument("--gate-result-id", required=True)
+    gate_attach_parser.add_argument("--simulation-id", default=None)
+    gate_attach_parser.add_argument("--actor-id", default=None)
+    gate_attach_parser.add_argument("--permissions", action="append", default=[])
+
+    gate_status_parser = promo_gate_sub.add_parser("status", help="Show gate requirement status for a promotion")
+    gate_status_parser.add_argument("--config", required=True)
+    gate_status_parser.add_argument("--promotion-id", required=True)
+    gate_status_parser.add_argument("--json", action="store_true")
+
     # Phase 31: policy activation subcommands
     activation_parser = policy_sub.add_parser("activation", help="Policy activation commands")
     activation_sub = activation_parser.add_subparsers(dest="activation_command")
@@ -913,6 +948,16 @@ def main() -> int:
             return asyncio.run(_cmd_policy_promotion_reject(args))
         if args.promotion_command == "execute":
             return asyncio.run(_cmd_policy_promotion_execute(args))
+        # Phase 42: policy promotion gate subcommands
+        if args.promotion_command == "gate":
+            if args.promotion_gate_command == "require":
+                return asyncio.run(_cmd_policy_promotion_gate_require(args))
+            if args.promotion_gate_command == "run":
+                return asyncio.run(_cmd_policy_promotion_gate_run(args))
+            if args.promotion_gate_command == "attach":
+                return asyncio.run(_cmd_policy_promotion_gate_attach(args))
+            if args.promotion_gate_command == "status":
+                return asyncio.run(_cmd_policy_promotion_gate_status(args))
 
     # Phase 31: policy activation subcommands
     if args.command == "policy" and args.policy_command == "activation":
@@ -5712,6 +5757,256 @@ async def _cmd_policy_runtime_evaluate(args: argparse.Namespace) -> int:
 
     decision = await service.enforce(request)
     print(json.dumps(_decision_to_dict(decision), indent=2, default=str))
+    return 0
+
+
+# --- Phase 42: Policy promotion gate CLI commands ---
+
+
+def _get_gate_automation_service(app) -> object | None:
+    """Get the release gate automation service from the app."""
+    return getattr(app, "_release_gate_automation_service", None)
+
+
+async def _cmd_policy_promotion_gate_require(args: argparse.Namespace) -> int:
+    """Create a gate requirement for a promotion."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_gate_automation_service(app)
+    if service is None:
+        print("Release gate automation not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        req = await service.require_gate_for_promotion(
+            promotion_id=args.promotion_id,
+            max_age_seconds=args.max_age_seconds,
+        )
+    except Exception as exc:
+        print(f"Error creating gate requirement: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = req.status.value if hasattr(req.status, "value") else req.status
+    print("Gate requirement created")
+    print()
+    print(f"Requirement ID:   {req.requirement_id}")
+    print(f"Promotion ID:     {req.source_id}")
+    print(f"Status:           {status_str}")
+    if req.max_age_seconds is not None:
+        print(f"Max Age Seconds:  {req.max_age_seconds}")
+    return 0
+
+
+async def _cmd_policy_promotion_gate_run(args: argparse.Namespace) -> int:
+    """Run simulation + gate and attach to promotion."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_gate_automation_service(app)
+    if service is None:
+        print("Release gate automation not configured.", file=sys.stderr)
+        return 1
+
+    # Parse candidate rules
+    try:
+        candidate_rules = _parse_candidate_rules(args.rules_file)
+    except Exception as exc:
+        print(f"Error parsing rules file: {exc}", file=sys.stderr)
+        return 1
+
+    if not candidate_rules:
+        print("No rules found in the rules file.", file=sys.stderr)
+        return 1
+
+    # Parse gate rules from file or app config
+    gate_rules = None
+    if args.gate_rules_file:
+        try:
+            gate_rules = _parse_gate_rules(args.gate_rules_file)
+        except Exception as exc:
+            print(f"Error parsing gate rules file: {exc}", file=sys.stderr)
+            return 1
+    else:
+        # Try to get gate rules from app config
+        evaluator = getattr(app, "simulation_gate_evaluator", None)
+        if evaluator is not None:
+            gate_rules = getattr(evaluator, "_rules", None)
+            if gate_rules is None:
+                inner = getattr(evaluator, "_gate_evaluator", None)
+                if inner is not None:
+                    gate_rules = getattr(inner, "_rules", None)
+
+    if not gate_rules:
+        print("No gate rules available. Provide --gate-rules-file or configure gates in app config.", file=sys.stderr)
+        return 1
+
+    # Parse time window
+    window_start, window_end, parse_error = _parse_window(args)
+    if parse_error:
+        return 1
+
+    # Create requirement first if none exists
+    try:
+        existing = await service.check_requirement("promotion", args.promotion_id)
+        if existing.status == ReleaseGateRequirementStatus.NOT_REQUIRED:
+            await service.require_gate_for_promotion(
+                promotion_id=args.promotion_id,
+            )
+    except Exception:
+        # If check fails, try to create anyway
+        try:
+            await service.require_gate_for_promotion(
+                promotion_id=args.promotion_id,
+            )
+        except Exception:
+            pass
+
+    # Build context
+    context = _build_context(
+        args.actor_id or "cli_gate_run",
+        args.permissions or [],
+    )
+
+    # Run simulation + gate + attach
+    try:
+        req = await service.run_and_attach_simulation_gate_for_promotion(
+            promotion_id=args.promotion_id,
+            candidate_rules=candidate_rules,
+            gate_rules=gate_rules,
+            context=context,
+            window_start=window_start,
+            window_end=window_end,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error running simulation gate for promotion: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = req.status.value if hasattr(req.status, "value") else req.status
+    print("Simulation gate completed for promotion")
+    print()
+    print(f"Requirement ID:   {req.requirement_id}")
+    print(f"Promotion ID:     {req.source_id}")
+    print(f"Status:           {status_str}")
+    if req.gate_result_id:
+        print(f"Gate Result ID:   {req.gate_result_id}")
+    if req.simulation_id:
+        print(f"Simulation ID:    {req.simulation_id}")
+
+    # Exit 0 on SATISFIED, non-zero otherwise
+    if req.status == ReleaseGateRequirementStatus.SATISFIED:
+        return 0
+    return 1
+
+
+async def _cmd_policy_promotion_gate_attach(args: argparse.Namespace) -> int:
+    """Attach an existing gate result to a promotion."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_gate_automation_service(app)
+    if service is None:
+        print("Release gate automation not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        req = await service.attach_gate_result(
+            source_type="promotion",
+            source_id=args.promotion_id,
+            gate_result_id=args.gate_result_id,
+            simulation_id=args.simulation_id,
+            actor_id=args.actor_id,
+        )
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error attaching gate result: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = req.status.value if hasattr(req.status, "value") else req.status
+    print("Gate result attached to promotion")
+    print()
+    print(f"Requirement ID:   {req.requirement_id}")
+    print(f"Promotion ID:     {req.source_id}")
+    print(f"Status:           {status_str}")
+    if req.gate_result_id:
+        print(f"Gate Result ID:   {req.gate_result_id}")
+
+    # Exit 0 on SATISFIED, non-zero otherwise
+    if req.status == ReleaseGateRequirementStatus.SATISFIED:
+        return 0
+    return 1
+
+
+async def _cmd_policy_promotion_gate_status(args: argparse.Namespace) -> int:
+    """Show gate requirement status for a promotion."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_gate_automation_service(app)
+    if service is None:
+        print("Release gate automation not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        req = await service.check_requirement("promotion", args.promotion_id)
+    except Exception as exc:
+        print(f"Error checking gate requirement: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = req.status.value if hasattr(req.status, "value") else req.status
+
+    if args.json:
+        data = {
+            "requirement_id": req.requirement_id,
+            "promotion_id": req.source_id,
+            "status": status_str,
+            "gate_result_id": req.gate_result_id,
+            "simulation_id": req.simulation_id,
+            "max_age_seconds": req.max_age_seconds,
+            "satisfied_at": req.satisfied_at.isoformat() if req.satisfied_at else None,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Gate requirement status")
+        print()
+        print(f"Requirement ID:   {req.requirement_id}")
+        print(f"Promotion ID:     {req.source_id}")
+        print(f"Status:           {status_str}")
+        if req.gate_result_id:
+            print(f"Gate Result ID:   {req.gate_result_id}")
+        if req.simulation_id:
+            print(f"Simulation ID:    {req.simulation_id}")
+        if req.max_age_seconds is not None:
+            print(f"Max Age Seconds:  {req.max_age_seconds}")
+        if req.satisfied_at:
+            print(f"Satisfied At:     {req.satisfied_at.isoformat()}")
+
     return 0
 
 
