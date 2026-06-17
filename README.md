@@ -1257,3 +1257,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 42**: Policy Release Automation and Simulation Gate Enforcement — gate requirement lifecycle, promotion/rollout enforcement, release gate automation service, CLI gate commands, console gate pages
 - **Phase 43**: Policy Rollout Automation with Simulation Gates — rollout gate modes (DISABLED/MANUAL/AUTO), failure actions (BLOCK/FAIL/SKIP), RolloutGateAutomationService, AUTO step gate execution, CLI rollout gate commands, console rollout gate pages
 - **Phase 44**: Notification Hooks and Expiration Workers — notification rules and channels, expiration sweep service, optional in-process worker, CLI notification/expiration commands, console notification/expiration pages
+- [x] **Phase 45**: Policy Rollout Analytics, History, and Gate Outcome Reporting

@@ -3454,3 +3454,151 @@ agentapp policy expiration run-once --config agentapp.yaml
 - No production scheduler
 - Worker is local-process only
 - Notifications depend on rules and event coverage
+
+---
+
+## Phase 45: Policy Rollout Analytics, History, and Gate Outcome Reporting
+
+### Purpose
+
+Make rollout execution history explainable and measurable. Every rollout lifecycle event — step transitions, approval decisions, gate evaluations, notification deliveries — is recorded in a structured history store and exposed through timeline views, analytics reports, and export helpers.
+
+### Architecture
+
+The rollout history system follows a recorder-service pattern:
+
+1. **RolloutHistoryEvent model** — Normalized event record with `rhe_` prefix, tz-aware timestamps, and typed event categories
+2. **RolloutHistoryStore** — Protocol + InMemory + SQLite persistence for history events
+3. **RolloutHistoryRecorder** — Creates normalized history events from service operations
+4. **RolloutHistoryService** — Generates timelines and analytics reports from recorded history
+
+### History Event Types
+
+24 event types across five categories:
+
+| Category | Event Types |
+|----------|-------------|
+| Rollout | ROLLOUT_CREATED, ROLLOUT_STARTED, ROLLOUT_COMPLETED, ROLLOUT_FAILED, ROLLOUT_CANCELLED |
+| Step | STEP_STARTED, STEP_SUCCEEDED, STEP_FAILED, STEP_BLOCKED, STEP_SKIPPED |
+| Approval | APPROVAL_REQUESTED, APPROVAL_APPROVED, APPROVAL_REJECTED, APPROVAL_EXPIRED |
+| Gate | GATE_RUN, GATE_PASSED, GATE_FAILED, GATE_BLOCKED, GATE_SKIPPED, GATE_ATTACHED |
+| Notification | NOTIFICATION_SENT, NOTIFICATION_DELIVERED, NOTIFICATION_FAILED, NOTIFICATION_RULE_MATCHED, NOTIFICATION_RULE_DISABLED |
+
+### Timeline Model
+
+The `RolloutTimeline` provides a structured view of a rollout's execution history:
+
+- **RolloutTimeline** — Top-level model with rollout metadata and list of step timelines
+- **RolloutStepTimeline** — Per-step timeline with step metadata and ordered history events
+
+Timelines are enriched from multiple stores:
+- Rollout plan and step data from `RolloutPlanStore`
+- History events from `RolloutHistoryStore`
+- Approval data from `RolloutStepApprovalStore` (if available)
+
+### Analytics Report
+
+The `RolloutAnalyticsReport` (with `rar_` prefix) provides aggregated analytics:
+
+- **Rollout counts** — Total, by status (completed/failed/cancelled)
+- **Gate outcome summaries** — Pass/fail/block/skip counts per gate type
+- **Approval outcome summaries** — Approved/rejected/expired counts
+- **Top blocked steps** — Most frequently blocked step types
+- **Top failed gates** — Most frequently failed gate rules
+- **Environment summaries** — Per-environment rollout counts and outcomes
+- **Ring summaries** — Per-ring assignment and promotion counts
+
+### Service Integrations
+
+Four existing services now record history events via `RolloutHistoryRecorder`:
+
+1. **RolloutService** — Records rollout lifecycle events (created, started, completed, failed, cancelled) and step events (started, succeeded, failed, blocked, skipped)
+2. **RolloutGateAutomationService** — Records gate events (run, passed, failed, blocked, skipped, attached)
+3. **PolicyExpirationService** — Records approval expiration events
+4. **PolicyNotificationService** — Records notification events (sent, delivered, failed, rule matched)
+
+All integrations are best-effort: history recording failures are logged but do not corrupt the main service operation.
+
+### Export
+
+Three export helpers in `policy_compliance_export.py`:
+
+| Helper | Output |
+|--------|--------|
+| `rollout_timeline_to_json` | JSON string of a RolloutTimeline |
+| `rollout_analytics_report_to_json` | JSON string of a RolloutAnalyticsReport |
+| `rollout_analytics_report_to_csv_rows` | List of flat dicts for CSV export |
+
+### CLI Commands
+
+```bash
+# View rollout history events
+agentapp rollout history --config agentapp.yaml --rollout-id ro_abc123
+
+# View rollout timeline (structured)
+agentapp rollout timeline --config agentapp.yaml --rollout-id ro_abc123
+agentapp rollout timeline --config agentapp.yaml --rollout-id ro_abc123 --json
+
+# View rollout analytics
+agentapp rollout analytics --config agentapp.yaml
+agentapp rollout analytics --config agentapp.yaml --environment prod --since 2026-06-01T00:00:00Z
+
+# Export analytics
+agentapp rollout analytics export --config agentapp.yaml --format json --output analytics.json
+agentapp rollout analytics export --config agentapp.yaml --format csv --output analytics.csv
+```
+
+### Console Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| History | `/policy-console/rollouts/{rollout_id}/history` | Event list with type and timestamp filters |
+| Timeline | `/policy-console/rollouts/{rollout_id}/timeline` | Structured step-by-step timeline view |
+| Analytics | `/policy-console/rollout-analytics` | Dashboard with rollout counts, gate/approval outcomes, top blocked/failed |
+
+### RBAC Permissions
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ROLLOUT_HISTORY_VIEW` | `policy.rollout.history.view` | Allowed |
+| `ROLLOUT_ANALYTICS_VIEW` | `policy.rollout.analytics.view` | Allowed |
+| `ROLLOUT_ANALYTICS_EXPORT` | `policy.rollout.analytics.export` | Requires grant |
+
+`ROLLOUT_HISTORY_VIEW` and `ROLLOUT_ANALYTICS_VIEW` are default-allowed, consistent with other view permissions. `ROLLOUT_ANALYTICS_EXPORT` requires explicit grants, consistent with other export operations.
+
+### Change Events
+
+7 new `PolicyChangeEventType` values (total now 72):
+
+| Event Type | Trigger |
+|-----------|---------|
+| `ROLLOUT_HISTORY_RECORDED` | History event recorded for a rollout |
+| `ROLLOUT_TIMELINE_GENERATED` | Timeline view generated |
+| `ROLLOUT_ANALYTICS_REPORT_GENERATED` | Analytics report generated |
+| `ROLLOUT_ANALYTICS_EXPORTED` | Analytics data exported |
+| `ROLLOUT_ANALYTICS_EXPORT_FAILED` | Analytics export failed |
+| `ROLLOUT_HISTORY_PERMISSION_DENIED` | RBAC check failed for history/analytics |
+| `ROLLOUT_HISTORY_RECORDING_FAILED` | History recording failed (best-effort) |
+
+### Configuration
+
+```yaml
+governance:
+  policy_release:
+    rollout_history:                          # Phase 45
+      type: sqlite
+      path: .agent_app/policy_rollout_history.db
+```
+
+`RolloutHistoryConfig` with `type` (memory/sqlite) and `path` fields. Defaults to `None` for backward compatibility.
+
+### Known Limitations
+
+- History is framework-level, not distributed tracing — no OpenTelemetry spans or trace correlation
+- Analytics depend on recorder/event coverage — missing recorder calls produce incomplete analytics
+- No external BI integration — no Tableau/PowerBI/Looker connectors
+- No charts beyond console tables — no visualization library integration
+- No OpenTelemetry exporter — history events are not exported as OTLP spans
+- No persisted scheduled reports — analytics are generated on-demand only
+- No auto-start worker for recording — history recorder is called inline by services
+- Existing old rollouts may have partial history — events before Phase 45 deployment are not retroactively recorded

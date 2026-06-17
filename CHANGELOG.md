@@ -2,6 +2,27 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.33.0 — Phase 45: Policy Rollout Analytics, History, and Gate Outcome Reporting
+
+### Added
+
+- RolloutHistoryEventType enum (24 event types for rollout, step, approval, gate, notification events)
+- RolloutHistoryEvent model with `rhe_` prefix and tz-aware timestamps
+- RolloutStepTimeline, RolloutTimeline models for structured rollout timelines
+- RolloutGateOutcomeSummary, RolloutApprovalOutcomeSummary analytics models
+- RolloutAnalyticsReport model with `rar_` prefix for aggregated analytics
+- RolloutHistoryStore Protocol with InMemory and SQLite implementations
+- RolloutHistoryRecorder for creating normalized rollout history events
+- RolloutHistoryService for timeline generation and analytics reporting
+- RolloutService, RolloutGateAutomationService, PolicyExpirationService, PolicyNotificationService integration with history recorder
+- Export helpers: rollout_timeline_to_json, rollout_analytics_report_to_json, rollout_analytics_report_to_csv_rows
+- 3 RBAC permissions: ROLLOUT_HISTORY_VIEW, ROLLOUT_ANALYTICS_VIEW, ROLLOUT_ANALYTICS_EXPORT
+- 7 PolicyChangeEventType values (total now 72)
+- CLI commands: rollout history, rollout timeline --json, rollout analytics, rollout analytics export
+- Console pages: rollout history, rollout timeline, rollout analytics dashboard
+- RolloutHistoryConfig in config schema
+- Loader wiring for rollout history store, recorder, and service
+
 ## [v0.32.0] - 2026-06-17
 
 ### Phase 44: Notification Hooks and Expiration Workers
