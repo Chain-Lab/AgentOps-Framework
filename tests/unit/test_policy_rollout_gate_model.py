@@ -86,3 +86,77 @@ def test_rollout_step_backward_compat_phase42_fields():
     assert step.requires_simulation_gate is True
     assert step.simulation_gate_requirement_id == "rgr_abc"
     assert step.simulation_gate_result_id == "gr_def"
+
+
+def test_rollout_gate_execution_status_values():
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionStatus
+    assert RolloutGateExecutionStatus.NOT_REQUIRED == "not_required"
+    assert RolloutGateExecutionStatus.SATISFIED == "satisfied"
+    assert RolloutGateExecutionStatus.BLOCKED == "blocked"
+    assert RolloutGateExecutionStatus.FAILED == "failed"
+    assert RolloutGateExecutionStatus.SKIPPED == "skipped"
+    assert RolloutGateExecutionStatus.ERROR == "error"
+    assert len(RolloutGateExecutionStatus) == 6
+
+
+def test_rollout_gate_execution_result_valid():
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionResult, RolloutGateExecutionStatus
+    result = RolloutGateExecutionResult(
+        execution_id="rge_abc123",
+        rollout_id="ro_xyz",
+        step_id="s1",
+        status=RolloutGateExecutionStatus.SATISFIED,
+        created_at=datetime.now(timezone.utc),
+    )
+    assert result.execution_id == "rge_abc123"
+    assert result.status == RolloutGateExecutionStatus.SATISFIED
+    assert result.requirement_id is None
+    assert result.gate_result_id is None
+    assert result.simulation_id is None
+
+
+def test_rollout_gate_execution_result_id_prefix():
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionResult, RolloutGateExecutionStatus
+    with pytest.raises(ValueError):
+        RolloutGateExecutionResult(
+            execution_id="bad_prefix",
+            rollout_id="ro_xyz",
+            step_id="s1",
+            status=RolloutGateExecutionStatus.SATISFIED,
+            created_at=datetime.now(timezone.utc),
+        )
+
+
+def test_rollout_gate_execution_result_tz_aware():
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionResult, RolloutGateExecutionStatus
+    with pytest.raises(ValueError):
+        RolloutGateExecutionResult(
+            execution_id="rge_abc",
+            rollout_id="ro_xyz",
+            step_id="s1",
+            status=RolloutGateExecutionStatus.SATISFIED,
+            created_at=datetime(2026, 1, 1),  # naive datetime
+        )
+
+
+def test_rollout_gate_execution_result_with_all_fields():
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionResult, RolloutGateExecutionStatus
+    result = RolloutGateExecutionResult(
+        execution_id="rge_abc",
+        rollout_id="ro_xyz",
+        step_id="s1",
+        status=RolloutGateExecutionStatus.BLOCKED,
+        requirement_id="rgr_def",
+        gate_result_id="gr_ghi",
+        simulation_id="psim_jkl",
+        action_taken="gate_blocked",
+        reason="Gate result expired",
+        error={"type": "gate_expired"},
+        created_at=datetime.now(timezone.utc),
+        metadata={"max_age_seconds": 86400},
+    )
+    assert result.requirement_id == "rgr_def"
+    assert result.action_taken == "gate_blocked"
+    assert result.reason == "Gate result expired"
+    assert result.error == {"type": "gate_expired"}
+    assert result.metadata == {"max_age_seconds": 86400}
