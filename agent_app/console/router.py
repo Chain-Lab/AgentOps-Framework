@@ -60,6 +60,7 @@ def build_policy_console_router(
     simulation_service: Any = None,
     simulation_gate_evaluator: Any = None,
     release_gate_automation_service: Any = None,
+    rollout_gate_automation_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -88,6 +89,7 @@ def build_policy_console_router(
         simulation_service: Optional policy simulation service (Phase 40).
         simulation_gate_evaluator: Optional simulation gate evaluator (Phase 41).
         release_gate_automation_service: Optional release gate automation service (Phase 42).
+        rollout_gate_automation_service: Optional rollout gate automation service (Phase 43).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -3387,6 +3389,189 @@ def build_policy_console_router(
                 "report": report,
                 "since": since_str,
                 "until": until_str,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 43 Task 7: Rollout step gate pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/rollouts/{rollout_id}/steps/{step_id}/gate", response_class=HTMLResponse)
+    async def rollout_step_gate_page(request: Request, rollout_id: str, step_id: str):
+        """Rollout step gate form page — shows gate config, current status, and forms."""
+        plan = None
+        step = None
+        gate_result_dict = None
+        error = None
+
+        if rollout_store is None:
+            error = "Rollout store not configured."
+        else:
+            plan = await rollout_store.get(rollout_id)
+            if plan is None:
+                error = f"Rollout plan '{rollout_id}' not found."
+            else:
+                for s in plan.steps:
+                    if s.step_id == step_id:
+                        step = s
+                        break
+                if step is None:
+                    error = f"Step '{step_id}' not found in rollout '{rollout_id}'."
+
+        # Check gate status if service and step are available
+        if rollout_gate_automation_service is not None and plan is not None and step is not None:
+            try:
+                gate_result = await rollout_gate_automation_service.check_step_gate(plan, step)
+                gate_result_dict = {
+                    "execution_id": gate_result.execution_id,
+                    "status": gate_result.status.value,
+                    "requirement_id": gate_result.requirement_id or "",
+                    "gate_result_id": gate_result.gate_result_id or "",
+                    "simulation_id": gate_result.simulation_id or "",
+                    "action_taken": gate_result.action_taken or "",
+                    "reason": gate_result.reason or "",
+                    "created_at": gate_result.created_at.isoformat() if hasattr(gate_result.created_at, "isoformat") else str(gate_result.created_at),
+                }
+            except Exception as exc:
+                error = str(exc)
+
+        # Gate config from step
+        gate_mode = None
+        failure_action = None
+        requires_gate = None
+        if step is not None:
+            gate_mode = step.simulation_gate_mode.value if hasattr(step.simulation_gate_mode, "value") else str(step.simulation_gate_mode)
+            failure_action = step.simulation_gate_failure_action.value if hasattr(step.simulation_gate_failure_action, "value") else str(step.simulation_gate_failure_action)
+            requires_gate = str(step.requires_simulation_gate)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_gate.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollout_id": rollout_id,
+                "step_id": step_id,
+                "gate_mode": gate_mode,
+                "failure_action": failure_action,
+                "requires_gate": requires_gate,
+                "gate_result": gate_result_dict,
+                "error": error,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/steps/{step_id}/gate/run", response_class=HTMLResponse)
+    async def rollout_step_gate_run(request: Request, rollout_id: str, step_id: str):
+        """Run gate for a rollout step and display the result."""
+        gate_result_dict = None
+        error = None
+
+        if rollout_gate_automation_service is None:
+            error = "Rollout gate automation service not configured."
+        elif rollout_store is None:
+            error = "Rollout store not configured."
+        else:
+            try:
+                plan = await rollout_store.get(rollout_id)
+                if plan is None:
+                    error = f"Rollout plan '{rollout_id}' not found."
+                else:
+                    step = None
+                    for s in plan.steps:
+                        if s.step_id == step_id:
+                            step = s
+                            break
+                    if step is None:
+                        error = f"Step '{step_id}' not found in rollout '{rollout_id}'."
+                    else:
+                        form = await request.form()
+                        from agent_app.core.context import RunContext
+                        actor_id = form.get("actor_id", "console_user")
+                        context = RunContext(
+                            run_id=f"console_gate_{actor_id}",
+                            user_id=actor_id,
+                            tenant_id=form.get("tenant_id") or "default",
+                            permissions=form.get("permissions", "").split(",") if form.get("permissions") else [],
+                        )
+                        gate_result = await rollout_gate_automation_service.run_step_gate(plan, step, context)
+                        gate_result_dict = {
+                            "execution_id": gate_result.execution_id,
+                            "status": gate_result.status.value,
+                            "requirement_id": gate_result.requirement_id or "",
+                            "gate_result_id": gate_result.gate_result_id or "",
+                            "simulation_id": gate_result.simulation_id or "",
+                            "action_taken": gate_result.action_taken or "",
+                            "reason": gate_result.reason or "",
+                            "created_at": gate_result.created_at.isoformat() if hasattr(gate_result.created_at, "isoformat") else str(gate_result.created_at),
+                        }
+            except Exception as exc:
+                error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_gate_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollout_id": rollout_id,
+                "step_id": step_id,
+                "gate_result": gate_result_dict,
+                "error": error,
+            },
+        )
+
+    @router.post("/rollouts/{rollout_id}/steps/{step_id}/gate/attach", response_class=HTMLResponse)
+    async def rollout_step_gate_attach(request: Request, rollout_id: str, step_id: str):
+        """Attach an existing gate result to a rollout step's requirement."""
+        gate_result_dict = None
+        error = None
+
+        if rollout_gate_automation_service is None:
+            error = "Rollout gate automation service not configured."
+        elif rollout_store is None:
+            error = "Rollout store not configured."
+        else:
+            try:
+                form = await request.form()
+                gate_result_id = form.get("gate_result_id", "")
+                simulation_id = form.get("simulation_id") or None
+
+                if not gate_result_id:
+                    error = "gate_result_id is required."
+                else:
+                    source_id = f"{rollout_id}:{step_id}"
+                    requirement = await rollout_gate_automation_service._release_gate.attach_gate_result(
+                        source_type="promotion",
+                        source_id=source_id,
+                        gate_result_id=gate_result_id,
+                        simulation_id=simulation_id,
+                    )
+                    # Build result dict from the requirement
+                    gate_result_dict = {
+                        "execution_id": "",
+                        "status": requirement.status.value if hasattr(requirement.status, "value") else str(requirement.status),
+                        "requirement_id": requirement.requirement_id or "",
+                        "gate_result_id": requirement.gate_result_id or "",
+                        "simulation_id": requirement.simulation_id or "",
+                        "action_taken": "attach",
+                        "reason": "",
+                        "created_at": requirement.created_at.isoformat() if requirement.created_at and hasattr(requirement.created_at, "isoformat") else "",
+                    }
+            except KeyError as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_rollout_gate_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollout_id": rollout_id,
+                "step_id": step_id,
+                "gate_result": gate_result_dict,
+                "error": error,
             },
         )
 

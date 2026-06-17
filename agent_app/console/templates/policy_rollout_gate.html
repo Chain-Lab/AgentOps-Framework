@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rollout Step Gate &mdash; Rollout {{ rollout_id }}, Step {{ step_id }}</h2>
+
+{% if error %}
+<div class="error-box" style="border:1px solid #c00;padding:8px;margin:8px 0;background:#fee;color:#c00;">
+  Error: {{ error }}
+</div>
+{% endif %}
+
+{% if gate_mode %}
+<div class="status-card" style="border:1px solid #ccc;padding:12px;margin:8px 0;">
+  <h3>Gate Configuration</h3>
+  <table>
+    <tr><th>Gate Mode</th><td>{{ gate_mode }}</td></tr>
+    <tr><th>Failure Action</th><td>{{ failure_action or "&mdash;" }}</td></tr>
+    <tr><th>Requires Gate</th><td>{{ requires_gate }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+{% if gate_result %}
+<div class="status-card" style="border:1px solid #ccc;padding:12px;margin:8px 0;">
+  <h3>Current Gate Status</h3>
+  <table>
+    <tr><th>Execution ID</th><td>{{ gate_result.execution_id or "&mdash;" }}</td></tr>
+    <tr><th>Status</th><td>{{ gate_result.status }}</td></tr>
+    <tr><th>Requirement ID</th><td>{{ gate_result.requirement_id or "&mdash;" }}</td></tr>
+    <tr><th>Gate Result ID</th><td>{{ gate_result.gate_result_id or "&mdash;" }}</td></tr>
+    <tr><th>Simulation ID</th><td>{{ gate_result.simulation_id or "&mdash;" }}</td></tr>
+    <tr><th>Action Taken</th><td>{{ gate_result.action_taken or "&mdash;" }}</td></tr>
+    <tr><th>Reason</th><td>{{ gate_result.reason or "&mdash;" }}</td></tr>
+    <tr><th>Created At</th><td>{{ gate_result.created_at or "&mdash;" }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+<form method="post" action="{{ base_path }}/rollouts/{{ rollout_id }}/steps/{{ step_id }}/gate/run">
+  <fieldset>
+    <legend>Run Gate</legend>
+    <label>Actor ID: <input type="text" name="actor_id" value="console_user"></label><br>
+    <label>Tenant ID: <input type="text" name="tenant_id" value="default"></label><br>
+  </fieldset>
+  <button type="submit">Run Gate</button>
+</form>
+
+<form method="post" action="{{ base_path }}/rollouts/{{ rollout_id }}/steps/{{ step_id }}/gate/attach">
+  <fieldset>
+    <legend>Attach Gate Result</legend>
+    <label>Gate Result ID (required): <input type="text" name="gate_result_id" placeholder="pgr_..."></label><br>
+    <label>Simulation ID (optional): <input type="text" name="simulation_id" placeholder="sim_..."></label><br>
+  </fieldset>
+  <button type="submit">Attach Gate Result</button>
+</form>
+
+<p><a href="{{ base_path }}/rollouts/{{ rollout_id }}">Back to Rollout</a></p>
+
+{% endblock %}

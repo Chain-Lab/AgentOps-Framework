@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Gate Result &mdash; Rollout {{ rollout_id }}, Step {{ step_id }}</h2>
+
+{% if error %}
+<div class="error-box" style="border:1px solid #c00;padding:8px;margin:8px 0;background:#fee;color:#c00;">
+  Error: {{ error }}
+</div>
+{% endif %}
+
+{% if gate_result %}
+<div class="status-cards" style="display:flex;gap:16px;margin:8px 0;flex-wrap:wrap;">
+
+  {% if gate_result.execution_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Execution ID</strong><br>
+    {{ gate_result.execution_id }}
+  </div>
+  {% endif %}
+
+  {% set status = gate_result.status %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;
+    {% if status == 'satisfied' %}background:#d4edda;color:#155724;{% elif status == 'failed' %}background:#f8d7da;color:#721c24;{% elif status == 'blocked' %}background:#fff3cd;color:#856404;{% elif status == 'error' %}background:#f8d7da;color:#721c24;{% elif status == 'skipped' %}background:#cce5ff;color:#004085;{% elif status == 'not_required' %}background:#e2e3e5;color:#383d41;{% else %}background:#f8f9fa;{% endif %}">
+    <strong>Status</strong><br>
+    {{ status | upper }}
+  </div>
+
+  {% if gate_result.requirement_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Requirement ID</strong><br>
+    {{ gate_result.requirement_id }}
+  </div>
+  {% endif %}
+
+  {% if gate_result.gate_result_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Gate Result ID</strong><br>
+    {{ gate_result.gate_result_id }}
+  </div>
+  {% endif %}
+
+  {% if gate_result.simulation_id %}
+  <div class="card" style="border:1px solid #ccc;padding:12px;min-width:180px;">
+    <strong>Simulation ID</strong><br>
+    {{ gate_result.simulation_id }}
+  </div>
+  {% endif %}
+
+</div>
+
+<table style="margin:8px 0;">
+  <tr><th>Action Taken</th><td>{{ gate_result.action_taken or "&mdash;" }}</td></tr>
+  <tr><th>Reason</th><td>{{ gate_result.reason or "&mdash;" }}</td></tr>
+  <tr><th>Created At</th><td>{{ gate_result.created_at or "&mdash;" }}</td></tr>
+</table>
+
+{% elif not error %}
+<p>No gate result found for this rollout step.</p>
+{% endif %}
+
+<p><a href="{{ base_path }}/rollouts/{{ rollout_id }}/steps/{{ step_id }}/gate">Back to Gate Form</a> |
+   <a href="{{ base_path }}/rollouts/{{ rollout_id }}">Back to Rollout</a></p>
+
+{% endblock %}
