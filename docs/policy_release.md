@@ -3182,3 +3182,167 @@ Phase 41 created the `SimulationGateEvaluator` and `PolicySimulationService.vali
 - No automatic production rollback
 - Rollout integration is MVP-level (step blocking only)
 - External CI pipelines must call CLI/API explicitly
+
+---
+
+## Phase 43: Policy Rollout Automation with Simulation Gates
+
+> **Phase 43:** Implemented — Automated simulation gate evaluation per rollout step
+
+### Purpose
+
+Phase 42 added promotion-level simulation gate enforcement and MVP-level rollout step blocking. Phase 43 upgrades rollout execution from:
+
+```text
+Run rollout step → block if simulation gate missing
+```
+
+to:
+
+```text
+Run rollout step → automatically run simulation gate if configured → attach result → decide block/fail/skip/continue → execute step
+```
+
+### Gate Modes
+
+Each rollout step can configure its gate automation mode:
+
+| Mode | Behavior |
+|------|----------|
+| `DISABLED` | No gate automation. Step executes normally. |
+| `MANUAL` | Gate must be explicitly satisfied before step can execute. Missing/failed/expired gates block the step. |
+| `AUTO` | Simulation gate is automatically run before step execution. On failure, the configured failure action is applied. |
+
+### Failure Actions
+
+When a simulation gate fails in AUTO mode, the step's `simulation_gate_failure_action` determines what happens:
+
+| Action | Result |
+|--------|--------|
+| `BLOCK` | Step is marked BLOCKED. Rollout stops. Operator must resolve the gate. |
+| `FAIL` | Step is marked FAILED. Rollout plan transitions to FAILED status. |
+| `SKIP` | Step is marked SKIPPED. Rollout continues to the next step. |
+
+### Rollout Step Configuration
+
+Steps in a rollout plan can configure simulation gate automation:
+
+```yaml
+steps:
+  - step_id: prod_canary
+    step_type: assign_ring
+    environment: prod
+    ring_name: canary
+    requires_simulation_gate: true
+    simulation_gate_mode: auto
+    simulation_gate_failure_action: fail
+    simulation_limit: 1000
+    simulation_include_base: true
+    simulation_gate_max_age_seconds: 86400
+    simulation_candidate_rules:
+      - name: require_quorum_for_refunds
+        action_type: tool.execute
+        effect: require_approval
+        tool_name: refund.request
+        approval_policy:
+          policy_type: quorum
+          required_approvals: 2
+    simulation_gate_rules:
+      - name: no_errors
+        metric: simulation.errors
+        operator: eq
+        threshold: 0
+      - name: deny_limit
+        metric: simulation.would_deny
+        operator: lte
+        threshold: 10
+```
+
+### Configuration
+
+```yaml
+governance:
+  policy_release:
+    rollouts:
+      gate_automation:
+        enabled: true
+        default_mode: manual
+        default_failure_action: block
+        default_max_age_seconds: 86400
+        default_gate_rules:
+          - name: no_simulation_errors
+            metric: simulation.errors
+            operator: eq
+            threshold: 0
+          - name: changed_ratio_limit
+            metric: simulation.changed_ratio
+            operator: lte
+            threshold: 0.05
+```
+
+### CLI Commands
+
+```bash
+# Run simulation gate for a rollout step
+agentapp policy rollout gate run \
+  --rollout-id ro_abc123 \
+  --step-id prod_canary \
+  --actor-id release_manager \
+  --permissions policy.rollout.gate.run
+
+# Check gate status for a rollout step
+agentapp policy rollout gate status \
+  --rollout-id ro_abc123 \
+  --step-id prod_canary
+
+# Check gate status (JSON output)
+agentapp policy rollout gate status \
+  --rollout-id ro_abc123 \
+  --step-id prod_canary --json
+
+# Attach an existing gate result to a rollout step
+agentapp policy rollout gate attach \
+  --rollout-id ro_abc123 \
+  --step-id prod_canary \
+  --gate-result-id pg_xyz789 \
+  --simulation-id psim_abc456 \
+  --actor-id release_manager \
+  --permissions policy.rollout.gate.attach
+```
+
+### Console Workflow
+
+The policy console provides rollout step gate pages:
+
+- `GET /policy-console/rollouts/{rollout_id}/steps/{step_id}/gate` — Gate form/status page
+- `POST /policy-console/rollouts/{rollout_id}/steps/{step_id}/gate/run` — Run gate
+- `POST /policy-console/rollouts/{rollout_id}/steps/{step_id}/gate/attach` — Attach gate result
+
+### Relationship to Phase 42
+
+Phase 42 created `ReleaseGateAutomationService` and added MVP-level step blocking in `RolloutService.run_next_step()`. Phase 43 builds on this by:
+
+1. Adding `RolloutGateAutomationService` that orchestrates per-step gate evaluation
+2. Adding `RolloutGateMode` (DISABLED/MANUAL/AUTO) for step-level gate configuration
+3. Adding `RolloutGateFailureAction` (BLOCK/FAIL/SKIP) for failure handling
+4. Extending `RolloutStep` with simulation parameters for AUTO mode
+5. Integrating gate automation into `run_next_step()` with proper status handling
+
+Phase 42's manual blocking remains fully backward compatible — steps with `requires_simulation_gate=True` and no mode set default to MANUAL behavior.
+
+### RBAC Permissions
+
+| Permission | Description |
+|-----------|-------------|
+| `policy.rollout.gate.run` | Run simulation gate for a rollout step |
+| `policy.rollout.gate.attach` | Attach a gate result to a rollout step |
+| `policy.rollout.gate.view` | View rollout step gate status (default-allowed) |
+
+### Known Limitations
+
+- No background scheduler — execution is explicit command/API driven
+- No external CI/CD integration — external pipelines must call CLI/API explicitly
+- No live traffic shadowing — simulation uses historical audit data
+- No distributed execution lock
+- No automatic production rollback
+- Candidate rule YAML parsing remains MVP-level

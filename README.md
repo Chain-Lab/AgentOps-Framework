@@ -1255,3 +1255,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 40**: Policy Testing, Validation, and Historical Replay — simulation framework, audit-to-case extraction, candidate policy stores, policy validation, CLI/console simulation
 - **Phase 41**: Policy Gate Integration and Automated Safeguards — simulation gate evaluator, configurable threshold rules, blocking CLI exit codes, gate reports, CI/CD integration
 - **Phase 42**: Policy Release Automation and Simulation Gate Enforcement — gate requirement lifecycle, promotion/rollout enforcement, release gate automation service, CLI gate commands, console gate pages
+- **Phase 43**: Policy Rollout Automation with Simulation Gates — rollout gate modes (DISABLED/MANUAL/AUTO), failure actions (BLOCK/FAIL/SKIP), RolloutGateAutomationService, AUTO step gate execution, CLI rollout gate commands, console rollout gate pages

@@ -2,6 +2,22 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.31.0 — Phase 43: Policy Rollout Automation with Simulation Gates
+
+- RolloutGateMode enum (DISABLED/MANUAL/AUTO) and RolloutGateFailureAction enum (BLOCK/FAIL/SKIP)
+- RolloutStep extension with 8 new Phase 43 fields (simulation_gate_mode, simulation_gate_failure_action, simulation_candidate_rules, simulation_gate_rules, simulation_window_start/end, simulation_limit, simulation_include_base, simulation_gate_max_age_seconds)
+- RolloutGateExecutionStatus enum and RolloutGateExecutionResult model
+- RolloutGateAutomationService (ensure_step_gate, run_step_gate, check_step_gate)
+- RolloutService integration: AUTO steps automatically run simulation gates before execution
+- Failure actions: BLOCK marks step BLOCKED, FAIL marks step FAILED, SKIP marks step SKIPPED
+- run_all_available() continues past SKIPPED steps
+- RolloutGateAutomationConfig and SimulationGateRuleConfig in schema
+- Config loader wiring for RolloutGateAutomationService
+- CLI commands: policy rollout gate run/status/attach
+- Console rollout gate pages
+- RBAC: ROLLOUT_GATE_RUN, ROLLOUT_GATE_ATTACH, ROLLOUT_GATE_VIEW
+- Change events: ROLLOUT_GATE_RUN, ROLLOUT_GATE_SATISFIED, ROLLOUT_GATE_BLOCKED, ROLLOUT_GATE_FAILED, ROLLOUT_GATE_SKIPPED, ROLLOUT_GATE_ATTACHED, ROLLOUT_GATE_PERMISSION_DENIED
+
 ## v0.30.0 — Phase 42: Policy Release Automation and Simulation Gate Enforcement
 
 - ReleaseGateRequirement model and store (InMemory + SQLite)
