@@ -654,6 +654,32 @@ def main() -> int:
     approval_expire.add_argument("--actor-id", required=True, help="Who is expiring approvals")
     approval_expire.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
 
+    # Phase 43: rollout gate subcommands
+    rollout_gate_parser = rollout_sub.add_parser("gate", help="Rollout step gate lifecycle commands (Phase 43)")
+    rollout_gate_sub = rollout_gate_parser.add_subparsers(dest="rollout_gate_command")
+
+    rollout_gate_run_parser = rollout_gate_sub.add_parser("run", help="Run simulation gate for a rollout step")
+    rollout_gate_run_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_gate_run_parser.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_gate_run_parser.add_argument("--step-id", required=True, help="Step ID to run gate for")
+    rollout_gate_run_parser.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_gate_run_parser.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+
+    rollout_gate_status_parser = rollout_gate_sub.add_parser("status", help="Check gate status for a rollout step")
+    rollout_gate_status_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_gate_status_parser.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_gate_status_parser.add_argument("--step-id", required=True, help="Step ID to check")
+    rollout_gate_status_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    rollout_gate_attach_parser = rollout_gate_sub.add_parser("attach", help="Attach an existing gate result to a rollout step")
+    rollout_gate_attach_parser.add_argument("--config", required=True, help="Config file path")
+    rollout_gate_attach_parser.add_argument("--rollout-id", required=True, help="Rollout plan ID")
+    rollout_gate_attach_parser.add_argument("--step-id", required=True, help="Step ID to attach gate to")
+    rollout_gate_attach_parser.add_argument("--gate-result-id", required=True, help="Gate result ID to attach")
+    rollout_gate_attach_parser.add_argument("--simulation-id", default=None, help="Simulation ID")
+    rollout_gate_attach_parser.add_argument("--actor-id", required=True, help="Actor ID")
+    rollout_gate_attach_parser.add_argument("--permissions", action="append", default=[], help="Permissions (repeatable)")
+
     # Phase 38: runtime policy subcommands
     runtime_parser = policy_sub.add_parser("runtime", help="Runtime policy management (Phase 38)")
     runtime_sub = runtime_parser.add_subparsers(dest="runtime_command")
@@ -1042,6 +1068,14 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_rollout_approval_reject(args))
             if args.approval_command == "expire":
                 return asyncio.run(_cmd_policy_rollout_approval_expire(args))
+        # Phase 43: rollout gate subcommands
+        if args.rollout_command == "gate":
+            if args.rollout_gate_command == "run":
+                return asyncio.run(_cmd_policy_rollout_gate_run(args))
+            if args.rollout_gate_command == "status":
+                return asyncio.run(_cmd_policy_rollout_gate_status(args))
+            if args.rollout_gate_command == "attach":
+                return asyncio.run(_cmd_policy_rollout_gate_attach(args))
 
     # Phase 38: runtime policy subcommands
     if args.command == "policy" and args.policy_command == "runtime":
@@ -6008,6 +6042,267 @@ async def _cmd_policy_promotion_gate_status(args: argparse.Namespace) -> int:
             print(f"Satisfied At:     {req.satisfied_at.isoformat()}")
 
     return 0
+
+
+# --- Phase 43: Rollout gate CLI commands ---
+
+
+def _get_rollout_gate_automation_service(app) -> object | None:
+    """Get the rollout gate automation service from the app."""
+    return getattr(app, "rollout_gate_automation_service", None) or getattr(app, "_rollout_gate_automation_service", None)
+
+
+async def _cmd_policy_rollout_gate_run(args: argparse.Namespace) -> int:
+    """Run simulation gate for a rollout step."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_gate import RolloutGateExecutionStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_gate_automation_service(app)
+    if service is None:
+        print("Rollout gate automation not configured.", file=sys.stderr)
+        return 1
+
+    # Find the rollout plan
+    rollout_store = getattr(app, "rollout_store", None) or getattr(app, "_rollout_store", None)
+    if rollout_store is None:
+        print("Rollout store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        plan = await rollout_store.get(args.rollout_id)
+    except Exception as exc:
+        print(f"Error fetching rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    if plan is None:
+        print(f"Rollout plan '{args.rollout_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Find the step
+    step = None
+    for s in plan.steps:
+        if s.step_id == args.step_id:
+            step = s
+            break
+
+    if step is None:
+        print(f"Step '{args.step_id}' not found in rollout '{args.rollout_id}'.", file=sys.stderr)
+        return 1
+
+    context = _build_context(args.actor_id, args.permissions)
+
+    try:
+        result = await service.run_step_gate(plan, step, context)
+    except Exception as exc:
+        print(f"Error running step gate: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = result.status.value if hasattr(result.status, "value") else result.status
+    print("Rollout step gate execution completed")
+    print()
+    print(f"Rollout ID:       {result.rollout_id}")
+    print(f"Step ID:          {result.step_id}")
+    print(f"Gate Mode:        {getattr(step, 'simulation_gate_mode', 'N/A')}")
+    print(f"Execution Status: {status_str}")
+    if result.requirement_id:
+        print(f"Requirement ID:   {result.requirement_id}")
+    if result.gate_result_id:
+        print(f"Gate Result ID:   {result.gate_result_id}")
+    if result.simulation_id:
+        print(f"Simulation ID:    {result.simulation_id}")
+    if result.action_taken:
+        print(f"Action Taken:     {result.action_taken}")
+    if result.reason:
+        print(f"Reason:           {result.reason}")
+    if result.error:
+        print(f"Error:            {result.error}")
+
+    # Exit non-zero on FAILED status
+    if result.status == RolloutGateExecutionStatus.FAILED:
+        return 1
+    return 0
+
+
+async def _cmd_policy_rollout_gate_status(args: argparse.Namespace) -> int:
+    """Check gate status for a rollout step."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = _get_rollout_gate_automation_service(app)
+    if service is None:
+        print("Rollout gate automation not configured.", file=sys.stderr)
+        return 1
+
+    # Find the rollout plan
+    rollout_store = getattr(app, "rollout_store", None) or getattr(app, "_rollout_store", None)
+    if rollout_store is None:
+        print("Rollout store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        plan = await rollout_store.get(args.rollout_id)
+    except Exception as exc:
+        print(f"Error fetching rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    if plan is None:
+        print(f"Rollout plan '{args.rollout_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Find the step
+    step = None
+    for s in plan.steps:
+        if s.step_id == args.step_id:
+            step = s
+            break
+
+    if step is None:
+        print(f"Step '{args.step_id}' not found in rollout '{args.rollout_id}'.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.check_step_gate(plan, step)
+    except Exception as exc:
+        print(f"Error checking step gate: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = result.status.value if hasattr(result.status, "value") else result.status
+
+    if args.json:
+        data = {
+            "rollout_id": result.rollout_id,
+            "step_id": result.step_id,
+            "gate_mode": getattr(step, "simulation_gate_mode", None),
+            "execution_status": status_str,
+            "requirement_id": result.requirement_id,
+            "gate_result_id": result.gate_result_id,
+            "simulation_id": result.simulation_id,
+            "action_taken": result.action_taken,
+            "reason": result.reason,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print("Rollout step gate status")
+        print()
+        print(f"Rollout ID:       {result.rollout_id}")
+        print(f"Step ID:          {result.step_id}")
+        print(f"Gate Mode:        {getattr(step, 'simulation_gate_mode', 'N/A')}")
+        print(f"Execution Status: {status_str}")
+        if result.requirement_id:
+            print(f"Requirement ID:   {result.requirement_id}")
+        if result.gate_result_id:
+            print(f"Gate Result ID:   {result.gate_result_id}")
+        if result.simulation_id:
+            print(f"Simulation ID:    {result.simulation_id}")
+        if result.action_taken:
+            print(f"Action Taken:     {result.action_taken}")
+        if result.reason:
+            print(f"Reason:           {result.reason}")
+
+    return 0
+
+
+async def _cmd_policy_rollout_gate_attach(args: argparse.Namespace) -> int:
+    """Attach an existing gate result to a rollout step."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    gate_service = _get_rollout_gate_automation_service(app)
+    if gate_service is None:
+        print("Rollout gate automation not configured.", file=sys.stderr)
+        return 1
+
+    release_gate_service = _get_gate_automation_service(app)
+    if release_gate_service is None:
+        print("Release gate automation not configured.", file=sys.stderr)
+        return 1
+
+    # Find the rollout plan
+    rollout_store = getattr(app, "rollout_store", None) or getattr(app, "_rollout_store", None)
+    if rollout_store is None:
+        print("Rollout store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        plan = await rollout_store.get(args.rollout_id)
+    except Exception as exc:
+        print(f"Error fetching rollout plan: {exc}", file=sys.stderr)
+        return 1
+
+    if plan is None:
+        print(f"Rollout plan '{args.rollout_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Find the step
+    step = None
+    for s in plan.steps:
+        if s.step_id == args.step_id:
+            step = s
+            break
+
+    if step is None:
+        print(f"Step '{args.step_id}' not found in rollout '{args.rollout_id}'.", file=sys.stderr)
+        return 1
+
+    source_id = f"{args.rollout_id}:{args.step_id}"
+
+    # First ensure a gate requirement exists
+    try:
+        await release_gate_service.require_gate_for_promotion(
+            promotion_id=source_id,
+        )
+    except Exception:
+        pass  # Requirement may already exist
+
+    # Attach the gate result
+    try:
+        req = await release_gate_service.attach_gate_result(
+            source_type="rollout_step",
+            source_id=source_id,
+            gate_result_id=args.gate_result_id,
+            simulation_id=args.simulation_id,
+            actor_id=args.actor_id,
+        )
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error attaching gate result: {exc}", file=sys.stderr)
+        return 1
+
+    status_str = req.status.value if hasattr(req.status, "value") else req.status
+    print("Gate result attached to rollout step")
+    print()
+    print(f"Rollout ID:     {args.rollout_id}")
+    print(f"Step ID:        {args.step_id}")
+    print(f"Requirement ID: {req.requirement_id}")
+    print(f"Status:         {status_str}")
+    if req.gate_result_id:
+        print(f"Gate Result ID: {req.gate_result_id}")
+    if req.simulation_id:
+        print(f"Simulation ID:  {req.simulation_id}")
+
+    # Exit 0 on SATISFIED, non-zero otherwise
+    if req.status == ReleaseGateRequirementStatus.SATISFIED:
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
