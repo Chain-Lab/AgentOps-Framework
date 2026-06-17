@@ -147,6 +147,36 @@ class AgentApp:
         """Phase 43: Set the rollout gate automation service."""
         self._rollout_gate_automation_service = value
 
+    @property
+    def notification_service(self) -> Any:
+        """Phase 44: Return the notification service, if configured."""
+        return getattr(self, "_notification_service", None)
+
+    @notification_service.setter
+    def notification_service(self, value: Any) -> None:
+        """Phase 44: Set the notification service."""
+        self._notification_service = value
+
+    @property
+    def expiration_service(self) -> Any:
+        """Phase 44: Return the expiration service, if configured."""
+        return getattr(self, "_expiration_service", None)
+
+    @expiration_service.setter
+    def expiration_service(self, value: Any) -> None:
+        """Phase 44: Set the expiration service."""
+        self._expiration_service = value
+
+    @property
+    def expiration_worker(self) -> Any:
+        """Phase 44: Return the expiration worker, if configured."""
+        return getattr(self, "_expiration_worker", None)
+
+    @expiration_worker.setter
+    def expiration_worker(self, value: Any) -> None:
+        """Phase 44: Set the expiration worker."""
+        self._expiration_worker = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

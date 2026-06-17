@@ -831,6 +831,102 @@ def build_app(
 
             app._rollout_gate_automation_service = rollout_gate_automation_service
 
+        # Phase 44: Notification and expiration wiring
+        try:
+            notification_config = getattr(release_config, 'notifications', None) if release_config else None
+            if notification_config is not None and notification_config.enabled:
+                from agent_app.runtime.policy_notification_store import (
+                    InMemoryPolicyNotificationStore,
+                    SQLitePolicyNotificationStore,
+                )
+                from agent_app.runtime.policy_notification_rule_store import (
+                    InMemoryPolicyNotificationRuleStore,
+                    SQLitePolicyNotificationRuleStore,
+                )
+                from agent_app.runtime.policy_notification_service import PolicyNotificationService
+                from agent_app.runtime.policy_notification_channel import LogNotificationChannel
+
+                # Create notification store
+                if notification_config.store is not None and notification_config.store.type == "sqlite":
+                    notification_store = SQLitePolicyNotificationStore(
+                        db_path=notification_config.store.path or ".agent_app/policy_notifications.db"
+                    )
+                else:
+                    notification_store = InMemoryPolicyNotificationStore()
+
+                # Create rule store
+                if notification_config.store is not None and notification_config.store.type == "sqlite":
+                    rule_store = SQLitePolicyNotificationRuleStore(
+                        db_path=notification_config.store.path or ".agent_app/policy_notification_rules.db"
+                    )
+                else:
+                    rule_store = InMemoryPolicyNotificationRuleStore()
+
+                # Create channels
+                channels = {"log": LogNotificationChannel()}
+
+                # Create notification service
+                notification_service = PolicyNotificationService(
+                    store=notification_store,
+                    rule_store=rule_store,
+                    channels=channels,
+                    audit_logger=audit_logger,
+                )
+
+                # Load inline rules from config into rule store
+                import asyncio as _asyncio
+                for rule_cfg in notification_config.rules:
+                    from agent_app.governance.policy_notification import PolicyNotificationRule
+                    rule = PolicyNotificationRule(
+                        name=rule_cfg.name,
+                        event_types=rule_cfg.event_types,
+                        severity=rule_cfg.severity,
+                        channels=rule_cfg.channels,
+                        title_template=rule_cfg.title_template,
+                        body_template=rule_cfg.body_template,
+                    )
+                    try:
+                        loop = _asyncio.get_event_loop()
+                        if loop.is_running():
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                pool.submit(_asyncio.run, rule_store.create(rule)).result()
+                        else:
+                            loop.run_until_complete(rule_store.create(rule))
+                    except RuntimeError:
+                        _asyncio.run(rule_store.create(rule))
+
+                app.notification_service = notification_service
+
+            expiration_config = getattr(release_config, 'expiration', None) if release_config else None
+            if expiration_config is not None and expiration_config.enabled:
+                from agent_app.runtime.policy_expiration_service import PolicyExpirationService
+                from agent_app.runtime.policy_expiration_worker import PolicyExpirationWorker
+
+                # Gather required stores from the app
+                _rollout_approval_store = getattr(app, "rollout_approval_store", None)
+                _release_gate_req_store = getattr(app, "_release_gate_requirement_store", None)
+                _notification_service = getattr(app, "notification_service", None)
+                _event_store = getattr(app, "_event_store", None)
+
+                expiration_service = PolicyExpirationService(
+                    rollout_approval_store=_rollout_approval_store,
+                    release_gate_requirement_store=_release_gate_req_store,
+                    notification_service=_notification_service,
+                    audit_logger=audit_logger,
+                    event_store=_event_store,
+                )
+                app.expiration_service = expiration_service
+
+                # Optionally create expiration worker
+                expiration_worker = PolicyExpirationWorker(
+                    expiration_service=expiration_service,
+                    interval_seconds=expiration_config.sweep_interval_seconds,
+                )
+                app.expiration_worker = expiration_worker
+        except Exception:
+            pass  # Phase 44 imports are optional — don't crash the loader
+
     app._release_config = release_config
     return app
 

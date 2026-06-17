@@ -527,6 +527,38 @@ class RolloutGateAutomationConfig(BaseModel):
     )
 
 
+class NotificationRuleConfig(BaseModel):
+    """A notification rule from YAML config (Phase 44)."""
+    name: str = Field(..., description="Rule name")
+    event_types: list[str] = Field(..., description="Event types to match")
+    severity: str = Field(default="info", description="Notification severity: info, warning, error, critical")
+    channels: list[str] = Field(default_factory=lambda: ["log"], description="Delivery channels")
+    title_template: str | None = Field(default=None, description="Title template")
+    body_template: str | None = Field(default=None, description="Body template")
+
+
+class NotificationConfig(BaseModel):
+    """Notification system configuration (Phase 44)."""
+    enabled: bool = Field(default=False, description="Enable notifications")
+    store: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Notification store configuration",
+    )
+    rules: list[NotificationRuleConfig] = Field(
+        default_factory=list,
+        description="Notification rules",
+    )
+
+
+class ExpirationConfig(BaseModel):
+    """Expiration sweep configuration (Phase 44)."""
+    enabled: bool = Field(default=False, description="Enable expiration sweeps")
+    sweep_interval_seconds: int = Field(
+        default=300,
+        description="Interval between automatic sweeps (seconds)",
+    )
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -593,6 +625,14 @@ class PolicyReleaseConfig(BaseModel):
     rollout_gate_automation: RolloutGateAutomationConfig | None = Field(
         default=None,
         description="Rollout gate automation config (Phase 43)",
+    )
+    notifications: NotificationConfig | None = Field(
+        default=None,
+        description="Notification config (Phase 44)",
+    )
+    expiration: ExpirationConfig | None = Field(
+        default=None,
+        description="Expiration config (Phase 44)",
     )
 
 

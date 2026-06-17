@@ -67,6 +67,16 @@ class PolicyChangeEventType(StrEnum):
     ROLLOUT_GATE_SKIPPED = "policy.rollout.gate.skipped"
     ROLLOUT_GATE_ATTACHED = "policy.rollout.gate.attached"
     ROLLOUT_GATE_PERMISSION_DENIED = "policy.rollout.gate.permission_denied"
+    NOTIFICATION_CREATED = "policy.notification.created"
+    NOTIFICATION_SENT = "policy.notification.sent"
+    NOTIFICATION_FAILED = "policy.notification.failed"
+    NOTIFICATION_RULE_ENABLED = "policy.notification.rule.enabled"
+    NOTIFICATION_RULE_DISABLED = "policy.notification.rule.disabled"
+    EXPIRATION_SWEEP_STARTED = "policy.expiration.sweep_started"
+    EXPIRATION_SWEEP_COMPLETED = "policy.expiration.sweep_completed"
+    EXPIRATION_SWEEP_FAILED = "policy.expiration.sweep_failed"
+    EXPIRATION_TARGET_EXPIRED = "policy.expiration.target_expired"
+    EXPIRATION_PERMISSION_DENIED = "policy.expiration.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):
