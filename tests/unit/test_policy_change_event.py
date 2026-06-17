@@ -83,13 +83,20 @@ class TestPolicyChangeEventType:
             "policy.expiration.sweep_failed",
             "policy.expiration.target_expired",
             "policy.expiration.permission_denied",
+            "policy.rollout.history.recorded",
+            "policy.rollout.history.viewed",
+            "policy.rollout.timeline.generated",
+            "policy.rollout.analytics.generated",
+            "policy.rollout.analytics.export_generated",
+            "policy.rollout.analytics.export_failed",
+            "policy.rollout.analytics.permission_denied",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 65 enum members defined (55 previous + 10 notification/expiration)."""
-        assert len(PolicyChangeEventType) == 65
+        """Exactly 72 enum members defined (55 previous + 10 notification/expiration + 7 rollout history)."""
+        assert len(PolicyChangeEventType) == 72
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""

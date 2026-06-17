@@ -559,6 +559,15 @@ class ExpirationConfig(BaseModel):
     )
 
 
+class RolloutHistoryConfig(BaseModel):
+    """Rollout history configuration (Phase 45)."""
+    enabled: bool = Field(default=False, description="Enable rollout history recording")
+    store: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Rollout history store configuration",
+    )
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -633,6 +642,10 @@ class PolicyReleaseConfig(BaseModel):
     expiration: ExpirationConfig | None = Field(
         default=None,
         description="Expiration config (Phase 44)",
+    )
+    rollout_history: RolloutHistoryConfig | None = Field(
+        default=None,
+        description="Rollout history config (Phase 45)",
     )
 
 

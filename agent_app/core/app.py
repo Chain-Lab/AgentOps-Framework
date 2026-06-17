@@ -177,6 +177,36 @@ class AgentApp:
         """Phase 44: Set the expiration worker."""
         self._expiration_worker = value
 
+    @property
+    def rollout_history_store(self) -> Any:
+        """Phase 45: Return the rollout history store, if configured."""
+        return getattr(self, "_rollout_history_store", None)
+
+    @rollout_history_store.setter
+    def rollout_history_store(self, value: Any) -> None:
+        """Phase 45: Set the rollout history store."""
+        self._rollout_history_store = value
+
+    @property
+    def rollout_history_recorder(self) -> Any:
+        """Phase 45: Return the rollout history recorder, if configured."""
+        return getattr(self, "_rollout_history_recorder", None)
+
+    @rollout_history_recorder.setter
+    def rollout_history_recorder(self, value: Any) -> None:
+        """Phase 45: Set the rollout history recorder."""
+        self._rollout_history_recorder = value
+
+    @property
+    def rollout_history_service(self) -> Any:
+        """Phase 45: Return the rollout history service, if configured."""
+        return getattr(self, "_rollout_history_service", None)
+
+    @rollout_history_service.setter
+    def rollout_history_service(self, value: Any) -> None:
+        """Phase 45: Set the rollout history service."""
+        self._rollout_history_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

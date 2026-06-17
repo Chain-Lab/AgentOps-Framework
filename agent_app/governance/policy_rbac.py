@@ -99,6 +99,9 @@ class PolicyReleasePermission(StrEnum):
     NOTIFICATION_RULE_DISABLE = "policy.notification.rule.disable"
     EXPIRATION_SWEEP = "policy.expiration.sweep"
     EXPIRATION_VIEW = "policy.expiration.view"
+    ROLLOUT_HISTORY_VIEW = "policy.rollout.history.view"
+    ROLLOUT_ANALYTICS_VIEW = "policy.rollout.analytics.view"
+    ROLLOUT_ANALYTICS_EXPORT = "policy.rollout.analytics.export"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -119,6 +122,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.ROLLOUT_GATE_VIEW,
     PolicyReleasePermission.NOTIFICATION_VIEW,
     PolicyReleasePermission.EXPIRATION_VIEW,
+    PolicyReleasePermission.ROLLOUT_HISTORY_VIEW,
+    PolicyReleasePermission.ROLLOUT_ANALYTICS_VIEW,
 }
 
 

@@ -77,6 +77,13 @@ class PolicyChangeEventType(StrEnum):
     EXPIRATION_SWEEP_FAILED = "policy.expiration.sweep_failed"
     EXPIRATION_TARGET_EXPIRED = "policy.expiration.target_expired"
     EXPIRATION_PERMISSION_DENIED = "policy.expiration.permission_denied"
+    ROLLOUT_HISTORY_RECORDED = "policy.rollout.history.recorded"
+    ROLLOUT_HISTORY_VIEWED = "policy.rollout.history.viewed"
+    ROLLOUT_TIMELINE_GENERATED = "policy.rollout.timeline.generated"
+    ROLLOUT_ANALYTICS_GENERATED = "policy.rollout.analytics.generated"
+    ROLLOUT_ANALYTICS_EXPORT_GENERATED = "policy.rollout.analytics.export_generated"
+    ROLLOUT_ANALYTICS_EXPORT_FAILED = "policy.rollout.analytics.export_failed"
+    ROLLOUT_ANALYTICS_PERMISSION_DENIED = "policy.rollout.analytics.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

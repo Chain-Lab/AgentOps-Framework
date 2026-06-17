@@ -927,6 +927,47 @@ def build_app(
         except Exception:
             pass  # Phase 44 imports are optional — don't crash the loader
 
+        # -- Phase 45: Rollout history --
+        try:
+            if release_config and getattr(release_config, "rollout_history", None) and release_config.rollout_history.enabled:
+                from agent_app.runtime.policy_rollout_history_store import create_rollout_history_store
+                from agent_app.runtime.policy_rollout_history_recorder import RolloutHistoryRecorder
+                from agent_app.runtime.policy_rollout_history_service import RolloutHistoryService
+
+                rh_cfg = release_config.rollout_history
+                rh_store_cfg = rh_cfg.store
+                rh_store = create_rollout_history_store(
+                    store_type=rh_store_cfg.type if rh_store_cfg else "memory",
+                    db_path=rh_store_cfg.path if rh_store_cfg else None,
+                )
+                rh_recorder = RolloutHistoryRecorder(
+                    history_store=rh_store,
+                    audit_logger=audit_logger,
+                )
+                rh_service = RolloutHistoryService(
+                    history_store=rh_store,
+                    rollout_store=app.rollout_store,
+                    rollout_approval_store=app.rollout_approval_store,
+                    release_gate_requirement_store=getattr(app, "_release_gate_requirement_store", None),
+                    notification_store=app.notification_service._store if app.notification_service else None,
+                    audit_logger=audit_logger,
+                )
+                app.rollout_history_store = rh_store
+                app.rollout_history_recorder = rh_recorder
+                app.rollout_history_service = rh_service
+
+                # Inject recorder into existing services
+                if app.rollout_service:
+                    app.rollout_service._history_recorder = rh_recorder
+                if app.rollout_gate_automation_service:
+                    app.rollout_gate_automation_service._history_recorder = rh_recorder
+                if app.expiration_service:
+                    app.expiration_service._history_recorder = rh_recorder
+                if app.notification_service:
+                    app.notification_service._history_recorder = rh_recorder
+        except Exception:
+            pass  # Phase 45 wiring failure should not break existing behavior
+
     app._release_config = release_config
     return app
 
