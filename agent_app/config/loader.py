@@ -752,6 +752,47 @@ def build_app(
                 ]
                 app.simulation_gate_evaluator = SimulationGateEvaluator(rules=gate_rules)
 
+        # Phase 42: Simulation gate enforcement
+        release_gate_requirement_store = None
+        release_gate_automation_service = None
+        enforcement_config = getattr(release_config, 'simulation_gate_enforcement', None) if release_config else None
+        if enforcement_config is not None:
+            from agent_app.runtime.policy_release_gate_store import create_release_gate_requirement_store
+            from agent_app.runtime.policy_release_gate_service import ReleaseGateAutomationService
+
+            # Create requirement store
+            if enforcement_config.requirement_store is not None:
+                req_store_cfg = enforcement_config.requirement_store
+                release_gate_requirement_store = create_release_gate_requirement_store(
+                    store_type=req_store_cfg.type,
+                    path=req_store_cfg.path,
+                )
+            else:
+                release_gate_requirement_store = create_release_gate_requirement_store()
+
+            # Create automation service
+            simulation_service = getattr(app, 'policy_simulation_service', None)
+            simulation_gate_evaluator = getattr(app, 'simulation_gate_evaluator', None)
+            release_gate_automation_service = ReleaseGateAutomationService(
+                requirement_store=release_gate_requirement_store,
+                gate_store=gate_store if release_config else None,
+                simulation_service=simulation_service,
+                simulation_gate_evaluator=simulation_gate_evaluator,
+                audit_logger=audit_logger,
+                event_store=event_store,
+            )
+
+            # When enforcement is enabled, pass to PolicyReleaseService and RolloutService
+            if enforcement_config.require_for_promotion and release_service is not None:
+                release_service._release_gate_automation_service = release_gate_automation_service
+                release_service._require_simulation_gate_for_promotion = True
+                release_service._simulation_gate_max_age_seconds = enforcement_config.max_age_seconds
+                if rollout_service is not None:
+                    rollout_service._release_gate_automation_service = release_gate_automation_service
+
+        app._release_gate_requirement_store = release_gate_requirement_store
+        app._release_gate_automation_service = release_gate_automation_service
+
     app._release_config = release_config
     return app
 

@@ -52,6 +52,14 @@ class PolicyChangeEventType(StrEnum):
     SIMULATION_GATE_PASSED = "policy.simulation.gate_passed"
     SIMULATION_GATE_FAILED = "policy.simulation.gate_failed"
     SIMULATION_GATE_PERMISSION_DENIED = "policy.simulation.gate_permission_denied"
+    PROMOTION_GATE_REQUIRED = "policy.promotion.gate.required"
+    PROMOTION_GATE_RUN = "policy.promotion.gate.run"
+    PROMOTION_GATE_ATTACHED = "policy.promotion.gate.attached"
+    PROMOTION_GATE_SATISFIED = "policy.promotion.gate.satisfied"
+    PROMOTION_GATE_FAILED = "policy.promotion.gate.failed"
+    PROMOTION_GATE_EXPIRED = "policy.promotion.gate.expired"
+    PROMOTION_GATE_EXECUTION_BLOCKED = "policy.promotion.gate.execution_blocked"
+    PROMOTION_GATE_PERMISSION_DENIED = "policy.promotion.gate.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

@@ -489,6 +489,23 @@ class PolicyReleaseRuntimeConfig(BaseModel):
     )
 
 
+class SimulationGateEnforcementConfig(BaseModel):
+    """Configuration for simulation gate enforcement in the release workflow (Phase 42)."""
+
+    require_for_promotion: bool = Field(
+        default=False,
+        description="Require simulation gate for promotion execution",
+    )
+    max_age_seconds: int | None = Field(
+        default=None,
+        description="Maximum age of gate result in seconds before it's considered expired",
+    )
+    requirement_store: PolicyReleaseStoreConfig | None = Field(
+        default=None,
+        description="Gate requirement store configuration",
+    )
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -547,6 +564,10 @@ class PolicyReleaseConfig(BaseModel):
     runtime: PolicyReleaseRuntimeConfig = Field(
         default_factory=PolicyReleaseRuntimeConfig,
         description="Runtime policy resolution configuration (Phase 31)",
+    )
+    simulation_gate_enforcement: SimulationGateEnforcementConfig | None = Field(
+        default=None,
+        description="Simulation gate enforcement config (Phase 42)",
     )
 
 

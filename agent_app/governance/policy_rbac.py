@@ -85,6 +85,12 @@ class PolicyReleasePermission(StrEnum):
     SIMULATION_EXPORT = "policy.simulation.export"
     SIMULATION_GATE_RUN = "policy.simulation.gate.run"
     SIMULATION_GATE_VIEW = "policy.simulation.gate.view"
+    PROMOTION_GATE_REQUIRE = "policy.promotion.gate.require"
+    PROMOTION_GATE_RUN = "policy.promotion.gate.run"
+    PROMOTION_GATE_ATTACH = "policy.promotion.gate.attach"
+    PROMOTION_GATE_VIEW = "policy.promotion.gate.view"
+    ROLLOUT_GATE_ATTACH = "policy.rollout.gate.attach"
+    ROLLOUT_GATE_VIEW = "policy.rollout.gate.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -101,6 +107,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.OBSERVABILITY_VIEW,
     PolicyReleasePermission.SIMULATION_VIEW,
     PolicyReleasePermission.SIMULATION_GATE_VIEW,
+    PolicyReleasePermission.PROMOTION_GATE_VIEW,
+    PolicyReleasePermission.ROLLOUT_GATE_VIEW,
 }
 
 
