@@ -16,6 +16,7 @@ from agent_app.governance.policy_expiration import (
     PolicyExpirationTargetType,
 )
 from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
+from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,14 @@ class PolicyExpirationService:
         notification_service: Any | None = None,
         audit_logger: Any | None = None,
         event_store: Any | None = None,
+        history_recorder: Any | None = None,
     ) -> None:
         self._approval_store = rollout_approval_store
         self._gate_store = release_gate_requirement_store
         self._notification_service = notification_service
         self._audit_logger = audit_logger
         self._event_store = event_store
+        self._history_recorder = history_recorder
 
     async def sweep(self, now: datetime | None = None) -> PolicyExpirationSweepReport:
         """Run a full expiration sweep across both stores.
@@ -138,6 +141,14 @@ class PolicyExpirationService:
                 except Exception:
                     pass  # Best-effort notification
 
+            # Record history event
+            await self._record_history(
+                approval.rollout_id,
+                RolloutHistoryEventType.APPROVAL_EXPIRED,
+                source_type="rollout_approval",
+                source_id=approval.approval_id,
+            )
+
         return results
 
     async def expire_gate_requirements(
@@ -208,6 +219,21 @@ class PolicyExpirationService:
                     except Exception:
                         pass  # Best-effort notification
 
+                # Record history event — extract rollout_id from source_id if possible
+                rollout_id = ""
+                step_id = None
+                if req.source_id and ":" in req.source_id:
+                    parts = req.source_id.split(":", 1)
+                    rollout_id = parts[0]
+                    step_id = parts[1] if len(parts) > 1 else None
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.GATE_EXPIRED,
+                    step_id=step_id,
+                    source_type="gate_requirement",
+                    source_id=req.requirement_id,
+                )
+
         return results
 
     async def _emit_audit_events(self, report: PolicyExpirationSweepReport) -> None:
@@ -266,3 +292,17 @@ class PolicyExpirationService:
                     await self._event_store.append(event)
         except Exception:
             pass  # Best-effort
+
+    async def _record_history(
+        self,
+        rollout_id: str,
+        event_type: Any,  # RolloutHistoryEventType
+        **kwargs: Any,
+    ) -> None:
+        """Record a rollout history event (best-effort, never raises)."""
+        if self._history_recorder is None:
+            return
+        try:
+            await self._history_recorder.record(rollout_id=rollout_id, event_type=event_type, **kwargs)
+        except Exception:
+            pass  # History recording failure must not break expiration

@@ -34,6 +34,7 @@ from agent_app.runtime.policy_rollout_approval_policy import (
 from agent_app.governance.audit import AuditEvent
 from agent_app.governance.policy_release_gate import ReleaseGateRequirementStatus
 from agent_app.governance.policy_rollout_gate import RolloutGateExecutionStatus
+from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
 
 
 class RolloutService:
@@ -56,6 +57,7 @@ class RolloutService:
         approval_policy: RolloutApprovalPolicy | None = None,
         release_gate_automation_service: Any = None,
         rollout_gate_automation_service: Any = None,
+        history_recorder: Any | None = None,
     ) -> None:
         self._rollout_store = rollout_store
         self._release_service = release_service
@@ -68,6 +70,7 @@ class RolloutService:
         self._approval_policy = approval_policy
         self._release_gate_automation_service = release_gate_automation_service
         self._rollout_gate_automation_service = rollout_gate_automation_service
+        self._history_recorder = history_recorder
 
     # --- Permission check ---
     async def _check_permission(
@@ -132,6 +135,21 @@ class RolloutService:
         except Exception:
             pass  # Event emission failure shouldn't crash rollout operations
 
+    # --- History recording ---
+    async def _record_history(
+        self,
+        rollout_id: str,
+        event_type: Any,  # RolloutHistoryEventType
+        **kwargs: Any,
+    ) -> None:
+        """Record a rollout history event (best-effort, never raises)."""
+        if self._history_recorder is None:
+            return
+        try:
+            await self._history_recorder.record(rollout_id=rollout_id, event_type=event_type, **kwargs)
+        except Exception:
+            pass  # History recording failure must not break rollout execution
+
     # --- Public methods ---
 
     async def create_plan(
@@ -174,6 +192,12 @@ class RolloutService:
             tenant_id=context.tenant_id,
             data={"rollout_id": plan.rollout_id, "bundle_id": bundle_id, "name": name},
         )
+        await self._record_history(
+            plan.rollout_id,
+            RolloutHistoryEventType.ROLLOUT_CREATED,
+            actor_id=created_by,
+            message=f"Rollout plan created: {name}",
+        )
 
         return plan
 
@@ -210,6 +234,13 @@ class RolloutService:
             user_id=started_by,
             tenant_id=context.tenant_id,
             data={"rollout_id": rollout_id, "bundle_id": plan.bundle_id},
+        )
+        await self._record_history(
+            rollout_id,
+            RolloutHistoryEventType.ROLLOUT_STARTED,
+            actor_id=started_by,
+            step_id=None,
+            message="Rollout started",
         )
 
         return plan
@@ -269,6 +300,14 @@ class RolloutService:
                         "reason": f"simulation_gate_{gate_req.status.value}",
                     },
                 )
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.STEP_BLOCKED,
+                    step_id=next_step.step_id,
+                    actor_id=actor_id,
+                    environment=next_step.environment,
+                    ring_name=next_step.ring_name,
+                )
                 return plan
 
         # Phase 43: Rollout gate automation (enhanced over Phase 42 manual blocking)
@@ -320,6 +359,14 @@ class RolloutService:
                         "gate_action": gate_result.action_taken,
                     },
                 )
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.STEP_BLOCKED,
+                    step_id=next_step.step_id,
+                    actor_id=actor_id,
+                    environment=next_step.environment,
+                    ring_name=next_step.ring_name,
+                )
                 return plan
 
             elif gate_result.status == RolloutGateExecutionStatus.FAILED:
@@ -354,6 +401,20 @@ class RolloutService:
                         "gate_action": gate_result.action_taken,
                     },
                 )
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.STEP_FAILED,
+                    step_id=next_step.step_id,
+                    actor_id=actor_id,
+                    environment=next_step.environment,
+                    ring_name=next_step.ring_name,
+                )
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.ROLLOUT_FAILED,
+                    actor_id=actor_id,
+                    message=f"Rollout failed at step {next_step.step_id}: simulation gate failed",
+                )
                 return plan
 
             elif gate_result.status == RolloutGateExecutionStatus.SKIPPED:
@@ -387,6 +448,21 @@ class RolloutService:
                         "reason": "simulation_gate_skipped",
                     },
                 )
+                await self._record_history(
+                    rollout_id,
+                    RolloutHistoryEventType.STEP_SKIPPED,
+                    step_id=next_step.step_id,
+                    actor_id=actor_id,
+                    environment=next_step.environment,
+                    ring_name=next_step.ring_name,
+                )
+                if all_done:
+                    await self._record_history(
+                        rollout_id,
+                        RolloutHistoryEventType.ROLLOUT_COMPLETED,
+                        actor_id=actor_id,
+                        message="Rollout completed (all steps done after gate skip)",
+                    )
                 return plan
 
             elif gate_result.status == RolloutGateExecutionStatus.ERROR:
@@ -457,6 +533,14 @@ class RolloutService:
                 tenant_id=context.tenant_id,
                 data={"rollout_id": rollout_id, "step_id": executed_step.step_id, "step_type": executed_step.step_type.value},
             )
+            await self._record_history(
+                rollout_id,
+                RolloutHistoryEventType.STEP_SUCCEEDED,
+                step_id=executed_step.step_id,
+                actor_id=actor_id,
+                environment=executed_step.environment,
+                ring_name=executed_step.ring_name,
+            )
 
         if new_status == RolloutPlanStatus.COMPLETED:
             await self._emit_change_event(
@@ -470,6 +554,12 @@ class RolloutService:
                 user_id=actor_id,
                 tenant_id=context.tenant_id,
                 data={"rollout_id": rollout_id, "bundle_id": plan.bundle_id},
+            )
+            await self._record_history(
+                rollout_id,
+                RolloutHistoryEventType.ROLLOUT_COMPLETED,
+                actor_id=actor_id,
+                message="Rollout completed",
             )
 
         if new_status == RolloutPlanStatus.FAILED:
@@ -485,6 +575,12 @@ class RolloutService:
                 tenant_id=context.tenant_id,
                 data={"rollout_id": rollout_id, "step_id": executed_step.step_id, "error": executed_step.error},
             )
+            await self._record_history(
+                rollout_id,
+                RolloutHistoryEventType.ROLLOUT_FAILED,
+                actor_id=actor_id,
+                message=f"Rollout failed at step {executed_step.step_id}",
+            )
 
         if executed_step.status == RolloutStepStatus.FAILED:
             await self._write_audit(
@@ -493,6 +589,14 @@ class RolloutService:
                 tenant_id=context.tenant_id,
                 data={"rollout_id": rollout_id, "step_id": executed_step.step_id, "error": executed_step.error},
             )
+            await self._record_history(
+                rollout_id,
+                RolloutHistoryEventType.STEP_FAILED,
+                step_id=executed_step.step_id,
+                actor_id=actor_id,
+                environment=executed_step.environment,
+                ring_name=executed_step.ring_name,
+            )
 
         if executed_step.status == RolloutStepStatus.BLOCKED:
             await self._write_audit(
@@ -500,6 +604,14 @@ class RolloutService:
                 user_id=actor_id,
                 tenant_id=context.tenant_id,
                 data={"rollout_id": rollout_id, "step_id": executed_step.step_id, "error": executed_step.error},
+            )
+            await self._record_history(
+                rollout_id,
+                RolloutHistoryEventType.STEP_BLOCKED,
+                step_id=executed_step.step_id,
+                actor_id=actor_id,
+                environment=executed_step.environment,
+                ring_name=executed_step.ring_name,
             )
 
         return plan
@@ -571,6 +683,12 @@ class RolloutService:
             user_id=cancelled_by,
             tenant_id=context.tenant_id,
             data={"rollout_id": rollout_id, "bundle_id": plan.bundle_id, "reason": reason},
+        )
+        await self._record_history(
+            rollout_id,
+            RolloutHistoryEventType.ROLLOUT_CANCELLED,
+            actor_id=cancelled_by,
+            message="Rollout cancelled",
         )
 
         return plan
@@ -707,6 +825,12 @@ class RolloutService:
             actor_id=requested_by,
             reason=reason,
         )
+        await self._record_history(
+            rollout_id,
+            RolloutHistoryEventType.APPROVAL_REQUESTED,
+            step_id=step_id,
+            actor_id=requested_by,
+        )
 
         return approval
 
@@ -824,6 +948,12 @@ class RolloutService:
                 )
             except Exception:
                 pass  # Event emission failure shouldn't crash rollout operations
+            await self._record_history(
+                approval.rollout_id,
+                RolloutHistoryEventType.APPROVAL_APPROVED,
+                step_id=approval.step_id,
+                actor_id=approved_by,
+            )
             # If quorum policy, emit quorum_reached audit event
             if approval.policy.policy_type == RolloutApprovalPolicyType.QUORUM:
                 try:
@@ -1055,6 +1185,12 @@ class RolloutService:
             )
         except Exception:
             pass  # Event emission failure shouldn't crash rollout operations
+        await self._record_history(
+            approval.rollout_id,
+            RolloutHistoryEventType.APPROVAL_REJECTED,
+            step_id=approval.step_id,
+            actor_id=rejected_by,
+        )
 
         return approval
 

@@ -17,6 +17,7 @@ from agent_app.governance.policy_notification import (
 )
 from agent_app.runtime.policy_notification_store import PolicyNotificationStore
 from agent_app.runtime.policy_notification_rule_store import PolicyNotificationRuleStore
+from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,13 @@ class PolicyNotificationService:
         rule_store: PolicyNotificationRuleStore,
         channels: dict[str, Any] | None = None,
         audit_logger: Any | None = None,
+        history_recorder: Any | None = None,
     ) -> None:
         self._store = notification_store
         self._rule_store = rule_store
         self._channels = channels or {}
         self._audit_logger = audit_logger
+        self._history_recorder = history_recorder
 
     async def notify_event(
         self,
@@ -89,6 +92,16 @@ class PolicyNotificationService:
             # Store as PENDING
             await self._store.create(msg)
 
+            # Record NOTIFICATION_CREATED if rollout-related
+            rollout_id_for_history = data.get("rollout_id")
+            if rollout_id_for_history is not None:
+                await self._record_history(
+                    rollout_id_for_history,
+                    RolloutHistoryEventType.NOTIFICATION_CREATED,
+                    source_type=source_type,
+                    source_id=source_id,
+                )
+
             # Send through channels
             all_ok = True
             channel_errors: list[dict[str, Any]] = []
@@ -121,6 +134,21 @@ class PolicyNotificationService:
                 msg.status = PolicyNotificationStatus.FAILED
                 msg.error = {"channel_errors": channel_errors}
             await self._store.update(msg)
+
+            # Record NOTIFICATION_SENT or NOTIFICATION_FAILED if rollout-related
+            rollout_id_for_history = data.get("rollout_id")
+            if rollout_id_for_history is not None:
+                history_event_type = (
+                    RolloutHistoryEventType.NOTIFICATION_SENT
+                    if all_ok
+                    else RolloutHistoryEventType.NOTIFICATION_FAILED
+                )
+                await self._record_history(
+                    rollout_id_for_history,
+                    history_event_type,
+                    source_type=source_type,
+                    source_id=source_id,
+                )
 
             # Audit (best-effort)
             await self._audit(
@@ -179,3 +207,17 @@ class PolicyNotificationService:
             await self._audit_logger.log(event)
         except Exception:
             pass
+
+    async def _record_history(
+        self,
+        rollout_id: str,
+        event_type: Any,  # RolloutHistoryEventType
+        **kwargs: Any,
+    ) -> None:
+        """Record a rollout history event (best-effort, never raises)."""
+        if self._history_recorder is None:
+            return
+        try:
+            await self._history_recorder.record(rollout_id=rollout_id, event_type=event_type, **kwargs)
+        except Exception:
+            pass  # History recording failure must not break notification

@@ -21,6 +21,7 @@ from agent_app.governance.policy_rollout_gate import (
     RolloutGateExecutionResult,
     RolloutGateExecutionStatus,
 )
+from agent_app.governance.policy_rollout_history import RolloutHistoryEventType
 
 
 class RolloutGateAutomationService:
@@ -40,6 +41,7 @@ class RolloutGateAutomationService:
         event_store: Any | None = None,
         default_gate_rules: list[Any] | None = None,
         default_max_age_seconds: int | None = None,
+        history_recorder: Any | None = None,
     ) -> None:
         self._release_gate = release_gate_automation_service
         self._simulation_service = simulation_service
@@ -48,6 +50,7 @@ class RolloutGateAutomationService:
         self._event_store = event_store
         self._default_gate_rules = default_gate_rules or []
         self._default_max_age_seconds = default_max_age_seconds
+        self._history_recorder = history_recorder
 
     async def ensure_step_gate(
         self,
@@ -87,6 +90,11 @@ class RolloutGateAutomationService:
 
         # Already satisfied
         if existing.status == ReleaseGateRequirementStatus.SATISFIED:
+            await self._record_history(
+                rollout.rollout_id,
+                RolloutHistoryEventType.GATE_SATISFIED,
+                step_id=step.step_id,
+            )
             return self._make_result(
                 rollout, step, RolloutGateExecutionStatus.SATISFIED,
                 requirement_id=existing.requirement_id if existing.requirement_id != "rgr_none" else None,
@@ -98,6 +106,11 @@ class RolloutGateAutomationService:
         # MANUAL mode — cannot auto-run, block
         if step.simulation_gate_mode == RolloutGateMode.MANUAL:
             await self._emit_events(rollout, step, "policy.rollout.gate.blocked", context)
+            await self._record_history(
+                rollout.rollout_id,
+                RolloutHistoryEventType.GATE_BLOCKED,
+                step_id=step.step_id,
+            )
             return self._make_result(
                 rollout, step, RolloutGateExecutionStatus.BLOCKED,
                 requirement_id=existing.requirement_id if existing.requirement_id != "rgr_none" else None,
@@ -119,6 +132,11 @@ class RolloutGateAutomationService:
 
             if run_result.status == RolloutGateExecutionStatus.SATISFIED:
                 await self._emit_events(rollout, step, "policy.rollout.gate.satisfied", context)
+                await self._record_history(
+                    rollout.rollout_id,
+                    RolloutHistoryEventType.GATE_SATISFIED,
+                    step_id=step.step_id,
+                )
                 return run_result
 
             # Gate failed — emit appropriate event
@@ -129,10 +147,27 @@ class RolloutGateAutomationService:
             }
             event_type = event_map.get(run_result.status, "policy.rollout.gate.blocked")
             await self._emit_events(rollout, step, event_type, context)
+            # Record history for gate failure outcomes
+            history_event_map = {
+                RolloutGateExecutionStatus.FAILED: RolloutHistoryEventType.GATE_FAILED,
+                RolloutGateExecutionStatus.BLOCKED: RolloutHistoryEventType.GATE_BLOCKED,
+                RolloutGateExecutionStatus.SKIPPED: RolloutHistoryEventType.GATE_SKIPPED,
+            }
+            history_event = history_event_map.get(run_result.status, RolloutHistoryEventType.GATE_BLOCKED)
+            await self._record_history(
+                rollout.rollout_id,
+                history_event,
+                step_id=step.step_id,
+            )
             return run_result
 
         # Fallback: block if gate is in a bad state
         await self._emit_events(rollout, step, "policy.rollout.gate.blocked", context)
+        await self._record_history(
+            rollout.rollout_id,
+            RolloutHistoryEventType.GATE_BLOCKED,
+            step_id=step.step_id,
+        )
         return self._make_result(
             rollout, step, RolloutGateExecutionStatus.BLOCKED,
             requirement_id=existing.requirement_id if existing.requirement_id != "rgr_none" else None,
@@ -310,6 +345,20 @@ class RolloutGateAutomationService:
         )
 
     # --- Helpers ---
+
+    async def _record_history(
+        self,
+        rollout_id: str,
+        event_type: Any,  # RolloutHistoryEventType
+        **kwargs: Any,
+    ) -> None:
+        """Record a rollout history event (best-effort, never raises)."""
+        if self._history_recorder is None:
+            return
+        try:
+            await self._history_recorder.record(rollout_id=rollout_id, event_type=event_type, **kwargs)
+        except Exception:
+            pass  # History recording failure must not break gate execution
 
     def _make_result(
         self,

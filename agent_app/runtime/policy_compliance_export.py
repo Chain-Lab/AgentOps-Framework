@@ -86,3 +86,84 @@ def simulation_report_to_csv_rows(report: PolicySimulationReport) -> list[dict[s
 def validation_report_to_json(report: PolicyValidationReport) -> str:
     """Export validation report as JSON string."""
     return report.model_dump_json(indent=2)
+
+
+def rollout_timeline_to_json(timeline: Any) -> str:
+    """Export rollout timeline as JSON string."""
+    return timeline.model_dump_json(indent=2)
+
+
+def rollout_analytics_report_to_json(report: Any) -> str:
+    """Export rollout analytics report as JSON string."""
+    return report.model_dump_json(indent=2)
+
+
+def rollout_analytics_report_to_csv_rows(report: Any) -> list[dict[str, Any]]:
+    """Export rollout analytics report as flat CSV-ready rows."""
+    rows: list[dict[str, Any]] = []
+
+    # Summary row
+    rows.append({
+        "section": "summary",
+        "total_rollouts": report.total_rollouts,
+        "completed_rollouts": report.completed_rollouts,
+        "failed_rollouts": report.failed_rollouts,
+        "cancelled_rollouts": report.cancelled_rollouts,
+        "blocked_rollouts": report.blocked_rollouts,
+    })
+
+    # Gate outcomes
+    rows.append({
+        "section": "gate_outcomes",
+        "total": report.gate_outcomes.total,
+        "satisfied": report.gate_outcomes.satisfied,
+        "blocked": report.gate_outcomes.blocked,
+        "failed": report.gate_outcomes.failed,
+        "skipped": report.gate_outcomes.skipped,
+        "expired": report.gate_outcomes.expired,
+    })
+
+    # Approval outcomes
+    rows.append({
+        "section": "approval_outcomes",
+        "total": report.approval_outcomes.total,
+        "pending": report.approval_outcomes.pending,
+        "approved": report.approval_outcomes.approved,
+        "rejected": report.approval_outcomes.rejected,
+        "expired": report.approval_outcomes.expired,
+        "average_latency_seconds": report.approval_outcomes.average_latency_seconds,
+    })
+
+    # Top blocked steps
+    for item in report.top_blocked_steps:
+        rows.append({
+            "section": "top_blocked_steps",
+            "step_id": item.get("step_id", ""),
+            "count": item.get("count", 0),
+        })
+
+    # Top failed gates
+    for item in report.top_failed_gates:
+        rows.append({
+            "section": "top_failed_gates",
+            "step_id": item.get("step_id", ""),
+            "count": item.get("count", 0),
+        })
+
+    # Environment summary
+    for item in report.environment_summary:
+        rows.append({
+            "section": "environment_summary",
+            "environment": item.get("environment", ""),
+            "event_count": item.get("event_count", 0),
+        })
+
+    # Ring summary
+    for item in report.ring_summary:
+        rows.append({
+            "section": "ring_summary",
+            "ring_name": item.get("ring_name", ""),
+            "event_count": item.get("event_count", 0),
+        })
+
+    return rows
