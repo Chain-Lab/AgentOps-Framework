@@ -968,6 +968,52 @@ def build_app(
         except Exception:
             pass  # Phase 45 wiring failure should not break existing behavior
 
+        # -- Phase 46: Rollout federation --
+        try:
+            fed_cfg = getattr(release_config, "rollout_federation", None) if release_config else None
+            if fed_cfg is not None and fed_cfg.enabled:
+                from agent_app.runtime.policy_rollout_conflict_detector import RolloutConflictDetector
+                from agent_app.runtime.policy_rollout_federation_service import RolloutFederationService
+                from agent_app.runtime.policy_rollout_federation_store import (
+                    create_federated_rollout_plan_store,
+                    create_federated_rollout_target_store,
+                )
+
+                target_store_cfg = fed_cfg.target_store
+                plan_store_cfg = fed_cfg.plan_store
+                federated_target_store = create_federated_rollout_target_store(
+                    store_type=target_store_cfg.type if target_store_cfg else "memory",
+                    db_path=target_store_cfg.path if target_store_cfg else None,
+                )
+                federated_plan_store = create_federated_rollout_plan_store(
+                    store_type=plan_store_cfg.type if plan_store_cfg else "memory",
+                    db_path=plan_store_cfg.path if plan_store_cfg else None,
+                )
+                conflict_detector = RolloutConflictDetector(
+                    target_store=federated_target_store,
+                    federation_store=federated_plan_store,
+                    rollout_store=app.rollout_store,
+                )
+                conflict_policy = getattr(fed_cfg, "conflict_policy", None)
+                federation_service = RolloutFederationService(
+                    target_store=federated_target_store,
+                    federation_store=federated_plan_store,
+                    rollout_store=app.rollout_store,
+                    rollout_service=app.rollout_service,
+                    conflict_detector=conflict_detector,
+                    history_recorder=getattr(app, "rollout_history_recorder", None),
+                    notification_service=app.notification_service,
+                    audit_logger=audit_logger,
+                    event_store=event_store,
+                    fail_on_error_conflicts=getattr(conflict_policy, "fail_on_error", True),
+                    warn_on_bundle_conflict=getattr(conflict_policy, "warn_on_bundle_conflict", True),
+                )
+                app.federated_rollout_target_store = federated_target_store
+                app.federated_rollout_plan_store = federated_plan_store
+                app.rollout_federation_service = federation_service
+        except Exception:
+            pass  # Phase 46 wiring failure should not break existing behavior
+
     app._release_config = release_config
     return app
 

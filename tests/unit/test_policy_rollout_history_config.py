@@ -81,8 +81,8 @@ class TestRolloutHistoryChangeEvents:
     """Tests for rollout history change event types."""
 
     def test_change_event_types_count(self) -> None:
-        """72 event types total."""
-        assert len(PolicyChangeEventType) == 72
+        """81 event types total (72 Phase 45 + 9 Phase 46)."""
+        assert len(PolicyChangeEventType) == 81
 
     def test_change_event_rolout_history_recorded(self) -> None:
         """ROLLOUT_HISTORY_RECORDED exists."""

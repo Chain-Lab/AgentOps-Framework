@@ -568,6 +568,20 @@ class RolloutHistoryConfig(BaseModel):
     )
 
 
+class RolloutFederationConflictPolicyConfig(BaseModel):
+    """Rollout federation conflict policy configuration (Phase 46)."""
+    fail_on_error: bool = Field(default=True, description="Fail federation create/start on error conflicts")
+    warn_on_bundle_conflict: bool = Field(default=True, description="Report active different-bundle overlaps as warnings")
+
+
+class RolloutFederationConfig(BaseModel):
+    """Rollout federation configuration (Phase 46)."""
+    enabled: bool = Field(default=False, description="Enable rollout federation services")
+    target_store: PolicyReleaseStoreConfig | None = Field(default=None, description="Federated rollout target store")
+    plan_store: PolicyReleaseStoreConfig | None = Field(default=None, description="Federated rollout plan store")
+    conflict_policy: RolloutFederationConflictPolicyConfig = Field(default_factory=RolloutFederationConflictPolicyConfig, description="Federation conflict policy")
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -646,6 +660,10 @@ class PolicyReleaseConfig(BaseModel):
     rollout_history: RolloutHistoryConfig | None = Field(
         default=None,
         description="Rollout history config (Phase 45)",
+    )
+    rollout_federation: RolloutFederationConfig | None = Field(
+        default=None,
+        description="Rollout federation config (Phase 46)",
     )
 
 

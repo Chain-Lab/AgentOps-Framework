@@ -207,6 +207,33 @@ class AgentApp:
         """Phase 45: Set the rollout history service."""
         self._rollout_history_service = value
 
+    @property
+    def federated_rollout_target_store(self) -> Any:
+        """Phase 46: Return the federated rollout target store, if configured."""
+        return getattr(self, "_federated_rollout_target_store", None)
+
+    @federated_rollout_target_store.setter
+    def federated_rollout_target_store(self, value: Any) -> None:
+        self._federated_rollout_target_store = value
+
+    @property
+    def federated_rollout_plan_store(self) -> Any:
+        """Phase 46: Return the federated rollout plan store, if configured."""
+        return getattr(self, "_federated_rollout_plan_store", None)
+
+    @federated_rollout_plan_store.setter
+    def federated_rollout_plan_store(self, value: Any) -> None:
+        self._federated_rollout_plan_store = value
+
+    @property
+    def rollout_federation_service(self) -> Any:
+        """Phase 46: Return the rollout federation service, if configured."""
+        return getattr(self, "_rollout_federation_service", None)
+
+    @rollout_federation_service.setter
+    def rollout_federation_service(self, value: Any) -> None:
+        self._rollout_federation_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------
