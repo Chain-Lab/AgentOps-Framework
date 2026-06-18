@@ -1,6 +1,7 @@
 """Federation service — orchestrates federated rollout targets, plans, and conflict detection.
 
 Phase 46 Task 4: Create target, create plan, start plan, detect conflicts.
+Phase 46 Task 5: Execution, waves, cancellation, notifications.
 """
 from __future__ import annotations
 
@@ -17,6 +18,11 @@ from agent_app.governance.policy_change_event import (
 from agent_app.governance.policy_rbac import (
     _DEFAULT_ALLOWED,
     PolicyReleasePermission,
+)
+from agent_app.governance.policy_rollout import (
+    RolloutPlanStatus,
+    RolloutStep,
+    RolloutStepStatus,
 )
 from agent_app.governance.policy_rollout_federation import (
     FederatedRolloutPlan,
@@ -390,3 +396,393 @@ class RolloutFederationService:
             return []
 
         return await self._conflict_detector.detect_conflicts(plan)
+
+    # ------------------------------------------------------------------
+    # Execution helpers
+    # ------------------------------------------------------------------
+
+    async def _notify(self, event_type: str, data: dict[str, Any]) -> None:
+        """Best-effort notification (never raises)."""
+        if self._notification_service is None:
+            return
+        try:
+            await self._notification_service.notify(event_type=event_type, data=data)
+        except TypeError:
+            await self._notification_service.notify(event_type, data)
+        except Exception:
+            return
+
+    @staticmethod
+    def _clone_template_steps_for_target(
+        plan: FederatedRolloutPlan,
+        target: FederatedRolloutTarget,
+    ) -> list[RolloutStep]:
+        """Clone template steps for a specific target, resetting execution state."""
+        suffix = target.target_id[-6:]
+        cloned: list[RolloutStep] = []
+        for step in plan.rollout_template_steps:
+            new_step_id = f"{step.step_id}_{suffix}"
+            new_require_prev = (
+                f"{step.require_previous_step}_{suffix}"
+                if step.require_previous_step is not None
+                else None
+            )
+            cloned.append(
+                RolloutStep(
+                    step_id=new_step_id,
+                    step_type=step.step_type,
+                    environment=target.environment,
+                    ring_name=target.ring_name if target.ring_name is not None else step.ring_name,
+                    from_ring=step.from_ring,
+                    to_ring=step.to_ring,
+                    required_gate_status=step.required_gate_status,
+                    eval_suite=step.eval_suite,
+                    requires_approval=step.requires_approval,
+                    require_previous_step=new_require_prev,
+                    status=RolloutStepStatus.PENDING,
+                )
+            )
+        return cloned
+
+    @staticmethod
+    def _next_execution_index(plan: FederatedRolloutPlan) -> int | None:
+        """Return the index of the next execution to run, or None."""
+        if plan.strategy == FederationExecutionStrategy.WAVE:
+            for wave in plan.waves:
+                wave_indices: list[int] = []
+                for idx, exec_ in enumerate(plan.executions):
+                    if exec_.target_id in wave.target_ids:
+                        wave_indices.append(idx)
+                has_pending = any(
+                    plan.executions[i].status == FederatedRolloutTargetExecutionStatus.PENDING
+                    for i in wave_indices
+                )
+                if not has_pending:
+                    continue
+                # Check if wave is blocked by failed/blocked targets
+                if wave.require_all_successful:
+                    has_failed = any(
+                        plan.executions[i].status
+                        in (
+                            FederatedRolloutTargetExecutionStatus.FAILED,
+                            FederatedRolloutTargetExecutionStatus.BLOCKED,
+                        )
+                        for i in wave_indices
+                    )
+                    if has_failed:
+                        return None
+                # Return first PENDING in this wave
+                for i in wave_indices:
+                    if plan.executions[i].status == FederatedRolloutTargetExecutionStatus.PENDING:
+                        return i
+            return None
+        # SEQUENTIAL or PARALLEL: first PENDING
+        for idx, exec_ in enumerate(plan.executions):
+            if exec_.status == FederatedRolloutTargetExecutionStatus.PENDING:
+                return idx
+        return None
+
+    @staticmethod
+    def _execution_status_from_child(child_plan: Any) -> FederatedRolloutTargetExecutionStatus:
+        """Map a child rollout plan status to a federation execution status."""
+        if child_plan.status == RolloutPlanStatus.COMPLETED:
+            return FederatedRolloutTargetExecutionStatus.SUCCEEDED
+        if child_plan.status == RolloutPlanStatus.FAILED:
+            return FederatedRolloutTargetExecutionStatus.FAILED
+        for step in child_plan.steps:
+            if step.status == RolloutStepStatus.BLOCKED:
+                return FederatedRolloutTargetExecutionStatus.BLOCKED
+        return FederatedRolloutTargetExecutionStatus.RUNNING
+
+    @staticmethod
+    def _error_from_child(child_plan: Any) -> dict[str, Any] | None:
+        """Return the first step error from a child plan, if any."""
+        for step in child_plan.steps:
+            if step.error is not None:
+                return step.error
+        return None
+
+    @staticmethod
+    def _plan_status_from_executions(
+        executions: list[FederatedRolloutTargetExecution],
+    ) -> FederatedRolloutPlanStatus:
+        """Derive plan status from execution statuses."""
+        terminal_statuses = (
+            FederatedRolloutTargetExecutionStatus.SUCCEEDED,
+            FederatedRolloutTargetExecutionStatus.SKIPPED,
+        )
+        all_done = all(
+            e.status in terminal_statuses
+            for e in executions
+        )
+        if all_done:
+            return FederatedRolloutPlanStatus.COMPLETED
+        if any(
+            e.status == FederatedRolloutTargetExecutionStatus.FAILED
+            for e in executions
+        ):
+            return FederatedRolloutPlanStatus.FAILED
+        if any(
+            e.status == FederatedRolloutTargetExecutionStatus.BLOCKED
+            for e in executions
+        ):
+            return FederatedRolloutPlanStatus.BLOCKED
+        return FederatedRolloutPlanStatus.ACTIVE
+
+    # ------------------------------------------------------------------
+    # Execution API
+    # ------------------------------------------------------------------
+
+    async def run_next_target(
+        self,
+        federation_id: str,
+        actor_id: str,
+        context: RunContext,
+    ) -> FederatedRolloutPlan:
+        """Execute the next pending target in the federated plan.
+
+        Requires ``FEDERATION_PLAN_EXECUTE`` permission.  Creates a child
+        rollout via the rollout service, runs it, and maps the result back
+        to the federation execution.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.FEDERATION_PLAN_EXECUTE, context,
+        )
+
+        plan = await self._federation_store.get(federation_id)
+        if plan is None:
+            raise KeyError(f"Federated plan '{federation_id}' not found")
+        if plan.status != FederatedRolloutPlanStatus.ACTIVE:
+            raise ValueError(
+                f"Cannot execute plan with status '{plan.status}'. Must be ACTIVE."
+            )
+
+        idx = self._next_execution_index(plan)
+        if idx is None:
+            return plan
+
+        execution = plan.executions[idx]
+        target = await self._target_store.get(execution.target_id)
+
+        # Handle missing or disabled targets
+        if target is None:
+            updated_executions = list(plan.executions)
+            updated_executions[idx] = execution.model_copy(update={
+                "status": FederatedRolloutTargetExecutionStatus.BLOCKED,
+                "error": {"message": f"Target '{execution.target_id}' not found"},
+            })
+            plan = plan.model_copy(update={
+                "executions": updated_executions,
+                "status": self._plan_status_from_executions(updated_executions),
+                "updated_at": datetime.now(timezone.utc),
+            })
+            plan = await self._federation_store.update(plan)
+            return plan
+
+        if target.status == FederatedTargetStatus.DISABLED:
+            updated_executions = list(plan.executions)
+            updated_executions[idx] = execution.model_copy(update={
+                "status": FederatedRolloutTargetExecutionStatus.SKIPPED,
+            })
+            plan = plan.model_copy(update={
+                "executions": updated_executions,
+                "status": self._plan_status_from_executions(updated_executions),
+                "updated_at": datetime.now(timezone.utc),
+            })
+            plan = await self._federation_store.update(plan)
+            return plan
+
+        # Mark execution as RUNNING
+        now = datetime.now(timezone.utc)
+        updated_executions = list(plan.executions)
+        updated_executions[idx] = execution.model_copy(update={
+            "status": FederatedRolloutTargetExecutionStatus.RUNNING,
+            "started_at": now,
+        })
+        plan = plan.model_copy(update={
+            "executions": updated_executions,
+            "updated_at": now,
+        })
+        plan = await self._federation_store.update(plan)
+
+        # Create child rollout
+        child_steps = self._clone_template_steps_for_target(plan, target)
+        child_plan = await self._rollout_service.create_plan(
+            name=f"{plan.name} / {target.name}",
+            bundle_id=plan.bundle_id,
+            steps=child_steps,
+            created_by=actor_id,
+            context=context,
+        )
+
+        # Start child rollout
+        child_plan = await self._rollout_service.start_plan(
+            rollout_id=child_plan.rollout_id,
+            started_by=actor_id,
+            context=context,
+        )
+
+        # Run child rollout
+        child_plan = await self._rollout_service.run_all_available(
+            rollout_id=child_plan.rollout_id,
+            actor_id=actor_id,
+            context=context,
+        )
+
+        # Map child result to execution
+        exec_status = self._execution_status_from_child(child_plan)
+        exec_error = self._error_from_child(child_plan)
+
+        updated_executions = list(plan.executions)
+        updated_executions[idx] = updated_executions[idx].model_copy(update={
+            "rollout_id": child_plan.rollout_id,
+            "status": exec_status,
+            "completed_at": datetime.now(timezone.utc),
+            "error": exec_error,
+        })
+        new_plan_status = self._plan_status_from_executions(updated_executions)
+        plan = plan.model_copy(update={
+            "executions": updated_executions,
+            "status": new_plan_status,
+            "updated_at": datetime.now(timezone.utc),
+        })
+        plan = await self._federation_store.update(plan)
+
+        # Emit audit/change events
+        event_data = {
+            "federation_id": federation_id,
+            "target_id": execution.target_id,
+            "rollout_id": child_plan.rollout_id,
+            "status": exec_status.value,
+        }
+        if exec_status == FederatedRolloutTargetExecutionStatus.SUCCEEDED:
+            await self._write_audit(
+                "policy.federation.target.succeeded",
+                user_id=actor_id,
+                tenant_id=context.tenant_id,
+                data=event_data,
+            )
+            await self._emit_change_event(
+                PolicyChangeEventType.FEDERATION_PLAN_COMPLETED
+                if new_plan_status == FederatedRolloutPlanStatus.COMPLETED
+                else PolicyChangeEventType.FEDERATION_PLAN_STARTED,
+                actor_id=actor_id,
+                bundle_id=plan.bundle_id,
+                data=event_data,
+            )
+        elif exec_status == FederatedRolloutTargetExecutionStatus.FAILED:
+            await self._write_audit(
+                "policy.federation.target.failed",
+                user_id=actor_id,
+                tenant_id=context.tenant_id,
+                data=event_data,
+            )
+            await self._emit_change_event(
+                PolicyChangeEventType.FEDERATION_PLAN_FAILED,
+                actor_id=actor_id,
+                bundle_id=plan.bundle_id,
+                data=event_data,
+            )
+            await self._notify(
+                "federation.plan.target_failed",
+                event_data,
+            )
+        elif exec_status == FederatedRolloutTargetExecutionStatus.BLOCKED:
+            await self._write_audit(
+                "policy.federation.target.blocked",
+                user_id=actor_id,
+                tenant_id=context.tenant_id,
+                data=event_data,
+            )
+            await self._notify(
+                "federation.plan.target_blocked",
+                event_data,
+            )
+
+        return plan
+
+    async def run_all_available(
+        self,
+        federation_id: str,
+        actor_id: str,
+        context: RunContext,
+    ) -> FederatedRolloutPlan:
+        """Run all available targets until none are pending or plan is terminal.
+
+        Loops calling ``run_next_target`` until no progress or terminal state.
+        Max iterations = len(executions) + 1.
+        """
+        plan = await self._federation_store.get(federation_id)
+        if plan is None:
+            raise KeyError(f"Federated plan '{federation_id}' not found")
+
+        max_iterations = len(plan.executions) + 1
+        for _ in range(max_iterations):
+            prev_status = plan.status
+            plan = await self.run_next_target(federation_id, actor_id, context)
+            if plan.status != prev_status:
+                # Plan reached a terminal state or changed
+                if plan.status in (
+                    FederatedRolloutPlanStatus.COMPLETED,
+                    FederatedRolloutPlanStatus.FAILED,
+                    FederatedRolloutPlanStatus.CANCELLED,
+                ):
+                    break
+            # Check if there's any progress to make
+            if self._next_execution_index(plan) is None:
+                break
+        return plan
+
+    async def cancel_federated_plan(
+        self,
+        federation_id: str,
+        actor_id: str,
+        context: RunContext,
+        reason: str | None = None,
+    ) -> FederatedRolloutPlan:
+        """Cancel a federated rollout plan.
+
+        Requires ``FEDERATION_PLAN_CANCEL`` permission.  Marks all
+        PENDING/RUNNING executions as CANCELLED.
+        """
+        await self._check_permission(
+            PolicyReleasePermission.FEDERATION_PLAN_CANCEL, context,
+        )
+
+        plan = await self._federation_store.get(federation_id)
+        if plan is None:
+            raise KeyError(f"Federated plan '{federation_id}' not found")
+
+        cancellable = (
+            FederatedRolloutTargetExecutionStatus.PENDING,
+            FederatedRolloutTargetExecutionStatus.RUNNING,
+        )
+        updated_executions = [
+            e.model_copy(update={"status": FederatedRolloutTargetExecutionStatus.CANCELLED})
+            if e.status in cancellable
+            else e
+            for e in plan.executions
+        ]
+
+        plan = plan.model_copy(update={
+            "status": FederatedRolloutPlanStatus.CANCELLED,
+            "executions": updated_executions,
+            "updated_at": datetime.now(timezone.utc),
+        })
+        plan = await self._federation_store.update(plan)
+
+        await self._write_audit(
+            "policy.federation.plan.cancelled",
+            user_id=actor_id,
+            tenant_id=context.tenant_id,
+            data={"federation_id": federation_id, "reason": reason},
+        )
+        await self._emit_change_event(
+            PolicyChangeEventType.FEDERATION_PLAN_CANCELLED,
+            actor_id=actor_id,
+            bundle_id=plan.bundle_id,
+            reason=reason,
+            data={"federation_id": federation_id},
+        )
+
+        return plan

@@ -242,3 +242,98 @@ class TestRolloutFederationServiceCreate:
         )
         conflicts = await service.detect_conflicts(plan.federation_id)
         assert conflicts == []
+
+
+@pytest.mark.asyncio
+class TestRolloutFederationServiceExecution:
+    async def test_run_next_creates_child_rollout_and_marks_execution_succeeded(self) -> None:
+        service, target_store, federation_store, _, rollout_service = _service()
+        target = await service.create_target(name="prod", environment="prod", ring_name="canary", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        child_created = RolloutPlan(rollout_id="ro_child", name="global rollout / prod", bundle_id="pb_123", status=RolloutPlanStatus.DRAFT, steps=[_step("prod", "canary")], created_by="release_manager", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        child_done = child_created.model_copy(update={"status": RolloutPlanStatus.COMPLETED, "steps": [child_created.steps[0].model_copy(update={"status": RolloutStepStatus.SUCCEEDED})]})
+        rollout_service.create_plan.return_value = child_created
+        rollout_service.start_plan.return_value = child_created.model_copy(update={"status": RolloutPlanStatus.ACTIVE})
+        rollout_service.run_all_available.return_value = child_done
+        plan = await service.create_federated_plan(name="global rollout", bundle_id="pb_123", target_ids=[target.target_id], rollout_template_steps=[_step()], created_by="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value))
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        updated = await service.run_next_target(plan.federation_id, actor_id="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        assert updated.executions[0].rollout_id == "ro_child"
+        assert updated.executions[0].status == FederatedRolloutTargetExecutionStatus.SUCCEEDED
+        assert updated.status == FederatedRolloutPlanStatus.COMPLETED
+        created_steps = rollout_service.create_plan.await_args.kwargs["steps"]
+        assert created_steps[0].environment == "prod"
+        assert created_steps[0].ring_name == "canary"
+        assert created_steps[0].step_id.endswith(target.target_id[-6:])
+
+    async def test_run_next_marks_blocked_child_rollout_blocked(self) -> None:
+        service, target_store, federation_store, _, rollout_service = _service()
+        target = await service.create_target(name="prod", environment="prod", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        child = RolloutPlan(rollout_id="ro_blocked", name="blocked", bundle_id="pb_123", status=RolloutPlanStatus.ACTIVE, steps=[_step().model_copy(update={"status": RolloutStepStatus.BLOCKED, "error": {"message": "gate blocked"}})], created_by="release_manager", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        rollout_service.create_plan.return_value = child.model_copy(update={"status": RolloutPlanStatus.DRAFT})
+        rollout_service.start_plan.return_value = child
+        rollout_service.run_all_available.return_value = child
+        plan = await service.create_federated_plan(name="global rollout", bundle_id="pb_123", target_ids=[target.target_id], rollout_template_steps=[_step()], created_by="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value))
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        updated = await service.run_next_target(plan.federation_id, actor_id="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        assert updated.executions[0].status == FederatedRolloutTargetExecutionStatus.BLOCKED
+        assert updated.status == FederatedRolloutPlanStatus.BLOCKED
+        assert updated.executions[0].error == {"message": "gate blocked"}
+
+    async def test_run_next_failed_child_marks_plan_failed_and_notifies(self) -> None:
+        notification_service = MagicMock()
+        notification_service.notify = AsyncMock()
+        service, target_store, _, _, rollout_service = _service(notification_service=notification_service)
+        target = await service.create_target(name="prod", environment="prod", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        failed_child = RolloutPlan(rollout_id="ro_failed", name="failed", bundle_id="pb_123", status=RolloutPlanStatus.FAILED, steps=[_step().model_copy(update={"status": RolloutStepStatus.FAILED, "error": {"message": "boom"}})], created_by="release_manager", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        rollout_service.create_plan.return_value = failed_child.model_copy(update={"status": RolloutPlanStatus.DRAFT})
+        rollout_service.start_plan.return_value = failed_child.model_copy(update={"status": RolloutPlanStatus.ACTIVE})
+        rollout_service.run_all_available.return_value = failed_child
+        plan = await service.create_federated_plan(name="global rollout", bundle_id="pb_123", target_ids=[target.target_id], rollout_template_steps=[_step()], created_by="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value))
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        updated = await service.run_next_target(plan.federation_id, actor_id="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        assert updated.status == FederatedRolloutPlanStatus.FAILED
+        assert updated.executions[0].status == FederatedRolloutTargetExecutionStatus.FAILED
+        assert notification_service.notify.await_count == 1
+
+    async def test_run_all_available_completes_sequential_plan(self) -> None:
+        service, target_store, _, _, rollout_service = _service()
+        t1 = await service.create_target("prod-a", "prod", ring_name="canary", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        t2 = await service.create_target("prod-b", "prod", ring_name="stable", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        created = RolloutPlan(rollout_id="ro_child", name="child", bundle_id="pb_123", status=RolloutPlanStatus.DRAFT, steps=[_step()], created_by="release_manager", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        done = created.model_copy(update={"status": RolloutPlanStatus.COMPLETED})
+        rollout_service.create_plan.side_effect = [created.model_copy(update={"rollout_id": "ro_1"}), created.model_copy(update={"rollout_id": "ro_2"})]
+        rollout_service.start_plan.side_effect = [done.model_copy(update={"rollout_id": "ro_1"}), done.model_copy(update={"rollout_id": "ro_2"})]
+        rollout_service.run_all_available.side_effect = [done.model_copy(update={"rollout_id": "ro_1"}), done.model_copy(update={"rollout_id": "ro_2"})]
+        plan = await service.create_federated_plan("global rollout", "pb_123", [t1.target_id, t2.target_id], [_step()], "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value))
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        updated = await service.run_all_available(plan.federation_id, actor_id="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        assert [e.status for e in updated.executions] == [FederatedRolloutTargetExecutionStatus.SUCCEEDED, FederatedRolloutTargetExecutionStatus.SUCCEEDED]
+        assert updated.status == FederatedRolloutPlanStatus.COMPLETED
+
+    async def test_wave_strategy_advances_first_wave_before_second_wave(self) -> None:
+        service, target_store, _, _, rollout_service = _service()
+        t1 = await service.create_target("wave1", "prod", ring_name="canary", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        t2 = await service.create_target("wave2", "prod", ring_name="stable", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        child = RolloutPlan(rollout_id="ro_child", name="child", bundle_id="pb_123", status=RolloutPlanStatus.COMPLETED, steps=[_step()], created_by="release_manager", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        rollout_service.create_plan.side_effect = [child.model_copy(update={"rollout_id": "ro_1"}), child.model_copy(update={"rollout_id": "ro_2"})]
+        rollout_service.start_plan.side_effect = [child.model_copy(update={"rollout_id": "ro_1"}), child.model_copy(update={"rollout_id": "ro_2"})]
+        rollout_service.run_all_available.side_effect = [child.model_copy(update={"rollout_id": "ro_1"}), child.model_copy(update={"rollout_id": "ro_2"})]
+        plan = await service.create_federated_plan("wave rollout", "pb_123", [t1.target_id, t2.target_id], [_step()], "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value), strategy=FederationExecutionStrategy.WAVE, waves=[FederatedRolloutWave(wave_id="frw_one", target_ids=[t1.target_id]), FederatedRolloutWave(wave_id="frw_two", target_ids=[t2.target_id])])
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        first = await service.run_next_target(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        second = await service.run_next_target(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_EXECUTE.value))
+        assert first.executions[0].target_id == t1.target_id
+        assert first.executions[0].status == FederatedRolloutTargetExecutionStatus.SUCCEEDED
+        assert first.executions[1].status == FederatedRolloutTargetExecutionStatus.PENDING
+        assert second.executions[1].target_id == t2.target_id
+        assert second.status == FederatedRolloutPlanStatus.COMPLETED
+
+    async def test_cancel_marks_plan_and_pending_executions_cancelled(self) -> None:
+        service, target_store, federation_store, _, _ = _service()
+        target = await service.create_target("prod", "prod", context=_context(PolicyReleasePermission.FEDERATION_TARGET_CREATE.value))
+        plan = await service.create_federated_plan("global rollout", "pb_123", [target.target_id], [_step()], "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_CREATE.value))
+        await service.start_federated_plan(plan.federation_id, "release_manager", _context(PolicyReleasePermission.FEDERATION_PLAN_START.value))
+        cancelled = await service.cancel_federated_plan(plan.federation_id, actor_id="release_manager", context=_context(PolicyReleasePermission.FEDERATION_PLAN_CANCEL.value), reason="stop release")
+        assert cancelled.status == FederatedRolloutPlanStatus.CANCELLED
+        assert cancelled.executions[0].status == FederatedRolloutTargetExecutionStatus.CANCELLED
+        assert (await federation_store.get(plan.federation_id)).status == FederatedRolloutPlanStatus.CANCELLED
