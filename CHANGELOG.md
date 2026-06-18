@@ -2,6 +2,19 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.34.0 — Phase 46: Policy Rollout Federation and Conflict Detection
+
+### Added
+
+- FederatedRolloutTarget, FederatedRolloutPlan, FederatedRolloutTargetExecution, FederatedRolloutWave, and RolloutConflict models
+- InMemory and SQLite federation target and plan stores
+- RolloutConflictDetector with deterministic, non-mutating conflict checks
+- RolloutFederationService for target creation, federated plan creation/start/execution/cancel, child rollout creation
+- Federation RBAC permissions (10 permissions), config schema, loader wiring, and AgentApp properties
+- CLI commands for federation targets (create/list/enable/disable) and plans (create/list/show/start/run-next/run-all/cancel/conflicts)
+- Console pages for federation targets, plans, plan details, plan creation, and conflicts
+- Audit and policy change events for federation lifecycle (9 new event types)
+
 ## v0.33.0 — Phase 45: Policy Rollout Analytics, History, and Gate Outcome Reporting
 
 ### Added

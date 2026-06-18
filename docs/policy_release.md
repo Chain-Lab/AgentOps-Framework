@@ -3602,3 +3602,55 @@ governance:
 - No persisted scheduled reports — analytics are generated on-demand only
 - No auto-start worker for recording — history recorder is called inline by services
 - Existing old rollouts may have partial history — events before Phase 45 deployment are not retroactively recorded
+
+## Phase 46: Policy Rollout Federation and Conflict Detection
+
+Phase 46 adds a framework-level federation layer for coordinating child rollout plans across tenants, environments, regions, rings, and target groups. It does not implement distributed locks, external deployment engines, Kubernetes/service mesh rollouts, cloud control planes, or cross-process schedulers.
+
+### Federation targets
+
+A `FederatedRolloutTarget` describes where a child rollout can run. Targets include `target_id`, `name`, optional `tenant_id`, required `environment`, optional `ring_name`, optional `region`, labels, status, metadata, and `created_at`. Disabled targets remain visible in stores and console pages but are ignored by automatic execution.
+
+### Federated rollout plans
+
+A `FederatedRolloutPlan` coordinates a policy bundle across target IDs and optional waves. The plan stores target executions, rollout template steps, strategy, status, creator, reason, and timestamps. Each target execution can reference the child `RolloutPlan` created for that target.
+
+### Execution strategies
+
+- `sequential`: `run_next_target()` executes the first pending target.
+- `parallel`: logical parallelism; `run_next_target()` still executes one deterministic target and `run_all_available()` loops through all available targets.
+- `wave`: targets execute in wave order; the next wave starts only after the current wave succeeds or skips according to `require_all_successful`.
+
+### Conflict detection
+
+`RolloutConflictDetector` detects duplicate targets, missing targets, disabled targets, active federated rollouts targeting the same target, active rollout plans for the same environment/ring, and active different-bundle overlaps. Duplicate, missing, disabled, same-target active federation, and environment/ring conflicts are errors. Bundle conflicts are warnings.
+
+### CLI workflow
+
+```bash
+agentapp policy federation target create --config agentapp.yaml --name prod-us-canary --environment prod --ring canary --region us-east --tenant-id tenant_a --actor-id admin --permissions policy.federation.target.create
+agentapp policy federation target list --config agentapp.yaml
+agentapp policy federation plan create --config agentapp.yaml --name prod-global-rollout --bundle-id pb_123 --targets-file targets.yaml --steps-file rollout_steps.yaml --strategy wave --actor-id release_manager --permissions policy.federation.plan.create
+agentapp policy federation plan conflicts --config agentapp.yaml --federation-id frp_123
+agentapp policy federation plan start --config agentapp.yaml --federation-id frp_123 --actor-id release_manager --permissions policy.federation.plan.start
+agentapp policy federation plan run-all --config agentapp.yaml --federation-id frp_123 --actor-id release_manager --permissions policy.federation.plan.execute
+```
+
+### Console workflow
+
+Operators can use `/policy-console/federation/targets` to create, list, enable, and disable targets. They can use `/policy-console/federation/plans` and `/policy-console/federation/plans/new` to create and operate federated rollout plans. Plan detail pages show target execution status, child rollout IDs, and action forms. Conflict pages show conflict severity, type, target, existing rollout/federation, and message.
+
+### Relationship to rollout history and analytics
+
+Federation emits audit and policy change events for target and plan lifecycle operations. Child rollout plans created by the federation service use the existing `RolloutService`, so Phase 45 rollout history and analytics continue to apply to each child rollout.
+
+### Known limitations
+
+- Framework-level coordination only.
+- No distributed lock.
+- No external deployment engine.
+- No Kubernetes or service mesh integration.
+- No cross-process scheduler.
+- Parallel strategy is logical, not concurrent execution.
+- Conflict detection depends on configured stores and recorded state.
+- Child rollout cancellation is deferred; federation cancellation marks federation state and pending/running executions only.
