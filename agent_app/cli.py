@@ -707,6 +707,117 @@ def main() -> int:
     rollout_analytics_export_parser.add_argument("--since", default=None, help="Window start (ISO datetime)")
     rollout_analytics_export_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
 
+    # Phase 46: policy federation subcommands
+    federation_parser = policy_sub.add_parser("federation", help="Policy rollout federation commands")
+    federation_sub = federation_parser.add_subparsers(dest="federation_command")
+
+    target_parser = federation_sub.add_parser("target", help="Federation target commands")
+    target_sub = target_parser.add_subparsers(dest="target_command")
+
+    # target create
+    p = target_sub.add_parser("create", help="Create a federation target")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--name", required=True)
+    p.add_argument("--environment", required=True)
+    p.add_argument("--ring", default=None)
+    p.add_argument("--region", default=None)
+    p.add_argument("--tenant-id", default=None)
+    p.add_argument("--label", action="append", default=None)
+    p.add_argument("--actor-id", default=None)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_target_create)
+
+    # target list
+    p = target_sub.add_parser("list", help="List federation targets")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--tenant-id", default=None)
+    p.add_argument("--environment", default=None)
+    p.add_argument("--ring", default=None)
+    p.add_argument("--status", default=None)
+    p.set_defaults(func=_cmd_policy_federation_target_list)
+
+    # target enable
+    p = target_sub.add_parser("enable", help="Enable a federation target")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--target-id", required=True)
+    p.add_argument("--actor-id", default=None)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_target_enable)
+
+    # target disable
+    p = target_sub.add_parser("disable", help="Disable a federation target")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--target-id", required=True)
+    p.add_argument("--actor-id", default=None)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_target_disable)
+
+    plan_parser = federation_sub.add_parser("plan", help="Federated rollout plan commands")
+    plan_sub = plan_parser.add_subparsers(dest="plan_command")
+
+    # plan create
+    p = plan_sub.add_parser("create", help="Create a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--name", required=True)
+    p.add_argument("--bundle-id", required=True)
+    p.add_argument("--targets-file", required=True)
+    p.add_argument("--steps-file", required=True)
+    p.add_argument("--strategy", default="sequential", choices=["sequential", "parallel", "wave"])
+    p.add_argument("--actor-id", required=True)
+    p.add_argument("--permissions", default=None)
+    p.add_argument("--reason", default=None)
+    p.set_defaults(func=_cmd_policy_federation_plan_create)
+
+    # plan list
+    p = plan_sub.add_parser("list", help="List federated plans")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.set_defaults(func=_cmd_policy_federation_plan_list)
+
+    # plan show
+    p = plan_sub.add_parser("show", help="Show a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.set_defaults(func=_cmd_policy_federation_plan_show)
+
+    # plan start
+    p = plan_sub.add_parser("start", help="Start a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.add_argument("--actor-id", required=True)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_plan_start)
+
+    # plan run-next
+    p = plan_sub.add_parser("run-next", help="Run next target in a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.add_argument("--actor-id", required=True)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_plan_run_next)
+
+    # plan run-all
+    p = plan_sub.add_parser("run-all", help="Run all available targets in a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.add_argument("--actor-id", required=True)
+    p.add_argument("--permissions", default=None)
+    p.set_defaults(func=_cmd_policy_federation_plan_run_all)
+
+    # plan cancel
+    p = plan_sub.add_parser("cancel", help="Cancel a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.add_argument("--actor-id", required=True)
+    p.add_argument("--permissions", default=None)
+    p.add_argument("--reason", default=None)
+    p.set_defaults(func=_cmd_policy_federation_plan_cancel)
+
+    # plan conflicts
+    p = plan_sub.add_parser("conflicts", help="Show conflicts for a federated plan")
+    p.add_argument("--config", default="agentapp.yaml")
+    p.add_argument("--federation-id", required=True)
+    p.set_defaults(func=_cmd_policy_federation_plan_conflicts)
+
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
     notification_sub = notification_parser.add_subparsers(dest="notification_command")
@@ -1155,6 +1266,41 @@ def main() -> int:
             if args.rollout_analytics_command == "export":
                 return asyncio.run(_cmd_policy_rollout_analytics_export(args))
             return asyncio.run(_cmd_policy_rollout_analytics(args))
+
+    # Phase 46: policy federation subcommands
+    if args.command == "policy" and args.policy_command == "federation":
+        if args.federation_command == "target":
+            if args.target_command == "create":
+                return asyncio.run(_cmd_policy_federation_target_create(args))
+            if args.target_command == "list":
+                return asyncio.run(_cmd_policy_federation_target_list(args))
+            if args.target_command == "enable":
+                return asyncio.run(_cmd_policy_federation_target_enable(args))
+            if args.target_command == "disable":
+                return asyncio.run(_cmd_policy_federation_target_disable(args))
+            target_parser.print_help()
+            return 1
+        if args.federation_command == "plan":
+            if args.plan_command == "create":
+                return asyncio.run(_cmd_policy_federation_plan_create(args))
+            if args.plan_command == "list":
+                return asyncio.run(_cmd_policy_federation_plan_list(args))
+            if args.plan_command == "show":
+                return asyncio.run(_cmd_policy_federation_plan_show(args))
+            if args.plan_command == "start":
+                return asyncio.run(_cmd_policy_federation_plan_start(args))
+            if args.plan_command == "run-next":
+                return asyncio.run(_cmd_policy_federation_plan_run_next(args))
+            if args.plan_command == "run-all":
+                return asyncio.run(_cmd_policy_federation_plan_run_all(args))
+            if args.plan_command == "cancel":
+                return asyncio.run(_cmd_policy_federation_plan_cancel(args))
+            if args.plan_command == "conflicts":
+                return asyncio.run(_cmd_policy_federation_plan_conflicts(args))
+            plan_parser.print_help()
+            return 1
+        federation_parser.print_help()
+        return 1
 
     # Phase 44: policy notification subcommands
     if args.command == "policy" and args.policy_command == "notification":
@@ -6980,6 +7126,354 @@ async def _cmd_policy_rollout_analytics_export(args: argparse.Namespace) -> int:
 
     print(f"Analytics report exported to {args.output} ({fmt}).")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 46: Federation CLI helpers and commands
+# ---------------------------------------------------------------------------
+
+
+def _permissions_from_arg(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _labels_from_args(values: list[str] | None) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for item in values or []:
+        if "=" not in item:
+            raise ValueError(f"Invalid label '{item}'. Expected key=value.")
+        key, val = item.split("=", 1)
+        labels[key.strip()] = val.strip()
+    return labels
+
+
+def _federation_context(args: argparse.Namespace, actor_attr: str = "actor_id"):
+    from agent_app.core.context import RunContext
+    actor_id = getattr(args, actor_attr, None) or "cli"
+    return RunContext(
+        run_id="cli-policy-federation",
+        user_id=actor_id,
+        tenant_id=getattr(args, "tenant_id", None) or "default",
+        permissions=_permissions_from_arg(getattr(args, "permissions", None)),
+    )
+
+
+def _format_federation_plan(plan) -> None:
+    print(f"Federation: {plan.federation_id}")
+    print(f"Name: {plan.name}")
+    print(f"Bundle: {plan.bundle_id}")
+    print(f"Strategy: {plan.strategy.value if hasattr(plan.strategy, 'value') else plan.strategy}")
+    print(f"Status: {plan.status.value if hasattr(plan.status, 'value') else plan.status}")
+    print(f"{'Execution':<18} {'Target':<18} {'Status':<12} {'Rollout':<18}")
+    print("-" * 72)
+    for execution in plan.executions:
+        status = execution.status.value if hasattr(execution.status, "value") else str(execution.status)
+        print(f"{execution.execution_id:<18} {execution.target_id:<18} {status:<12} {(execution.rollout_id or '-'):<18}")
+
+
+def _load_yaml_file(path: str):
+    import yaml
+    with open(path, "r") as fh:
+        return yaml.safe_load(fh) or []
+
+
+async def _cmd_policy_federation_target_create(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        labels = _labels_from_args(getattr(args, "label", None))
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        target = await service.create_target(
+            name=args.name,
+            environment=args.environment,
+            tenant_id=args.tenant_id,
+            ring_name=args.ring,
+            region=args.region,
+            labels=labels,
+            actor_id=args.actor_id,
+            context=_federation_context(args),
+        )
+        print(f"Created target {target.target_id}: {target.name} ({target.environment}/{target.ring_name or '-'})")
+        return 0
+    except Exception as exc:
+        print(f"Error creating federation target: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_target_list(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation import FederatedTargetStatus
+    try:
+        app = build_app(args.config)
+        store = getattr(app, "federated_rollout_target_store", None)
+        if store is None:
+            print("Federation target store not configured.", file=sys.stderr)
+            return 1
+        status_filter = FederatedTargetStatus(args.status) if args.status else None
+        targets = await store.list(
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            ring_name=args.ring,
+            status=status_filter,
+        )
+        if not targets:
+            print("No federation targets found.")
+            return 0
+        print(f"{'Target ID':<18} {'Name':<20} {'Tenant':<12} {'Environment':<12} {'Ring':<10} {'Region':<10} {'Status':<10}")
+        print("-" * 98)
+        for t in targets:
+            tid = t.target_id[:18]
+            name = t.name[:20]
+            tenant = (t.tenant_id or "")[:12]
+            env = t.environment[:12]
+            ring = (t.ring_name or "")[:10]
+            region = (t.region or "")[:10]
+            status = t.status.value[:10]
+            print(f"{tid:<18} {name:<20} {tenant:<12} {env:<12} {ring:<10} {region:<10} {status:<10}")
+        return 0
+    except Exception as exc:
+        print(f"Error listing federation targets: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_target_enable(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        store = getattr(app, "federated_rollout_target_store", None)
+        if store is None:
+            print("Federation target store not configured.", file=sys.stderr)
+            return 1
+        target = await store.enable(args.target_id)
+        print(f"Target {target.target_id} enabled.")
+        return 0
+    except Exception as exc:
+        print(f"Error enabling federation target: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_target_disable(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        store = getattr(app, "federated_rollout_target_store", None)
+        if store is None:
+            print("Federation target store not configured.", file=sys.stderr)
+            return 1
+        target = await store.disable(args.target_id)
+        print(f"Target {target.target_id} disabled.")
+        return 0
+    except Exception as exc:
+        print(f"Error disabling federation target: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_create(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout import RolloutStep
+    from agent_app.governance.policy_rollout_federation import FederationExecutionStrategy
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        target_data = _load_yaml_file(args.targets_file)
+        target_ids = target_data if isinstance(target_data, list) else target_data.get("target_ids", [])
+        steps_data = _load_yaml_file(args.steps_file)
+        steps = [RolloutStep(**item) for item in steps_data]
+        strategy = FederationExecutionStrategy(args.strategy)
+        plan = await service.create_federated_plan(
+            name=args.name,
+            bundle_id=args.bundle_id,
+            target_ids=target_ids,
+            rollout_template_steps=steps,
+            created_by=args.actor_id,
+            context=_federation_context(args),
+            strategy=strategy,
+            reason=args.reason,
+        )
+        _format_federation_plan(plan)
+        return 0
+    except Exception as exc:
+        print(f"Error creating federated plan: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_list(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        store = getattr(app, "federated_rollout_plan_store", None)
+        if store is None:
+            print("Federation plan store not configured.", file=sys.stderr)
+            return 1
+        plans = await store.list()
+        if not plans:
+            print("No federated plans found.")
+            return 0
+        print(f"{'Federation ID':<18} {'Name':<20} {'Status':<12} {'Strategy':<10} {'Bundle':<12} {'Targets':<8}")
+        print("-" * 86)
+        for p in plans:
+            pid = p.federation_id[:18]
+            name = p.name[:20]
+            status = p.status.value[:12]
+            strategy = p.strategy.value[:10]
+            bundle = p.bundle_id[:12]
+            targets = str(len(p.target_ids))
+            print(f"{pid:<18} {name:<20} {status:<12} {strategy:<10} {bundle:<12} {targets:<8}")
+        return 0
+    except Exception as exc:
+        print(f"Error listing federated plans: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_show(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        store = getattr(app, "federated_rollout_plan_store", None)
+        if store is None:
+            print("Federation plan store not configured.", file=sys.stderr)
+            return 1
+        plan = await store.get(args.federation_id)
+        if plan is None:
+            print(f"Federated plan '{args.federation_id}' not found.", file=sys.stderr)
+            return 1
+        _format_federation_plan(plan)
+        return 0
+    except Exception as exc:
+        print(f"Error showing federated plan: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_start(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        plan = await service.start_federated_plan(
+            args.federation_id,
+            actor_id=args.actor_id,
+            context=_federation_context(args),
+        )
+        _format_federation_plan(plan)
+        return 0
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error starting federated plan: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_run_next(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        plan = await service.run_next_target(
+            args.federation_id,
+            actor_id=args.actor_id,
+            context=_federation_context(args),
+        )
+        _format_federation_plan(plan)
+        return 0
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running next target: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_run_all(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        plan = await service.run_all_available(
+            args.federation_id,
+            actor_id=args.actor_id,
+            context=_federation_context(args),
+        )
+        _format_federation_plan(plan)
+        return 0
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error running all targets: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_cancel(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        plan = await service.cancel_federated_plan(
+            args.federation_id,
+            actor_id=args.actor_id,
+            context=_federation_context(args),
+            reason=args.reason,
+        )
+        _format_federation_plan(plan)
+        return 0
+    except PermissionError as exc:
+        print(f"Permission denied: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error cancelling federated plan: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_plan_conflicts(args: argparse.Namespace) -> int:
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation import RolloutConflictSeverity
+    try:
+        app = build_app(args.config)
+        service = getattr(app, "rollout_federation_service", None)
+        if service is None:
+            print("Rollout federation not configured.", file=sys.stderr)
+            return 1
+        conflicts = await service.detect_conflicts(args.federation_id)
+        if not conflicts:
+            print("No conflicts found.")
+            return 0
+        print(f"{'Conflict ID':<30} {'Type':<28} {'Severity':<10} {'Target':<18} {'Message':<40}")
+        print("-" * 130)
+        has_error = False
+        for c in conflicts:
+            cid = c.conflict_id[:30]
+            ctype = c.conflict_type.value[:28]
+            severity = c.severity.value.upper()[:10]
+            target = (c.target_id or "")[:18]
+            msg = c.message[:40]
+            print(f"{cid:<30} {ctype:<28} {severity:<10} {target:<18} {msg:<40}")
+            if c.severity == RolloutConflictSeverity.ERROR:
+                has_error = True
+        return 1 if has_error else 0
+    except Exception as exc:
+        print(f"Error detecting conflicts: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
