@@ -817,6 +817,8 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         rollout_federation_service=getattr(agent_app, "rollout_federation_service", None),
         federated_rollout_target_store=getattr(agent_app, "federated_rollout_target_store", None),
         federated_rollout_plan_store=getattr(agent_app, "federated_rollout_plan_store", None),
+        # Phase 47: federation observability service
+        federation_observability_service=getattr(agent_app, "federation_observability_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

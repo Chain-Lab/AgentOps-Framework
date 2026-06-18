@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Federation Analytics</h2>
+
+{% if message %}
+<div class="alert alert-info">{{ message }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation observability service not configured.</p>
+</div>
+{% else %}
+
+<form method="post" action="{{ base_path }}/federation/analytics" style="margin-bottom: 1em;">
+  <label for="since">Since:</label>
+  <input type="datetime-local" name="since" id="since" value="{{ since_default or '' }}">
+  <label for="until">Until:</label>
+  <input type="datetime-local" name="until" id="until" value="{{ until_default or '' }}">
+  <button type="submit" class="btn btn-primary">Run Report</button>
+</form>
+
+{% if report %}
+<section class="report-section">
+  <h3>Summary</h3>
+  <div class="summary-cards">
+    <div class="card">
+      <h4>Total Federations</h4>
+      <p class="card-value">{{ report.total_federations }}</p>
+    </div>
+    <div class="card">
+      <h4>Active</h4>
+      <p class="card-value">{{ report.active_federations }}</p>
+    </div>
+    <div class="card">
+      <h4>Completed</h4>
+      <p class="card-value">{{ report.completed_federations }}</p>
+    </div>
+    <div class="card">
+      <h4>Failed</h4>
+      <p class="card-value">{{ report.failed_federations }}</p>
+    </div>
+    <div class="card">
+      <h4>Blocked</h4>
+      <p class="card-value">{{ report.blocked_federations }}</p>
+    </div>
+    <div class="card">
+      <h4>Conflicts</h4>
+      <p class="card-value">{{ report.conflicts.total_conflicts }}</p>
+    </div>
+  </div>
+</section>
+
+<section class="report-section">
+  <h3>Target Health</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Total</th><th>Enabled</th><th>Disabled</th><th>Succeeded</th><th>Failed</th><th>Blocked</th><th>Skipped</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ report.target_health.total_targets }}</td>
+        <td>{{ report.target_health.enabled_targets }}</td>
+        <td>{{ report.target_health.disabled_targets }}</td>
+        <td>{{ report.target_health.succeeded_targets }}</td>
+        <td>{{ report.target_health.failed_targets }}</td>
+        <td>{{ report.target_health.blocked_targets }}</td>
+        <td>{{ report.target_health.skipped_targets }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="report-section">
+  <h3>Wave Outcomes</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Total</th><th>Succeeded</th><th>Failed</th><th>Blocked</th><th>Pending</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ report.wave_outcomes.total_waves }}</td>
+        <td>{{ report.wave_outcomes.succeeded_waves }}</td>
+        <td>{{ report.wave_outcomes.failed_waves }}</td>
+        <td>{{ report.wave_outcomes.blocked_waves }}</td>
+        <td>{{ report.wave_outcomes.pending_waves }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+{% if report.conflicts.total_conflicts > 0 %}
+<section class="report-section">
+  <h3>Conflict Summary</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Total</th><th>Errors</th><th>Warnings</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ report.conflicts.total_conflicts }}</td>
+        <td>{{ report.conflicts.error_conflicts }}</td>
+        <td>{{ report.conflicts.warning_conflicts }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.top_failed_targets %}
+<section class="report-section">
+  <h3>Top Failed Targets</h3>
+  <table class="table">
+    <thead><tr><th>Target ID</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for t in report.top_failed_targets %}
+      <tr><td>{{ t.target_id }}</td><td>{{ t.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.top_blocked_targets %}
+<section class="report-section">
+  <h3>Top Blocked Targets</h3>
+  <table class="table">
+    <thead><tr><th>Target ID</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for t in report.top_blocked_targets %}
+      <tr><td>{{ t.target_id }}</td><td>{{ t.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.environment_summary %}
+<section class="report-section">
+  <h3>Environment Summary</h3>
+  <table class="table">
+    <thead><tr><th>Environment</th><th>Event Count</th></tr></thead>
+    <tbody>
+      {% for e in report.environment_summary %}
+      <tr><td>{{ e.environment }}</td><td>{{ e.event_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.region_summary %}
+<section class="report-section">
+  <h3>Region Summary</h3>
+  <table class="table">
+    <thead><tr><th>Region</th><th>Event Count</th></tr></thead>
+    <tbody>
+      {% for r in report.region_summary %}
+      <tr><td>{{ r.region }}</td><td>{{ r.event_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if report.tenant_summary %}
+<section class="report-section">
+  <h3>Tenant Summary</h3>
+  <table class="table">
+    <thead><tr><th>Tenant ID</th><th>Event Count</th></tr></thead>
+    <tbody>
+      {% for t in report.tenant_summary %}
+      <tr><td>{{ t.tenant_id }}</td><td>{{ t.event_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<p>
+  <a href="{{ base_path }}/federation/analytics?export=json">Export as JSON</a>
+  &nbsp;|&nbsp;
+  <a href="{{ base_path }}/federation/analytics?export=csv">Export as CSV</a>
+</p>
+
+{% else %}
+<div class="empty-state">
+  <p>No analytics report generated yet. Click "Run Report" to generate one.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

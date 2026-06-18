@@ -67,6 +67,7 @@ def build_policy_console_router(
     rollout_federation_service: Any = None,
     federated_rollout_target_store: Any = None,
     federated_rollout_plan_store: Any = None,
+    federation_observability_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -102,6 +103,7 @@ def build_policy_console_router(
         rollout_federation_service: Optional rollout federation service (Phase 46).
         federated_rollout_target_store: Optional federated rollout target store (Phase 46).
         federated_rollout_plan_store: Optional federated rollout plan store (Phase 46).
+        federation_observability_service: Optional federation observability service (Phase 47).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -4578,6 +4580,338 @@ def build_policy_console_router(
                 "federation_id": federation_id,
                 "conflicts": conflicts,
                 "error": error,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 47 Task 8: Federation observability pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/plans/{federation_id}/history", response_class=HTMLResponse)
+    async def federation_plan_history(request: Request, federation_id: str):
+        """Show federation history events."""
+        events_list: list[dict] = []
+        error = None
+
+        if federation_observability_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_history.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "federation_id": federation_id,
+                    "events": events_list,
+                    "store_available": False,
+                    "error": "Federation observability service not configured.",
+                },
+            )
+
+        try:
+            events = await federation_observability_service.list_history_events(
+                federation_id=federation_id,
+            )
+            for e in events:
+                events_list.append({
+                    "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                    "target_id": e.target_id or "—",
+                    "wave_id": e.wave_id or "—",
+                    "rollout_id": e.rollout_id or "—",
+                    "environment": e.environment or "—",
+                    "message": e.message or "—",
+                    "created_at": e.created_at.isoformat() if e.created_at and hasattr(e.created_at, "isoformat") else "",
+                })
+        except KeyError:
+            error = f"Federation '{federation_id}' not found."
+        except Exception as exc:
+            error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_history.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "federation_id": federation_id,
+                "events": events_list,
+                "store_available": federation_observability_service is not None,
+                "error": error,
+            },
+        )
+
+    @router.get("/federation/plans/{federation_id}/timeline", response_class=HTMLResponse)
+    async def federation_plan_timeline(request: Request, federation_id: str):
+        """Show federation timeline."""
+        timeline_dict = None
+        error = None
+        export = request.query_params.get("export", "")
+
+        if federation_observability_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_timeline.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "federation_id": federation_id,
+                    "timeline": None,
+                    "store_available": False,
+                    "error": None,
+                },
+            )
+
+        try:
+            timeline_obj = await federation_observability_service.get_timeline(federation_id)
+
+            # JSON export
+            if export == "json":
+                from fastapi.responses import JSONResponse
+                return JSONResponse(content=timeline_obj.model_dump(mode="json"))
+
+            # Build dict for template rendering
+            waves_dicts: list[dict] = []
+            for w in timeline_obj.waves:
+                waves_dicts.append({
+                    "wave_id": w.wave_id,
+                    "status": w.status or "—",
+                    "started_at": w.started_at.isoformat() if w.started_at and hasattr(w.started_at, "isoformat") else "—",
+                    "completed_at": w.completed_at.isoformat() if w.completed_at and hasattr(w.completed_at, "isoformat") else "—",
+                    "duration_seconds": w.duration_seconds,
+                    "target_ids": w.target_ids,
+                })
+
+            targets_dicts: list[dict] = []
+            for t in timeline_obj.targets:
+                targets_dicts.append({
+                    "target_id": t.target_id,
+                    "status": t.status or "—",
+                    "environment": t.environment or "—",
+                    "ring_name": t.ring_name or "—",
+                    "region": t.region or "—",
+                    "started_at": t.started_at.isoformat() if t.started_at and hasattr(t.started_at, "isoformat") else "—",
+                    "completed_at": t.completed_at.isoformat() if t.completed_at and hasattr(t.completed_at, "isoformat") else "—",
+                    "duration_seconds": t.duration_seconds,
+                })
+
+            events_dicts: list[dict] = []
+            for e in timeline_obj.events:
+                events_dicts.append({
+                    "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                    "target_id": e.target_id or "—",
+                    "wave_id": e.wave_id or "—",
+                    "message": e.message or "—",
+                    "created_at": e.created_at.isoformat() if e.created_at and hasattr(e.created_at, "isoformat") else "",
+                })
+
+            timeline_dict = {
+                "federation_id": timeline_obj.federation_id,
+                "name": timeline_obj.name,
+                "bundle_id": timeline_obj.bundle_id,
+                "strategy": timeline_obj.strategy,
+                "status": timeline_obj.status,
+                "created_at": timeline_obj.created_at.isoformat() if timeline_obj.created_at and hasattr(timeline_obj.created_at, "isoformat") else None,
+                "started_at": timeline_obj.started_at.isoformat() if timeline_obj.started_at and hasattr(timeline_obj.started_at, "isoformat") else None,
+                "completed_at": timeline_obj.completed_at.isoformat() if timeline_obj.completed_at and hasattr(timeline_obj.completed_at, "isoformat") else None,
+                "duration_seconds": timeline_obj.duration_seconds,
+                "waves": waves_dicts,
+                "targets": targets_dicts,
+                "events": events_dicts,
+            }
+        except KeyError:
+            error = f"Federation '{federation_id}' not found."
+        except Exception as exc:
+            error = str(exc)
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_timeline.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "federation_id": federation_id,
+                "timeline": timeline_dict,
+                "store_available": federation_observability_service is not None,
+                "error": error,
+            },
+        )
+
+    @router.get("/federation/analytics", response_class=HTMLResponse)
+    async def federation_analytics(request: Request):
+        """Show federation analytics dashboard."""
+        report_dict = None
+        export = request.query_params.get("export", "")
+
+        if federation_observability_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": False,
+                    "message": None,
+                    "since_default": "",
+                    "until_default": "",
+                },
+            )
+
+        # If export requested, generate report and return raw data
+        if export in ("json", "csv"):
+            try:
+                report_obj = await federation_observability_service.generate_report()
+                if export == "json":
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(content=report_obj.model_dump(mode="json"))
+                if export == "csv":
+                    import io
+                    buf = io.StringIO()
+                    buf.write("metric,value\n")
+                    buf.write(f"total_federations,{report_obj.total_federations}\n")
+                    buf.write(f"active_federations,{report_obj.active_federations}\n")
+                    buf.write(f"completed_federations,{report_obj.completed_federations}\n")
+                    buf.write(f"failed_federations,{report_obj.failed_federations}\n")
+                    buf.write(f"blocked_federations,{report_obj.blocked_federations}\n")
+                    buf.write(f"total_conflicts,{report_obj.conflicts.total_conflicts}\n")
+                    from fastapi.responses import StreamingResponse
+                    return StreamingResponse(
+                        iter([buf.getvalue()]),
+                        media_type="text/csv",
+                        headers={"Content-Disposition": "attachment; filename=federation_analytics.csv"},
+                    )
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_analytics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": None,
+                "store_available": federation_observability_service is not None,
+                "message": None,
+                "since_default": "",
+                "until_default": "",
+            },
+        )
+
+    @router.post("/federation/analytics", response_class=HTMLResponse)
+    async def federation_analytics_post(request: Request):
+        """Generate federation analytics report with time window."""
+        message = None
+        report_dict = None
+
+        if federation_observability_service is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": False,
+                    "message": "Federation observability service not configured.",
+                    "since_default": "",
+                    "until_default": "",
+                },
+            )
+
+        # Parse form data
+        form = await request.form()
+        since_str = form.get("since", "")
+        until_str = form.get("until", "")
+        since_dt = None
+        until_dt = None
+        since_default = str(since_str) if since_str else ""
+        until_default = str(until_str) if until_str else ""
+
+        if since_str:
+            try:
+                from datetime import datetime as _dt
+                since_dt = _dt.fromisoformat(str(since_str))
+            except (ValueError, TypeError):
+                message = "Invalid 'since' datetime format."
+        if until_str:
+            try:
+                from datetime import datetime as _dt
+                until_dt = _dt.fromisoformat(str(until_str))
+            except (ValueError, TypeError):
+                if message:
+                    message += " Invalid 'until' datetime format."
+                else:
+                    message = "Invalid 'until' datetime format."
+
+        if message and (since_dt is None and until_dt is None):
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_analytics.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "report": None,
+                    "store_available": federation_observability_service is not None,
+                    "message": message,
+                    "since_default": since_default,
+                    "until_default": until_default,
+                },
+            )
+
+        try:
+            report_obj = await federation_observability_service.generate_report(
+                window_start=since_dt,
+                window_end=until_dt,
+            )
+            report_dict = {
+                "report_id": report_obj.report_id,
+                "generated_at": report_obj.generated_at.isoformat() if report_obj.generated_at and hasattr(report_obj.generated_at, "isoformat") else "",
+                "total_federations": report_obj.total_federations,
+                "active_federations": report_obj.active_federations,
+                "completed_federations": report_obj.completed_federations,
+                "failed_federations": report_obj.failed_federations,
+                "cancelled_federations": report_obj.cancelled_federations,
+                "blocked_federations": report_obj.blocked_federations,
+                "target_health": {
+                    "total_targets": report_obj.target_health.total_targets,
+                    "enabled_targets": report_obj.target_health.enabled_targets,
+                    "disabled_targets": report_obj.target_health.disabled_targets,
+                    "succeeded_targets": report_obj.target_health.succeeded_targets,
+                    "failed_targets": report_obj.target_health.failed_targets,
+                    "blocked_targets": report_obj.target_health.blocked_targets,
+                    "skipped_targets": report_obj.target_health.skipped_targets,
+                },
+                "wave_outcomes": {
+                    "total_waves": report_obj.wave_outcomes.total_waves,
+                    "succeeded_waves": report_obj.wave_outcomes.succeeded_waves,
+                    "failed_waves": report_obj.wave_outcomes.failed_waves,
+                    "blocked_waves": report_obj.wave_outcomes.blocked_waves,
+                    "pending_waves": report_obj.wave_outcomes.pending_waves,
+                },
+                "conflicts": {
+                    "total_conflicts": report_obj.conflicts.total_conflicts,
+                    "error_conflicts": report_obj.conflicts.error_conflicts,
+                    "warning_conflicts": report_obj.conflicts.warning_conflicts,
+                },
+                "top_failed_targets": report_obj.top_failed_targets,
+                "top_blocked_targets": report_obj.top_blocked_targets,
+                "environment_summary": report_obj.environment_summary,
+                "region_summary": report_obj.region_summary,
+                "tenant_summary": report_obj.tenant_summary,
+            }
+        except Exception as exc:
+            message = f"Error generating report: {exc}"
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_analytics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "report": report_dict,
+                "store_available": federation_observability_service is not None,
+                "message": message,
+                "since_default": since_default,
+                "until_default": until_default,
             },
         )
 

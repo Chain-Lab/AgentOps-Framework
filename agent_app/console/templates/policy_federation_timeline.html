@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Federation Timeline — {{ federation_id }}</h2>
+
+<p>
+  <a href="{{ base_path }}/federation/plans/{{ federation_id }}">&larr; Back to Federation Plan Detail</a>
+  &nbsp;|&nbsp;
+  <a href="{{ base_path }}/federation/plans/{{ federation_id }}/history">View History</a>
+</p>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation observability service not configured.</p>
+</div>
+{% elif timeline %}
+
+<section class="report-section">
+  <h3>Federation Info</h3>
+  <div class="summary-cards">
+    <div class="card">
+      <h4>Name</h4>
+      <p class="card-value">{{ timeline.name or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Bundle ID</h4>
+      <p class="card-value">{{ timeline.bundle_id or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Strategy</h4>
+      <p class="card-value">{{ timeline.strategy or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Status</h4>
+      <p class="card-value">{{ timeline.status or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Created At</h4>
+      <p class="card-value">{{ timeline.created_at or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Started At</h4>
+      <p class="card-value">{{ timeline.started_at or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Completed At</h4>
+      <p class="card-value">{{ timeline.completed_at or "—" }}</p>
+    </div>
+    <div class="card">
+      <h4>Duration</h4>
+      <p class="card-value">{% if timeline.duration_seconds is not none %}{{ "%.1f"|format(timeline.duration_seconds) }}s{% else %}—{% endif %}</p>
+    </div>
+  </div>
+</section>
+
+{% if timeline.waves %}
+<section class="report-section">
+  <h3>Waves</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Wave ID</th>
+        <th>Status</th>
+        <th>Started At</th>
+        <th>Completed At</th>
+        <th>Duration</th>
+        <th>Targets</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in timeline.waves %}
+      <tr>
+        <td>{{ w.wave_id }}</td>
+        <td>{{ w.status or "—" }}</td>
+        <td>{{ w.started_at or "—" }}</td>
+        <td>{{ w.completed_at or "—" }}</td>
+        <td>{% if w.duration_seconds is not none %}{{ "%.1f"|format(w.duration_seconds) }}s{% else %}—{% endif %}</td>
+        <td>{{ w.target_ids | length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if timeline.targets %}
+<section class="report-section">
+  <h3>Targets</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Target ID</th>
+        <th>Status</th>
+        <th>Environment</th>
+        <th>Ring</th>
+        <th>Region</th>
+        <th>Started At</th>
+        <th>Completed At</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in timeline.targets %}
+      <tr>
+        <td>{{ t.target_id }}</td>
+        <td>{{ t.status or "—" }}</td>
+        <td>{{ t.environment or "—" }}</td>
+        <td>{{ t.ring_name or "—" }}</td>
+        <td>{{ t.region or "—" }}</td>
+        <td>{{ t.started_at or "—" }}</td>
+        <td>{{ t.completed_at or "—" }}</td>
+        <td>{% if t.duration_seconds is not none %}{{ "%.1f"|format(t.duration_seconds) }}s{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if timeline.events %}
+<section class="report-section">
+  <h3>Events</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Type</th>
+        <th>Target</th>
+        <th>Wave</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in timeline.events %}
+      <tr>
+        <td>{{ e.created_at }}</td>
+        <td>{{ e.event_type }}</td>
+        <td>{{ e.target_id or "—" }}</td>
+        <td>{{ e.wave_id or "—" }}</td>
+        <td>{{ e.message or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<p><a href="{{ base_path }}/federation/plans/{{ federation_id }}/timeline?export=json">Export as JSON</a></p>
+
+{% else %}
+<div class="empty-state">
+  <p>No timeline data available for this federation.</p>
+</div>
+{% endif %}
+{% endblock %}

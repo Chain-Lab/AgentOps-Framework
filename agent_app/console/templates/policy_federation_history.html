@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Federation History — {{ federation_id }}</h2>
+
+<p><a href="{{ base_path }}/federation/plans/{{ federation_id }}">&larr; Back to Federation Plan Detail</a></p>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation observability service not configured.</p>
+</div>
+{% else %}
+
+{% if not events %}
+<div class="empty-state">
+  <p>No history events found for federation '{{ federation_id }}'.</p>
+</div>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Event Type</th>
+      <th>Target ID</th>
+      <th>Wave ID</th>
+      <th>Rollout ID</th>
+      <th>Environment</th>
+      <th>Message</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.target_id or "—" }}</td>
+      <td>{{ e.wave_id or "—" }}</td>
+      <td>{{ e.rollout_id or "—" }}</td>
+      <td>{{ e.environment or "—" }}</td>
+      <td>{{ e.message or "—" }}</td>
+      <td>{{ e.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+{% endblock %}
