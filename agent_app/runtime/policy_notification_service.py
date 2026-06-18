@@ -32,12 +32,14 @@ class PolicyNotificationService:
         channels: dict[str, Any] | None = None,
         audit_logger: Any | None = None,
         history_recorder: Any | None = None,
+        federation_recorder: Any | None = None,
     ) -> None:
         self._store = notification_store
         self._rule_store = rule_store
         self._channels = channels or {}
         self._audit_logger = audit_logger
         self._history_recorder = history_recorder
+        self._federation_recorder = federation_recorder
 
     async def notify_event(
         self,
@@ -149,6 +151,34 @@ class PolicyNotificationService:
                     source_type=source_type,
                     source_id=source_id,
                 )
+
+            # Best-effort federation recorder for federation-related notifications
+            federation_id_for_recorder = data.get("federation_id")
+            is_federation_source = (
+                source_type is not None and source_type.startswith("federation")
+            )
+            if self._federation_recorder is not None and (federation_id_for_recorder is not None or is_federation_source):
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    fed_event_type = (
+                        FederationHistoryEventType.NOTIFICATION_SENT
+                        if all_ok
+                        else FederationHistoryEventType.NOTIFICATION_FAILED
+                    )
+                    await self._federation_recorder.record(
+                        event_type=fed_event_type,
+                        federation_id=federation_id_for_recorder,
+                        source_type=source_type,
+                        source_id=source_id,
+                        message=f"Notification {'sent' if all_ok else 'failed'}: {msg.title}",
+                        metadata={
+                            "notification_id": msg.notification_id,
+                            "rule_id": rule.rule_id,
+                            "event_type": event_type,
+                        },
+                    )
+                except Exception:
+                    pass
 
             # Audit (best-effort)
             await self._audit(

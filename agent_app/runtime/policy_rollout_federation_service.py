@@ -59,6 +59,7 @@ class RolloutFederationService:
         rollout_service: Any = None,
         conflict_detector: RolloutConflictDetector | None = None,
         history_recorder: Any | None = None,
+        federation_recorder: Any | None = None,
         notification_service: Any | None = None,
         audit_logger: Any | None = None,
         event_store: Any | None = None,
@@ -71,6 +72,7 @@ class RolloutFederationService:
         self._rollout_service = rollout_service
         self._conflict_detector = conflict_detector
         self._history_recorder = history_recorder
+        self._federation_recorder = federation_recorder
         self._notification_service = notification_service
         self._audit_logger = audit_logger
         self._event_store = event_store
@@ -219,6 +221,24 @@ class RolloutFederationService:
 
         target = await self._target_store.create(target)
 
+        # Best-effort federation recorder
+        if self._federation_recorder is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                await self._federation_recorder.record(
+                    event_type=FederationHistoryEventType.TARGET_CREATED,
+                    target_id=target.target_id,
+                    tenant_id=tenant_id,
+                    environment=environment,
+                    ring_name=ring_name,
+                    region=region,
+                    actor_id=actor_id,
+                    message=f"Target '{name}' created",
+                    metadata={"name": name, "environment": environment},
+                )
+            except Exception:
+                pass
+
         await self._write_audit(
             "policy.federation.target.created",
             user_id=actor_id,
@@ -301,6 +321,26 @@ class RolloutFederationService:
 
         plan = await self._federation_store.create(plan)
 
+        # Best-effort federation recorder
+        if self._federation_recorder is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                await self._federation_recorder.record(
+                    event_type=FederationHistoryEventType.FEDERATION_CREATED,
+                    federation_id=plan.federation_id,
+                    tenant_id=context.tenant_id,
+                    actor_id=created_by,
+                    message=f"Federated plan '{name}' created",
+                    metadata={
+                        "name": name,
+                        "bundle_id": bundle_id,
+                        "target_count": len(effective_ids),
+                        "strategy": strategy.value,
+                    },
+                )
+            except Exception:
+                pass
+
         await self._write_audit(
             "policy.federation.plan.created",
             user_id=created_by,
@@ -365,6 +405,21 @@ class RolloutFederationService:
         })
         plan = await self._federation_store.update(plan)
 
+        # Best-effort federation recorder
+        if self._federation_recorder is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                await self._federation_recorder.record(
+                    event_type=FederationHistoryEventType.FEDERATION_STARTED,
+                    federation_id=federation_id,
+                    tenant_id=context.tenant_id,
+                    actor_id=actor_id,
+                    message=f"Federated plan '{federation_id}' started",
+                    metadata={"bundle_id": plan.bundle_id},
+                )
+            except Exception:
+                pass
+
         await self._write_audit(
             "policy.federation.plan.started",
             user_id=actor_id,
@@ -395,7 +450,32 @@ class RolloutFederationService:
         if self._conflict_detector is None:
             return []
 
-        return await self._conflict_detector.detect_conflicts(plan)
+        conflicts = await self._conflict_detector.detect_conflicts(plan)
+
+        # Best-effort federation recorder — record each conflict
+        if self._federation_recorder is not None and conflicts:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                for conflict in conflicts:
+                    try:
+                        await self._federation_recorder.record(
+                            event_type=FederationHistoryEventType.CONFLICT_DETECTED,
+                            federation_id=federation_id,
+                            target_id=conflict.target_id if hasattr(conflict, "target_id") else None,
+                            message=conflict.message,
+                            metadata={
+                                "conflict_type": conflict.conflict_type if hasattr(conflict, "conflict_type") else "",
+                                "severity": conflict.severity.value if hasattr(conflict.severity, "value") else str(conflict.severity),
+                                "target_id": conflict.target_id if hasattr(conflict, "target_id") else "",
+                                "message": conflict.message,
+                            },
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return conflicts
 
     # ------------------------------------------------------------------
     # Execution helpers
@@ -577,6 +657,23 @@ class RolloutFederationService:
                 "updated_at": datetime.now(timezone.utc),
             })
             plan = await self._federation_store.update(plan)
+
+            # Best-effort federation recorder — target blocked (missing)
+            if self._federation_recorder is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    await self._federation_recorder.record(
+                        event_type=FederationHistoryEventType.TARGET_EXECUTION_BLOCKED,
+                        federation_id=federation_id,
+                        target_id=execution.target_id,
+                        tenant_id=context.tenant_id,
+                        actor_id=actor_id,
+                        message=f"Target '{execution.target_id}' not found, blocked",
+                        metadata={"error": f"Target '{execution.target_id}' not found"},
+                    )
+                except Exception:
+                    pass
+
             return plan
 
         if target.status == FederatedTargetStatus.DISABLED:
@@ -590,6 +687,22 @@ class RolloutFederationService:
                 "updated_at": datetime.now(timezone.utc),
             })
             plan = await self._federation_store.update(plan)
+
+            # Best-effort federation recorder — target skipped (disabled)
+            if self._federation_recorder is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    await self._federation_recorder.record(
+                        event_type=FederationHistoryEventType.TARGET_EXECUTION_SKIPPED,
+                        federation_id=federation_id,
+                        target_id=execution.target_id,
+                        tenant_id=context.tenant_id,
+                        actor_id=actor_id,
+                        message=f"Target '{execution.target_id}' disabled, skipped",
+                    )
+                except Exception:
+                    pass
+
             return plan
 
         # Mark execution as RUNNING
@@ -604,6 +717,24 @@ class RolloutFederationService:
             "updated_at": now,
         })
         plan = await self._federation_store.update(plan)
+
+        # Best-effort federation recorder — target execution started
+        if self._federation_recorder is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                await self._federation_recorder.record(
+                    event_type=FederationHistoryEventType.TARGET_EXECUTION_STARTED,
+                    federation_id=federation_id,
+                    target_id=execution.target_id,
+                    tenant_id=context.tenant_id,
+                    environment=target.environment,
+                    ring_name=target.ring_name,
+                    region=target.region,
+                    actor_id=actor_id,
+                    message=f"Target execution '{execution.target_id}' started",
+                )
+            except Exception:
+                pass
 
         # Create child rollout
         child_steps = self._clone_template_steps_for_target(plan, target)
@@ -670,6 +801,24 @@ class RolloutFederationService:
                 bundle_id=plan.bundle_id,
                 data=event_data,
             )
+            # Best-effort federation recorder — target execution succeeded
+            if self._federation_recorder is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    await self._federation_recorder.record(
+                        event_type=FederationHistoryEventType.TARGET_EXECUTION_SUCCEEDED,
+                        federation_id=federation_id,
+                        target_id=execution.target_id,
+                        rollout_id=child_plan.rollout_id,
+                        tenant_id=context.tenant_id,
+                        environment=target.environment,
+                        ring_name=target.ring_name,
+                        region=target.region,
+                        actor_id=actor_id,
+                        message=f"Target execution '{execution.target_id}' succeeded",
+                    )
+                except Exception:
+                    pass
         elif exec_status == FederatedRolloutTargetExecutionStatus.FAILED:
             await self._write_audit(
                 "policy.federation.target.failed",
@@ -687,6 +836,25 @@ class RolloutFederationService:
                 "federation.plan.target_failed",
                 event_data,
             )
+            # Best-effort federation recorder — target execution failed
+            if self._federation_recorder is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    await self._federation_recorder.record(
+                        event_type=FederationHistoryEventType.TARGET_EXECUTION_FAILED,
+                        federation_id=federation_id,
+                        target_id=execution.target_id,
+                        rollout_id=child_plan.rollout_id,
+                        tenant_id=context.tenant_id,
+                        environment=target.environment,
+                        ring_name=target.ring_name,
+                        region=target.region,
+                        actor_id=actor_id,
+                        message=f"Target execution '{execution.target_id}' failed",
+                        metadata=exec_error or {},
+                    )
+                except Exception:
+                    pass
         elif exec_status == FederatedRolloutTargetExecutionStatus.BLOCKED:
             await self._write_audit(
                 "policy.federation.target.blocked",
@@ -698,6 +866,25 @@ class RolloutFederationService:
                 "federation.plan.target_blocked",
                 event_data,
             )
+            # Best-effort federation recorder — target execution blocked
+            if self._federation_recorder is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                    await self._federation_recorder.record(
+                        event_type=FederationHistoryEventType.TARGET_EXECUTION_BLOCKED,
+                        federation_id=federation_id,
+                        target_id=execution.target_id,
+                        rollout_id=child_plan.rollout_id,
+                        tenant_id=context.tenant_id,
+                        environment=target.environment,
+                        ring_name=target.ring_name,
+                        region=target.region,
+                        actor_id=actor_id,
+                        message=f"Target execution '{execution.target_id}' blocked",
+                        metadata=exec_error or {},
+                    )
+                except Exception:
+                    pass
 
         return plan
 
@@ -770,6 +957,21 @@ class RolloutFederationService:
             "updated_at": datetime.now(timezone.utc),
         })
         plan = await self._federation_store.update(plan)
+
+        # Best-effort federation recorder — federation cancelled
+        if self._federation_recorder is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+                await self._federation_recorder.record(
+                    event_type=FederationHistoryEventType.FEDERATION_CANCELLED,
+                    federation_id=federation_id,
+                    tenant_id=context.tenant_id,
+                    actor_id=actor_id,
+                    message=f"Federation '{federation_id}' cancelled",
+                    metadata={"reason": reason} if reason else {},
+                )
+            except Exception:
+                pass
 
         await self._write_audit(
             "policy.federation.plan.cancelled",

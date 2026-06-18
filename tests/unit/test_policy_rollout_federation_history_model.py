@@ -546,3 +546,46 @@ class TestFederationAnalyticsReport:
         assert len(report.region_summary) == 1
         assert len(report.tenant_summary) == 1
         assert report.metadata == {"generated_by": "scheduler"}
+
+
+# ===========================================================================
+# Federation Export Helpers
+# ===========================================================================
+
+class TestFederationExportHelpers:
+    """Tests for federation export helpers."""
+
+    def test_timeline_to_json(self) -> None:
+        from agent_app.runtime.policy_compliance_export import federation_timeline_to_json
+        tl = FederationTimeline(federation_id="frp_1", name="Test")
+        result = federation_timeline_to_json(tl)
+        assert isinstance(result, str)
+        assert "frp_1" in result
+        assert "Test" in result
+
+    def test_analytics_report_to_json(self) -> None:
+        from agent_app.runtime.policy_compliance_export import federation_analytics_report_to_json
+        report = FederationAnalyticsReport(
+            report_id="far_1",
+            generated_at=datetime.now(timezone.utc),
+            total_federations=5,
+        )
+        result = federation_analytics_report_to_json(report)
+        assert isinstance(result, str)
+        assert "far_1" in result
+
+    def test_analytics_report_to_csv_rows(self) -> None:
+        from agent_app.runtime.policy_compliance_export import federation_analytics_report_to_csv_rows
+        report = FederationAnalyticsReport(
+            report_id="far_1",
+            generated_at=datetime.now(timezone.utc),
+            total_federations=5,
+            environment_summary=[{"environment": "production", "total": 3}],
+        )
+        rows = federation_analytics_report_to_csv_rows(report)
+        assert isinstance(rows, list)
+        assert len(rows) > 0
+        # Should include summary row
+        sections = [r.get("section") for r in rows]
+        assert "summary" in sections
+        assert "target_health" in sections

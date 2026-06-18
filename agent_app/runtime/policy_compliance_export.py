@@ -167,3 +167,69 @@ def rollout_analytics_report_to_csv_rows(report: Any) -> list[dict[str, Any]]:
         })
 
     return rows
+
+
+def federation_timeline_to_json(timeline: Any) -> str:
+    """Export a FederationTimeline to JSON string."""
+    return timeline.model_dump_json(indent=2)
+
+
+def federation_analytics_report_to_json(report: Any) -> str:
+    """Export a FederationAnalyticsReport to JSON string."""
+    return report.model_dump_json(indent=2)
+
+
+def federation_analytics_report_to_csv_rows(report: Any) -> list[dict[str, Any]]:
+    """Export a FederationAnalyticsReport to flat CSV-compatible rows."""
+    rows: list[dict[str, Any]] = []
+    # Summary row
+    rows.append({
+        "section": "summary",
+        "report_id": report.report_id,
+        "generated_at": report.generated_at.isoformat(),
+        "window_start": report.window_start.isoformat() if report.window_start else "",
+        "window_end": report.window_end.isoformat() if report.window_end else "",
+        "total_federations": report.total_federations,
+        "active_federations": report.active_federations,
+        "completed_federations": report.completed_federations,
+        "failed_federations": report.failed_federations,
+        "cancelled_federations": report.cancelled_federations,
+        "blocked_federations": report.blocked_federations,
+    })
+    # Target health row
+    rows.append({
+        "section": "target_health",
+        "total_targets": report.target_health.total_targets,
+        "enabled_targets": report.target_health.enabled_targets,
+        "disabled_targets": report.target_health.disabled_targets,
+        "succeeded_targets": report.target_health.succeeded_targets,
+        "failed_targets": report.target_health.failed_targets,
+        "blocked_targets": report.target_health.blocked_targets,
+        "skipped_targets": report.target_health.skipped_targets,
+    })
+    # Wave outcomes row
+    rows.append({
+        "section": "wave_outcomes",
+        "total_waves": report.wave_outcomes.total_waves,
+        "succeeded_waves": report.wave_outcomes.succeeded_waves,
+        "failed_waves": report.wave_outcomes.failed_waves,
+        "blocked_waves": report.wave_outcomes.blocked_waves,
+        "pending_waves": report.wave_outcomes.pending_waves,
+    })
+    # Conflict summary row
+    rows.append({
+        "section": "conflicts",
+        "total_conflicts": report.conflicts.total_conflicts,
+        "error_conflicts": report.conflicts.error_conflicts,
+        "warning_conflicts": report.conflicts.warning_conflicts,
+    })
+    # Environment summary rows
+    for env in report.environment_summary:
+        rows.append({"section": "environment_summary", **env})
+    # Region summary rows
+    for reg in report.region_summary:
+        rows.append({"section": "region_summary", **reg})
+    # Tenant summary rows
+    for ten in report.tenant_summary:
+        rows.append({"section": "tenant_summary", **ten})
+    return rows
