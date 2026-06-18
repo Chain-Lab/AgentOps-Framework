@@ -818,6 +818,36 @@ def main() -> int:
     p.add_argument("--federation-id", required=True)
     p.set_defaults(func=_cmd_policy_federation_plan_conflicts)
 
+    # Phase 47: federation history/timeline/analytics subcommands
+    history_parser = federation_sub.add_parser("history", help="Show federation history events (Phase 47)")
+    history_parser.add_argument("--config", required=True, help="Config file path")
+    history_parser.add_argument("--federation-id", required=True, help="Federation plan ID (frp_...)")
+    history_parser.add_argument("--limit", type=int, default=50, help="Max events to show")
+    history_parser.set_defaults(func=_cmd_policy_federation_history)
+
+    timeline_parser = federation_sub.add_parser("timeline", help="Show federation timeline (Phase 47)")
+    timeline_parser.add_argument("--config", required=True, help="Config file path")
+    timeline_parser.add_argument("--federation-id", required=True, help="Federation plan ID")
+    timeline_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    timeline_parser.set_defaults(func=_cmd_policy_federation_timeline)
+
+    analytics_parser = federation_sub.add_parser("analytics", help="Show federation analytics report (Phase 47)")
+    analytics_sub = analytics_parser.add_subparsers(dest="federation_analytics_command")
+
+    analytics_show_parser = analytics_sub.add_parser("show", help="Show federation analytics report")
+    analytics_show_parser.add_argument("--config", required=True, help="Config file path")
+    analytics_show_parser.add_argument("--since", default=None, help="Window start (ISO datetime)")
+    analytics_show_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
+    analytics_show_parser.set_defaults(func=_cmd_policy_federation_analytics)
+
+    analytics_export_parser = analytics_sub.add_parser("export", help="Export federation analytics report")
+    analytics_export_parser.add_argument("--config", required=True, help="Config file path")
+    analytics_export_parser.add_argument("--format", required=True, choices=["json", "csv"], help="Export format")
+    analytics_export_parser.add_argument("--output", required=True, help="Output file path")
+    analytics_export_parser.add_argument("--since", default=None, help="Window start (ISO datetime)")
+    analytics_export_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
+    analytics_export_parser.set_defaults(func=_cmd_policy_federation_analytics_export)
+
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
     notification_sub = notification_parser.add_subparsers(dest="notification_command")
@@ -1299,6 +1329,15 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_federation_plan_conflicts(args))
             plan_parser.print_help()
             return 1
+        # Phase 47: federation history/timeline/analytics
+        if args.federation_command == "history":
+            return asyncio.run(_cmd_policy_federation_history(args))
+        if args.federation_command == "timeline":
+            return asyncio.run(_cmd_policy_federation_timeline(args))
+        if args.federation_command == "analytics":
+            if args.federation_analytics_command == "export":
+                return asyncio.run(_cmd_policy_federation_analytics_export(args))
+            return asyncio.run(_cmd_policy_federation_analytics(args))
         federation_parser.print_help()
         return 1
 
@@ -7474,6 +7513,289 @@ async def _cmd_policy_federation_plan_conflicts(args: argparse.Namespace) -> int
     except Exception as exc:
         print(f"Error detecting conflicts: {exc}", file=sys.stderr)
         return 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 47: Federation observability CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_history(args: argparse.Namespace) -> int:
+    """Show federation history events."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_observability_service", None)
+    if service is None:
+        print("Federation observability not configured.", file=sys.stderr)
+        return 1
+
+    if not args.federation_id:
+        print("Missing --federation-id.", file=sys.stderr)
+        return 1
+
+    try:
+        events = await service.list_history_events(
+            federation_id=args.federation_id,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing federation history: {exc}", file=sys.stderr)
+        return 1
+
+    if not events:
+        print(f"No history events found for federation '{args.federation_id}'.")
+        return 0
+
+    print(f"{'Event Type':<40} {'Target ID':<18} {'Wave ID':<18} {'Time':<20} {'Message':<30}")
+    print("-" * 130)
+    for e in events:
+        etype = (e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type))[:40]
+        target = (e.target_id or "")[:18]
+        wave = (e.wave_id or "")[:18]
+        ts = e.created_at.isoformat()[:19] if e.created_at else "?"
+        msg = (e.message or "")[:30]
+        print(f"{etype:<40} {target:<18} {wave:<18} {ts:<20} {msg:<30}")
+
+    return 0
+
+
+async def _cmd_policy_federation_timeline(args: argparse.Namespace) -> int:
+    """Show federation timeline."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_observability_service", None)
+    if service is None:
+        print("Federation observability not configured.", file=sys.stderr)
+        return 1
+
+    if not args.federation_id:
+        print("Missing --federation-id.", file=sys.stderr)
+        return 1
+
+    try:
+        timeline = await service.get_timeline(args.federation_id)
+    except Exception as exc:
+        print(f"Error fetching federation timeline: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        from agent_app.runtime.policy_compliance_export import federation_timeline_to_json
+        print(federation_timeline_to_json(timeline))
+        return 0
+
+    # Text output
+    name = timeline.name or args.federation_id
+    status = timeline.status or "unknown"
+    print(f"Federation: {name} ({args.federation_id})")
+    print(f"Status: {status}")
+    if timeline.bundle_id:
+        print(f"Bundle: {timeline.bundle_id}")
+    if timeline.strategy:
+        print(f"Strategy: {timeline.strategy}")
+    if timeline.started_at:
+        print(f"Started: {timeline.started_at.isoformat()[:19]}")
+    if timeline.completed_at:
+        print(f"Completed: {timeline.completed_at.isoformat()[:19]}")
+    if timeline.duration_seconds is not None:
+        print(f"Duration: {timeline.duration_seconds:.1f}s")
+
+    if timeline.waves:
+        print()
+        print(f"{'Wave ID':<18} {'Status':<12} {'Targets':<8} {'Duration':<10}")
+        print("-" * 50)
+        for wave in timeline.waves:
+            wid = wave.wave_id[:18]
+            wst = (wave.status or "-")[:12]
+            tcount = str(len(wave.target_ids))
+            dur = f"{wave.duration_seconds:.1f}s" if wave.duration_seconds is not None else "-"
+            print(f"{wid:<18} {wst:<12} {tcount:<8} {dur:<10}")
+
+    if timeline.targets:
+        print()
+        print(f"{'Target ID':<18} {'Status':<12} {'Environment':<14} {'Region':<12} {'Duration':<10}")
+        print("-" * 68)
+        for target in timeline.targets:
+            tid = target.target_id[:18]
+            tst = (target.status or "-")[:12]
+            env = (target.environment or "-")[:14]
+            reg = (target.region or "-")[:12]
+            dur = f"{target.duration_seconds:.1f}s" if target.duration_seconds is not None else "-"
+            print(f"{tid:<18} {tst:<12} {env:<14} {reg:<12} {dur:<10}")
+
+    return 0
+
+
+async def _cmd_policy_federation_analytics(args: argparse.Namespace) -> int:
+    """Show federation analytics report."""
+    from agent_app.config.loader import build_app
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_observability_service", None)
+    if service is None:
+        print("Federation observability not configured.", file=sys.stderr)
+        return 1
+
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since)
+        except ValueError:
+            print(f"Invalid --since datetime: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until)
+        except ValueError:
+            print(f"Invalid --until datetime: {args.until}", file=sys.stderr)
+            return 1
+
+    try:
+        report = await service.generate_report(
+            window_start=window_start,
+            window_end=window_end,
+        )
+    except Exception as exc:
+        print(f"Error generating federation analytics report: {exc}", file=sys.stderr)
+        return 1
+
+    # Summary cards
+    print("Federation Analytics Report")
+    print(f"  Report ID: {report.report_id}")
+    print(f"  Total: {report.total_federations}  Active: {report.active_federations}  "
+          f"Completed: {report.completed_federations}  Failed: {report.failed_federations}  "
+          f"Cancelled: {report.cancelled_federations}  Blocked: {report.blocked_federations}")
+
+    # Target health
+    print(f"\nTarget Health: {report.target_health.total_targets} started")
+    print(f"  Enabled: {report.target_health.enabled_targets}  Disabled: {report.target_health.disabled_targets}  "
+          f"Succeeded: {report.target_health.succeeded_targets}  Failed: {report.target_health.failed_targets}  "
+          f"Blocked: {report.target_health.blocked_targets}  Skipped: {report.target_health.skipped_targets}")
+
+    # Wave outcomes
+    print(f"\nWave Outcomes: {report.wave_outcomes.total_waves} total")
+    print(f"  Succeeded: {report.wave_outcomes.succeeded_waves}  Failed: {report.wave_outcomes.failed_waves}  "
+          f"Blocked: {report.wave_outcomes.blocked_waves}  Pending: {report.wave_outcomes.pending_waves}")
+
+    # Conflict summary
+    print(f"\nConflicts: {report.conflicts.total_conflicts} total")
+    print(f"  Errors: {report.conflicts.error_conflicts}  Warnings: {report.conflicts.warning_conflicts}")
+
+    # Top failed targets
+    if report.top_failed_targets:
+        print("\nTop Failed Targets:")
+        for item in report.top_failed_targets:
+            print(f"  {item.get('target_id', '?')}: {item.get('count', 0)}")
+
+    # Top blocked targets
+    if report.top_blocked_targets:
+        print("\nTop Blocked Targets:")
+        for item in report.top_blocked_targets:
+            print(f"  {item.get('target_id', '?')}: {item.get('count', 0)}")
+
+    return 0
+
+
+async def _cmd_policy_federation_analytics_export(args: argparse.Namespace) -> int:
+    """Export federation analytics report to file."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_compliance_export import (
+        federation_analytics_report_to_json,
+        federation_analytics_report_to_csv_rows,
+    )
+    from datetime import datetime
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_observability_service", None)
+    if service is None:
+        print("Federation observability not configured.", file=sys.stderr)
+        return 1
+
+    window_start = None
+    window_end = None
+    if args.since:
+        try:
+            window_start = datetime.fromisoformat(args.since)
+        except ValueError:
+            print(f"Invalid --since datetime: {args.since}", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            window_end = datetime.fromisoformat(args.until)
+        except ValueError:
+            print(f"Invalid --until datetime: {args.until}", file=sys.stderr)
+            return 1
+
+    try:
+        report = await service.generate_report(
+            window_start=window_start,
+            window_end=window_end,
+        )
+    except Exception as exc:
+        print(f"Error generating federation analytics report: {exc}", file=sys.stderr)
+        return 1
+
+    fmt = args.format
+    try:
+        if fmt == "json":
+            content = federation_analytics_report_to_json(report)
+        elif fmt == "csv":
+            rows = federation_analytics_report_to_csv_rows(report)
+            if rows:
+                import csv as csv_mod
+                from io import StringIO
+                all_keys: set[str] = set()
+                for r in rows:
+                    all_keys.update(r.keys())
+                fieldnames = sorted(all_keys)
+                buf = StringIO()
+                writer = csv_mod.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+                content = buf.getvalue()
+            else:
+                content = ""
+        else:
+            print(f"Unsupported export format: {fmt}", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"Error formatting export: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(args.output, "w") as f:
+            f.write(content)
+    except OSError as exc:
+        print(f"Error writing to {args.output}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Federation analytics report exported to {args.output} ({fmt}).")
+    return 0
 
 
 if __name__ == "__main__":
