@@ -1,0 +1,15 @@
+<h1>Create Federated Rollout Plan</h1>
+<form method="post" action="{{ base_path }}/federation/plans">
+  <input name="name" placeholder="Plan Name" required>
+  <input name="bundle_id" placeholder="Bundle ID" required>
+  <textarea name="target_ids" placeholder="Target IDs (one per line)" required></textarea>
+  <select name="strategy"><option value="sequential">Sequential</option><option value="parallel">Parallel</option><option value="wave">Wave</option></select>
+  <input name="step_id" placeholder="Step ID" value="step_activate">
+  <input name="step_type" placeholder="Step Type" value="activate">
+  <input name="step_environment" placeholder="Step Environment" value="prod">
+  <input name="step_ring_name" placeholder="Step Ring Name">
+  <input name="actor_id" placeholder="Actor ID" required>
+  <input name="permissions" placeholder="Permissions" value="policy.federation.plan.create">
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Create Plan</button>
+</form>

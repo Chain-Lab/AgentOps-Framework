@@ -1,0 +1,14 @@
+<h1>Conflicts for {{ federation_id }}</h1>
+<table>
+  <tr><th>Conflict ID</th><th>Type</th><th>Severity</th><th>Target</th><th>Message</th></tr>
+  {% for conflict in conflicts %}
+  <tr>
+    <td>{{ conflict.conflict_id }}</td>
+    <td>{{ conflict.conflict_type.value if conflict.conflict_type.value is defined else conflict.conflict_type }}</td>
+    <td>{{ conflict.severity.value if conflict.severity.value is defined else conflict.severity }}</td>
+    <td>{{ conflict.target_id or "—" }}</td>
+    <td>{{ conflict.message }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<a href="{{ base_path }}/federation/plans/{{ federation_id }}">Back to Plan</a>

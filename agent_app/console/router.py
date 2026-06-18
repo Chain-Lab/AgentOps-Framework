@@ -64,6 +64,9 @@ def build_policy_console_router(
     notification_service: Any = None,
     expiration_service: Any = None,
     rollout_history_service: Any = None,
+    rollout_federation_service: Any = None,
+    federated_rollout_target_store: Any = None,
+    federated_rollout_plan_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -96,6 +99,9 @@ def build_policy_console_router(
         notification_service: Optional notification service (Phase 44).
         expiration_service: Optional expiration service (Phase 44).
         rollout_history_service: Optional rollout history service (Phase 45).
+        rollout_federation_service: Optional rollout federation service (Phase 46).
+        federated_rollout_target_store: Optional federated rollout target store (Phase 46).
+        federated_rollout_plan_store: Optional federated rollout plan store (Phase 46).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -4178,6 +4184,400 @@ def build_policy_console_router(
                 "message": message,
                 "since_default": since_default,
                 "until_default": until_default,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 46 Task 8: Console federation pages
+    # -----------------------------------------------------------------------
+
+    async def _fed_form_dict(request: Request) -> dict[str, str]:
+        form = await request.form()
+        return {str(k): str(v) for k, v in form.items()}
+
+    def _fed_context_from_form(form: dict[str, str]):
+        from agent_app.core.context import RunContext
+        permissions = [p.strip() for p in form.get("permissions", "").split(",") if p.strip()]
+        return RunContext(
+            run_id="console-policy-federation",
+            user_id=form.get("actor_id") or "console",
+            tenant_id=form.get("tenant_id") or "default",
+            permissions=permissions,
+        )
+
+    @router.get("/federation/targets", response_class=HTMLResponse)
+    async def federation_targets_list(request: Request):
+        """List federation targets."""
+        targets: list = []
+        if federated_rollout_target_store is not None:
+            targets = await federated_rollout_target_store.list()
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_targets.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "targets": targets,
+                "error": None,
+            },
+        )
+
+    @router.post("/federation/targets")
+    async def federation_target_create(request: Request):
+        """Create a federation target."""
+        targets: list = []
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                await rollout_federation_service.create_target(
+                    name=form.get("name", ""),
+                    environment=form.get("environment", ""),
+                    tenant_id=form.get("tenant_id") or None,
+                    ring_name=form.get("ring_name") or None,
+                    region=form.get("region") or None,
+                    actor_id=form.get("actor_id") or None,
+                    context=context,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        if federated_rollout_target_store is not None:
+            targets = await federated_rollout_target_store.list()
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_targets.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "targets": targets,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/targets/{target_id}/disable")
+    async def federation_target_disable(request: Request, target_id: str):
+        """Disable a federation target."""
+        targets: list = []
+        error = None
+        if federated_rollout_target_store is not None:
+            try:
+                await federated_rollout_target_store.disable(target_id)
+            except Exception as exc:
+                error = str(exc)
+            targets = await federated_rollout_target_store.list()
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_targets.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "targets": targets,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/targets/{target_id}/enable")
+    async def federation_target_enable(request: Request, target_id: str):
+        """Enable a federation target."""
+        targets: list = []
+        error = None
+        if federated_rollout_target_store is not None:
+            try:
+                await federated_rollout_target_store.enable(target_id)
+            except Exception as exc:
+                error = str(exc)
+            targets = await federated_rollout_target_store.list()
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_targets.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "targets": targets,
+                "error": error,
+            },
+        )
+
+    @router.get("/federation/plans", response_class=HTMLResponse)
+    async def federation_plans_list(request: Request):
+        """List federated rollout plans."""
+        plans: list = []
+        if federated_rollout_plan_store is not None:
+            plans = await federated_rollout_plan_store.list()
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plans.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plans": plans,
+            },
+        )
+
+    @router.get("/federation/plans/new", response_class=HTMLResponse)
+    async def federation_plan_create_page(request: Request):
+        """Render federated rollout plan creation form."""
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_create.html",
+            {
+                "title": title,
+                "base_path": base_path,
+            },
+        )
+
+    @router.get("/federation/plans/{federation_id}", response_class=HTMLResponse)
+    async def federation_plan_detail(request: Request, federation_id: str):
+        """Federated rollout plan detail page."""
+        plan = None
+        error = None
+        if federated_rollout_plan_store is None:
+            error = "Federated rollout plan store not configured."
+        else:
+            plan = await federated_rollout_plan_store.get(federation_id)
+            if plan is None:
+                error = f"Federated plan '{federation_id}' not found."
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/plans")
+    async def federation_plan_create(request: Request):
+        """Create a new federated rollout plan."""
+        plan = None
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                target_ids_raw = form.get("target_ids", "")
+                target_ids = [t.strip() for t in target_ids_raw.splitlines() if t.strip()]
+                strategy_str = form.get("strategy", "sequential")
+                try:
+                    strategy = FederationExecutionStrategy(strategy_str)
+                except ValueError:
+                    strategy = FederationExecutionStrategy.SEQUENTIAL
+                from agent_app.governance.policy_rollout import RolloutStep, RolloutStepType
+                step_type_str = form.get("step_type", "activate")
+                try:
+                    step_type = RolloutStepType(step_type_str)
+                except ValueError:
+                    step_type = RolloutStepType.ACTIVATE
+                step = RolloutStep(
+                    step_id=form.get("step_id", "step_activate"),
+                    step_type=step_type,
+                    environment=form.get("step_environment", "prod"),
+                    ring_name=form.get("step_ring_name") or None,
+                )
+                plan = await rollout_federation_service.create_federated_plan(
+                    name=form.get("name", ""),
+                    bundle_id=form.get("bundle_id", ""),
+                    target_ids=target_ids,
+                    rollout_template_steps=[step],
+                    created_by=form.get("actor_id", ""),
+                    context=context,
+                    strategy=strategy,
+                    reason=form.get("reason") or None,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/plans/{federation_id}/start")
+    async def federation_plan_start(request: Request, federation_id: str):
+        """Start a federated rollout plan."""
+        plan = None
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                plan = await rollout_federation_service.start_federated_plan(
+                    federation_id=federation_id,
+                    actor_id=form.get("actor_id", ""),
+                    context=context,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        if plan is None and federated_rollout_plan_store is not None:
+            plan = await federated_rollout_plan_store.get(federation_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/plans/{federation_id}/run-next")
+    async def federation_plan_run_next(request: Request, federation_id: str):
+        """Run next target in a federated rollout plan."""
+        plan = None
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                plan = await rollout_federation_service.run_next_target(
+                    federation_id=federation_id,
+                    actor_id=form.get("actor_id", ""),
+                    context=context,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        if plan is None and federated_rollout_plan_store is not None:
+            plan = await federated_rollout_plan_store.get(federation_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/plans/{federation_id}/run-all")
+    async def federation_plan_run_all(request: Request, federation_id: str):
+        """Run all available targets in a federated rollout plan."""
+        plan = None
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                plan = await rollout_federation_service.run_all_available(
+                    federation_id=federation_id,
+                    actor_id=form.get("actor_id", ""),
+                    context=context,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        if plan is None and federated_rollout_plan_store is not None:
+            plan = await federated_rollout_plan_store.get(federation_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.post("/federation/plans/{federation_id}/cancel")
+    async def federation_plan_cancel(request: Request, federation_id: str):
+        """Cancel a federated rollout plan."""
+        plan = None
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                form = await _fed_form_dict(request)
+                context = _fed_context_from_form(form)
+                plan = await rollout_federation_service.cancel_federated_plan(
+                    federation_id=federation_id,
+                    actor_id=form.get("actor_id", ""),
+                    context=context,
+                    reason=form.get("reason") or None,
+                )
+            except PermissionError as exc:
+                error = f"Permission denied: {exc}"
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        if plan is None and federated_rollout_plan_store is not None:
+            plan = await federated_rollout_plan_store.get(federation_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_plan_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "plan": plan,
+                "error": error,
+            },
+        )
+
+    @router.get("/federation/plans/{federation_id}/conflicts", response_class=HTMLResponse)
+    async def federation_plan_conflicts(request: Request, federation_id: str):
+        """Detect and display conflicts for a federated plan."""
+        conflicts: list = []
+        error = None
+        if rollout_federation_service is None:
+            error = "Rollout federation service not configured."
+        else:
+            try:
+                conflicts = await rollout_federation_service.detect_conflicts(
+                    federation_id=federation_id,
+                )
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+            except Exception as exc:
+                error = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_conflicts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "federation_id": federation_id,
+                "conflicts": conflicts,
+                "error": error,
             },
         )
 

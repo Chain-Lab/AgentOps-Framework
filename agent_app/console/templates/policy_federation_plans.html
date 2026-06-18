@@ -1,0 +1,15 @@
+<h1>Federated Rollout Plans</h1>
+<table>
+  <tr><th>Federation ID</th><th>Name</th><th>Status</th><th>Strategy</th><th>Bundle</th><th>Progress</th></tr>
+  {% for plan in plans %}
+  <tr>
+    <td><a href="{{ base_path }}/federation/plans/{{ plan.federation_id }}">{{ plan.federation_id }}</a></td>
+    <td>{{ plan.name }}</td>
+    <td>{{ plan.status.value if plan.status.value is defined else plan.status }}</td>
+    <td>{{ plan.strategy.value if plan.strategy.value is defined else plan.strategy }}</td>
+    <td>{{ plan.bundle_id }}</td>
+    <td>{{ plan.executions|selectattr('status.value', 'eq', 'succeeded')|list|length }}/{{ plan.executions|length }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<a href="{{ base_path }}/federation/plans/new">Create New Plan</a>

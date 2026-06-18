@@ -1,0 +1,21 @@
+<h1>Federated Rollout Plan: {{ plan.federation_id }}</h1>
+<p>Name: {{ plan.name }} | Bundle: {{ plan.bundle_id }} | Strategy: {{ plan.strategy.value if plan.strategy.value is defined else plan.strategy }} | Status: {{ plan.status.value if plan.status.value is defined else plan.status }}</p>
+<table>
+  <tr><th>Execution</th><th>Target</th><th>Status</th><th>Rollout</th><th>Error</th></tr>
+  {% for execution in plan.executions %}
+  <tr>
+    <td>{{ execution.execution_id }}</td>
+    <td>{{ execution.target_id }}</td>
+    <td>{{ execution.status.value if execution.status.value is defined else execution.status }}</td>
+    <td>{{ execution.rollout_id or "—" }}</td>
+    <td>{{ execution.error.message if execution.error else "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div>
+  <form method="post" action="{{ base_path }}/federation/plans/{{ plan.federation_id }}/start" style="display:inline"><input name="actor_id" placeholder="Actor"><input name="permissions" value="policy.federation.plan.start"><button>Start</button></form>
+  <form method="post" action="{{ base_path }}/federation/plans/{{ plan.federation_id }}/run-next" style="display:inline"><input name="actor_id" placeholder="Actor"><input name="permissions" value="policy.federation.plan.execute"><button>Run Next</button></form>
+  <form method="post" action="{{ base_path }}/federation/plans/{{ plan.federation_id }}/run-all" style="display:inline"><input name="actor_id" placeholder="Actor"><input name="permissions" value="policy.federation.plan.execute"><button>Run All</button></form>
+  <form method="post" action="{{ base_path }}/federation/plans/{{ plan.federation_id }}/cancel" style="display:inline"><input name="actor_id" placeholder="Actor"><input name="permissions" value="policy.federation.plan.cancel"><input name="reason" placeholder="Reason"><button>Cancel</button></form>
+</div>
+<a href="{{ base_path }}/federation/plans/{{ plan.federation_id }}/conflicts">View Conflicts</a>

@@ -1,0 +1,30 @@
+<h1>Federation Targets</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="{{ base_path }}/federation/targets">
+  <input name="name" placeholder="Name" required>
+  <input name="environment" placeholder="Environment" required>
+  <input name="ring_name" placeholder="Ring">
+  <input name="region" placeholder="Region">
+  <input name="tenant_id" placeholder="Tenant ID">
+  <input name="actor_id" placeholder="Actor ID">
+  <input name="permissions" placeholder="Permissions">
+  <button type="submit">Create Target</button>
+</form>
+<table>
+  <tr><th>Target ID</th><th>Name</th><th>Tenant</th><th>Environment</th><th>Ring</th><th>Region</th><th>Status</th><th>Actions</th></tr>
+  {% for target in targets %}
+  <tr>
+    <td>{{ target.target_id }}</td>
+    <td>{{ target.name }}</td>
+    <td>{{ target.tenant_id or "—" }}</td>
+    <td>{{ target.environment }}</td>
+    <td>{{ target.ring_name or "—" }}</td>
+    <td>{{ target.region or "—" }}</td>
+    <td>{{ target.status.value if target.status.value is defined else target.status }}</td>
+    <td>
+      <form method="post" action="{{ base_path }}/federation/targets/{{ target.target_id }}/disable" style="display:inline"><input name="actor_id"><input name="permissions" value="policy.federation.target.disable"><button>Disable</button></form>
+      <form method="post" action="{{ base_path }}/federation/targets/{{ target.target_id }}/enable" style="display:inline"><input name="actor_id"><input name="permissions" value="policy.federation.target.enable"><button>Enable</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>

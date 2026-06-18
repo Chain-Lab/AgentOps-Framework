@@ -1,0 +1,2 @@
+<h1>Federation Target: {{ target.target_id }}</h1>
+<p>Name: {{ target.name }} | Environment: {{ target.environment }} | Ring: {{ target.ring_name or "—" }} | Region: {{ target.region or "—" }} | Status: {{ target.status.value if target.status.value is defined else target.status }}</p>
