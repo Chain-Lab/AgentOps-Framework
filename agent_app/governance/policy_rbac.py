@@ -41,6 +41,16 @@ class PolicyReleasePermission(StrEnum):
         ROLLOUT_APPROVAL_APPROVE: Approve a rollout step (requires explicit permission).
         ROLLOUT_APPROVAL_REJECT: Reject a rollout step (requires explicit permission).
         ROLLOUT_APPROVAL_VIEW: View rollout approval state (default-allowed).
+        FEDERATION_TARGET_CREATE: Create a federated rollout target.
+        FEDERATION_TARGET_VIEW: View federated rollout targets (default-allowed).
+        FEDERATION_TARGET_ENABLE: Enable a federated rollout target.
+        FEDERATION_TARGET_DISABLE: Disable a federated rollout target.
+        FEDERATION_PLAN_CREATE: Create a federated rollout plan.
+        FEDERATION_PLAN_START: Start a federated rollout plan.
+        FEDERATION_PLAN_EXECUTE: Execute a federated rollout plan.
+        FEDERATION_PLAN_CANCEL: Cancel a federated rollout plan.
+        FEDERATION_PLAN_VIEW: View federated rollout plans (default-allowed).
+        FEDERATION_CONFLICT_VIEW: View federated rollout conflicts (default-allowed).
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -102,6 +112,16 @@ class PolicyReleasePermission(StrEnum):
     ROLLOUT_HISTORY_VIEW = "policy.rollout.history.view"
     ROLLOUT_ANALYTICS_VIEW = "policy.rollout.analytics.view"
     ROLLOUT_ANALYTICS_EXPORT = "policy.rollout.analytics.export"
+    FEDERATION_TARGET_CREATE = "policy.federation.target.create"
+    FEDERATION_TARGET_VIEW = "policy.federation.target.view"
+    FEDERATION_TARGET_ENABLE = "policy.federation.target.enable"
+    FEDERATION_TARGET_DISABLE = "policy.federation.target.disable"
+    FEDERATION_PLAN_CREATE = "policy.federation.plan.create"
+    FEDERATION_PLAN_START = "policy.federation.plan.start"
+    FEDERATION_PLAN_EXECUTE = "policy.federation.plan.execute"
+    FEDERATION_PLAN_CANCEL = "policy.federation.plan.cancel"
+    FEDERATION_PLAN_VIEW = "policy.federation.plan.view"
+    FEDERATION_CONFLICT_VIEW = "policy.federation.conflict.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -124,6 +144,9 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.EXPIRATION_VIEW,
     PolicyReleasePermission.ROLLOUT_HISTORY_VIEW,
     PolicyReleasePermission.ROLLOUT_ANALYTICS_VIEW,
+    PolicyReleasePermission.FEDERATION_TARGET_VIEW,
+    PolicyReleasePermission.FEDERATION_PLAN_VIEW,
+    PolicyReleasePermission.FEDERATION_CONFLICT_VIEW,
 }
 
 

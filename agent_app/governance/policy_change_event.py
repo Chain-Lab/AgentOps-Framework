@@ -84,6 +84,15 @@ class PolicyChangeEventType(StrEnum):
     ROLLOUT_ANALYTICS_EXPORT_GENERATED = "policy.rollout.analytics.export_generated"
     ROLLOUT_ANALYTICS_EXPORT_FAILED = "policy.rollout.analytics.export_failed"
     ROLLOUT_ANALYTICS_PERMISSION_DENIED = "policy.rollout.analytics.permission_denied"
+    FEDERATION_TARGET_CREATED = "policy.federation.target.created"
+    FEDERATION_TARGET_ENABLED = "policy.federation.target.enabled"
+    FEDERATION_TARGET_DISABLED = "policy.federation.target.disabled"
+    FEDERATION_PLAN_CREATED = "policy.federation.plan.created"
+    FEDERATION_PLAN_STARTED = "policy.federation.plan.started"
+    FEDERATION_PLAN_COMPLETED = "policy.federation.plan.completed"
+    FEDERATION_PLAN_FAILED = "policy.federation.plan.failed"
+    FEDERATION_PLAN_CANCELLED = "policy.federation.plan.cancelled"
+    FEDERATION_CONFLICT_DETECTED = "policy.federation.conflict.detected"
 
 
 class PolicyChangeEvent(BaseModel):
