@@ -582,6 +582,12 @@ class RolloutFederationConfig(BaseModel):
     conflict_policy: RolloutFederationConflictPolicyConfig = Field(default_factory=RolloutFederationConflictPolicyConfig, description="Federation conflict policy")
 
 
+class RolloutFederationHistoryConfig(BaseModel):
+    """Configuration for rollout federation history."""
+    enabled: bool = False
+    store: PolicyReleaseStoreConfig | None = None
+
+
 class PolicyReleaseConfig(BaseModel):
     """Policy release gate configuration (Phase 29, extended Phase 30/31)."""
 
@@ -664,6 +670,10 @@ class PolicyReleaseConfig(BaseModel):
     rollout_federation: RolloutFederationConfig | None = Field(
         default=None,
         description="Rollout federation config (Phase 46)",
+    )
+    rollout_federation_history: RolloutFederationHistoryConfig | None = Field(
+        default=None,
+        description="Rollout federation history config (Phase 47)",
     )
 
 

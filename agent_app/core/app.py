@@ -234,6 +234,33 @@ class AgentApp:
     def rollout_federation_service(self, value: Any) -> None:
         self._rollout_federation_service = value
 
+    @property
+    def federation_history_store(self) -> Any:
+        """Phase 47: Return the federation history store, if configured."""
+        return getattr(self, "_federation_history_store", None)
+
+    @federation_history_store.setter
+    def federation_history_store(self, value: Any) -> None:
+        self._federation_history_store = value
+
+    @property
+    def federation_history_recorder(self) -> Any:
+        """Phase 47: Return the federation history recorder, if configured."""
+        return getattr(self, "_federation_history_recorder", None)
+
+    @federation_history_recorder.setter
+    def federation_history_recorder(self, value: Any) -> None:
+        self._federation_history_recorder = value
+
+    @property
+    def federation_observability_service(self) -> Any:
+        """Phase 47: Return the federation observability service, if configured."""
+        return getattr(self, "_federation_observability_service", None)
+
+    @federation_observability_service.setter
+    def federation_observability_service(self, value: Any) -> None:
+        self._federation_observability_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

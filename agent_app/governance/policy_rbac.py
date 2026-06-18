@@ -122,6 +122,9 @@ class PolicyReleasePermission(StrEnum):
     FEDERATION_PLAN_CANCEL = "policy.federation.plan.cancel"
     FEDERATION_PLAN_VIEW = "policy.federation.plan.view"
     FEDERATION_CONFLICT_VIEW = "policy.federation.conflict.view"
+    FEDERATION_HISTORY_VIEW = "policy.federation.history.view"
+    FEDERATION_ANALYTICS_VIEW = "policy.federation.analytics.view"
+    FEDERATION_ANALYTICS_EXPORT = "policy.federation.analytics.export"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -147,6 +150,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.FEDERATION_TARGET_VIEW,
     PolicyReleasePermission.FEDERATION_PLAN_VIEW,
     PolicyReleasePermission.FEDERATION_CONFLICT_VIEW,
+    PolicyReleasePermission.FEDERATION_HISTORY_VIEW,
+    PolicyReleasePermission.FEDERATION_ANALYTICS_VIEW,
 }
 
 

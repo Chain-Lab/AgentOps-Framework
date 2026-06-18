@@ -93,6 +93,13 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_PLAN_FAILED = "policy.federation.plan.failed"
     FEDERATION_PLAN_CANCELLED = "policy.federation.plan.cancelled"
     FEDERATION_CONFLICT_DETECTED = "policy.federation.conflict.detected"
+    FEDERATION_HISTORY_RECORDED = "policy.federation.history.recorded"
+    FEDERATION_HISTORY_VIEWED = "policy.federation.history.viewed"
+    FEDERATION_TIMELINE_GENERATED = "policy.federation.timeline.generated"
+    FEDERATION_ANALYTICS_GENERATED = "policy.federation.analytics.generated"
+    FEDERATION_ANALYTICS_EXPORT_GENERATED = "policy.federation.analytics.export_generated"
+    FEDERATION_ANALYTICS_EXPORT_FAILED = "policy.federation.analytics.export_failed"
+    FEDERATION_ANALYTICS_PERMISSION_DENIED = "policy.federation.analytics.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

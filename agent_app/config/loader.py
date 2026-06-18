@@ -1014,6 +1014,41 @@ def build_app(
         except Exception:
             pass  # Phase 46 wiring failure should not break existing behavior
 
+        # -- Phase 47: Rollout Federation History --
+        try:
+            fed_hist_cfg = getattr(release_cfg, "rollout_federation_history", None) if release_config else None
+            if fed_hist_cfg and fed_hist_cfg.enabled:
+                from agent_app.runtime.policy_rollout_federation_history_store import create_federation_history_store
+                from agent_app.runtime.policy_rollout_federation_history_recorder import FederationHistoryRecorder
+                from agent_app.runtime.policy_rollout_federation_observability_service import FederationObservabilityService
+
+                fed_hist_store = create_federation_history_store(
+                    type=fed_hist_cfg.store.type if fed_hist_cfg.store else "memory",
+                    path=fed_hist_cfg.store.path if fed_hist_cfg.store else None,
+                )
+                fed_hist_recorder = FederationHistoryRecorder(
+                    history_store=fed_hist_store,
+                    audit_logger=audit_logger,
+                )
+                fed_obs_service = FederationObservabilityService(
+                    history_store=fed_hist_store,
+                    federation_plan_store=app.federated_rollout_plan_store,
+                    federation_target_store=app.federated_rollout_target_store,
+                    audit_logger=audit_logger,
+                )
+                app.federation_history_store = fed_hist_store
+                app.federation_history_recorder = fed_hist_recorder
+                app.federation_observability_service = fed_obs_service
+
+                # Inject recorder into federation service
+                if app.rollout_federation_service is not None:
+                    app.rollout_federation_service._federation_recorder = fed_hist_recorder
+                # Inject recorder into notification service
+                if app.notification_service is not None:
+                    app.notification_service._federation_recorder = fed_hist_recorder
+        except Exception:
+            pass  # Phase 47 wiring failure should not break existing behavior
+
     app._release_config = release_config
     return app
 

@@ -99,13 +99,20 @@ class TestPolicyChangeEventType:
             "policy.federation.plan.failed",
             "policy.federation.plan.cancelled",
             "policy.federation.conflict.detected",
+            "policy.federation.history.recorded",
+            "policy.federation.history.viewed",
+            "policy.federation.timeline.generated",
+            "policy.federation.analytics.generated",
+            "policy.federation.analytics.export_generated",
+            "policy.federation.analytics.export_failed",
+            "policy.federation.analytics.permission_denied",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 81 enum members defined (55 previous + 10 notification/expiration + 7 rollout history + 9 federation)."""
-        assert len(PolicyChangeEventType) == 81
+        """Exactly 88 enum members defined (81 previous + 7 Phase 47 federation history)."""
+        assert len(PolicyChangeEventType) == 88
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""
