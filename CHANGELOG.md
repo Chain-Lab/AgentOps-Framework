@@ -2,6 +2,25 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.35.0 — Phase 47: Policy Rollout Federation Observability and Reporting
+
+### Added
+
+- FederationHistoryEventType and FederationHistoryEvent models (23 event types)
+- FederationTargetTimeline, FederationWaveTimeline, FederationTimeline models
+- FederationTargetHealthSummary, FederationWaveOutcomeSummary, FederationConflictSummary models
+- FederationAnalyticsReport model
+- FederationHistoryStore (InMemory + SQLite) with append-only semantics
+- FederationHistoryRecorder for normalized event recording
+- FederationObservabilityService (get_timeline, generate_report, list_history_events)
+- RolloutFederationService integration with federation recorder
+- PolicyNotificationService integration for federation-related notification events
+- Federation export helpers (JSON timeline/report, CSV analytics rows)
+- 3 RBAC permissions: FEDERATION_HISTORY_VIEW, FEDERATION_ANALYTICS_VIEW, FEDERATION_ANALYTICS_EXPORT
+- 7 change event types (81 → 88 total)
+- CLI commands: federation history, timeline, analytics, analytics export
+- Console pages: federation history, timeline, analytics
+
 ## v0.34.0 — Phase 46: Policy Rollout Federation and Conflict Detection
 
 ### Added

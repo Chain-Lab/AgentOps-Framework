@@ -3654,3 +3654,104 @@ Federation emits audit and policy change events for target and plan lifecycle op
 - Parallel strategy is logical, not concurrent execution.
 - Conflict detection depends on configured stores and recorded state.
 - Child rollout cancellation is deferred; federation cancellation marks federation state and pending/running executions only.
+
+## Phase 47: Policy Rollout Federation Observability and Reporting
+
+Phase 47 adds federation-focused observability to make federated rollout execution explainable and measurable. It builds on Phase 45 rollout history and Phase 46 federation state.
+
+### Federation History Events
+
+The `FederationHistoryEventType` enum defines 23 event types covering:
+- Federation lifecycle: CREATED, STARTED, COMPLETED, FAILED, CANCELLED, BLOCKED
+- Target lifecycle: TARGET_CREATED, TARGET_ENABLED, TARGET_DISABLED
+- Target execution: STARTED, SUCCEEDED, FAILED, BLOCKED, SKIPPED, CANCELLED
+- Wave execution: WAVE_STARTED, WAVE_SUCCEEDED, WAVE_FAILED, WAVE_BLOCKED
+- Conflicts: CONFLICT_DETECTED
+- Notifications: NOTIFICATION_CREATED, NOTIFICATION_SENT, NOTIFICATION_FAILED
+
+Events are recorded via `FederationHistoryRecorder` and stored in `FederationHistoryStore` (InMemory or SQLite).
+
+### Federation Timeline
+
+The `FederationTimeline` model reconstructs the full history of a federated rollout:
+- Federation-level metadata (name, bundle, strategy, status, timing)
+- Wave timelines with status and duration
+- Target timelines with status, duration, and child rollout references
+- All events in chronological order
+- Conflict records
+
+### Federation Analytics Report
+
+The `FederationAnalyticsReport` model provides aggregated analytics:
+- Federation counts (total, active, completed, failed, cancelled, blocked)
+- Target health summary (total, enabled, disabled, succeeded, failed, blocked, skipped)
+- Wave outcome summary (total, succeeded, failed, blocked, pending)
+- Conflict summary (total, error, warning, by type)
+- Top failed and blocked targets
+- Environment, region, and tenant summaries
+
+### CLI Commands
+
+```bash
+# View federation history events
+agentapp policy federation history --config agentapp.yaml --federation-id frp_abc123
+
+# View federation timeline
+agentapp policy federation timeline --config agentapp.yaml --federation-id frp_abc123
+
+# View federation timeline as JSON
+agentapp policy federation timeline --config agentapp.yaml --federation-id frp_abc123 --json
+
+# View federation analytics
+agentapp policy federation analytics --config agentapp.yaml
+
+# View analytics with time window
+agentapp policy federation analytics --config agentapp.yaml --since 2026-06-01T00:00:00Z
+
+# Export analytics as JSON
+agentapp policy federation analytics export --config agentapp.yaml --format json --output report.json
+
+# Export analytics as CSV
+agentapp policy federation analytics export --config agentapp.yaml --format csv --output report.csv
+```
+
+### Console Pages
+
+- `/policy-console/federation/plans/{federation_id}/history` — Federation history events
+- `/policy-console/federation/plans/{federation_id}/timeline` — Federation timeline view
+- `/policy-console/federation/analytics` — Federation analytics with time window form and export
+
+### Export Formats
+
+- **JSON**: Full timeline or analytics report via `federation_timeline_to_json()` / `federation_analytics_report_to_json()`
+- **CSV**: Flat rows with sections (summary, target_health, wave_outcomes, conflicts, environment_summary, region_summary, tenant_summary)
+
+### RBAC Permissions
+
+| Permission | Description |
+|-----------|-------------|
+| `policy.federation.history.view` | View federation history events (default-allowed) |
+| `policy.federation.analytics.view` | View federation analytics (default-allowed) |
+| `policy.federation.analytics.export` | Export federation analytics reports |
+
+### Configuration
+
+```yaml
+governance:
+  rollout_federation_history:
+    enabled: true
+    store:
+      type: sqlite
+      path: .agent_app/policy_federation_history.db
+```
+
+### Known Limitations
+
+- Federation observability is framework-level, not distributed tracing
+- Analytics depend on recorder/event coverage
+- No external BI integration
+- No charts beyond console tables
+- No OpenTelemetry exporter
+- No persisted scheduled reports
+- Existing old federations may have partial history if recorder was disabled
+- Parallel strategy remains logical/deterministic, not concurrent execution
