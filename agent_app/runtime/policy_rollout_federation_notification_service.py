@@ -1,6 +1,7 @@
 """Federation notification service — enqueue and dispatch federation approval notifications.
 
 Phase 49: Federation Notification Service.
+Phase 50: DLQ Integration + Retry Policy.
 """
 from __future__ import annotations
 
@@ -11,15 +12,22 @@ from typing import Any
 
 from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationChannel,
+    FederationNotificationDeadLetter,
     FederationNotificationDelivery,
+    FederationNotificationDLQReason,
+    FederationNotificationDLQStatus,
     FederationNotificationDispatchResult,
     FederationNotificationEventType,
     FederationNotificationMessage,
     FederationNotificationPolicy,
+    FederationNotificationRetryPolicy,
     FederationNotificationStatus,
 )
 from agent_app.runtime.policy_rollout_federation_notification_adapters import (
     FederationNotificationAdapter,
+)
+from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
+    FederationNotificationDLQStore,
 )
 from agent_app.runtime.policy_rollout_federation_notification_store import (
     FederationNotificationStore,
@@ -39,6 +47,9 @@ class FederationNotificationService:
         audit_logger: Any | None = None,
         change_event_store: Any | None = None,
         history_recorder: Any | None = None,
+        dlq_store: FederationNotificationDLQStore | None = None,
+        retry_policy: FederationNotificationRetryPolicy | None = None,
+        by_channel_retry_policy: dict[str, FederationNotificationRetryPolicy] | None = None,
     ) -> None:
         self._store = notification_store
         self._adapters = adapters
@@ -46,6 +57,9 @@ class FederationNotificationService:
         self._audit_logger = audit_logger
         self._change_event_store = change_event_store
         self._history_recorder = history_recorder
+        self._dlq_store = dlq_store
+        self._retry_policy = retry_policy
+        self._by_channel_retry_policy = by_channel_retry_policy
 
     # ------------------------------------------------------------------
     # Public enqueue methods
@@ -264,6 +278,23 @@ class FederationNotificationService:
         return messages
 
     # ------------------------------------------------------------------
+    # Retry policy
+    # ------------------------------------------------------------------
+
+    def get_retry_policy_for_channel(self, channel: FederationNotificationChannel) -> FederationNotificationRetryPolicy | None:
+        """Return the retry policy for a specific channel, falling back to default.
+
+        Returns None when no retry policy is configured (neither default nor
+        channel-specific), so that callers can fall back to the notification
+        policy's max_attempts and backoff_seconds for backward compatibility.
+        """
+        if self._by_channel_retry_policy:
+            override = self._by_channel_retry_policy.get(channel.value)
+            if override is not None:
+                return override
+        return self._retry_policy
+
+    # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
 
@@ -280,14 +311,39 @@ class FederationNotificationService:
         for message in pending:
             total_dispatched += 1
             adapter = self._adapters.get(message.channel)
+            channel_retry_policy = self.get_retry_policy_for_channel(message.channel)
+
+            # Determine max_attempts and backoff: use channel retry policy if
+            # configured, otherwise fall back to notification policy fields on
+            # the message itself for backward compatibility.
+            if channel_retry_policy is not None:
+                max_attempts = channel_retry_policy.max_attempts
+                backoff_seconds = channel_retry_policy.backoff_seconds
+                send_to_dlq = channel_retry_policy.send_to_dlq
+            else:
+                max_attempts = message.max_attempts
+                backoff_seconds = self._policy.backoff_seconds
+                send_to_dlq = False  # No DLQ when no retry policy configured
 
             if adapter is None:
+                no_adapter_error = f"No adapter for channel: {message.channel.value}"
+                # Check if we should send to DLQ
+                if (
+                    message.attempt_count + 1 >= max_attempts
+                    and send_to_dlq
+                    and self._dlq_store is not None
+                ):
+                    await self._create_dlq_entry(
+                        message=message,
+                        reason=FederationNotificationDLQReason.ADAPTER_ERROR,
+                        error=no_adapter_error,
+                    )
                 await self._store.mark_failed(
                     message.notification_id,
-                    error=f"No adapter for channel: {message.channel.value}",
+                    error=no_adapter_error,
                 )
                 total_failed += 1
-                errors.append(f"No adapter for channel: {message.channel.value}")
+                errors.append(no_adapter_error)
                 continue
 
             try:
@@ -305,9 +361,9 @@ class FederationNotificationService:
                 total_sent += 1
             elif delivery.status == FederationNotificationStatus.FAILED:
                 error_msg = delivery.error or "Unknown delivery failure"
-                if message.attempt_count + 1 < message.max_attempts:
+                if message.attempt_count + 1 < max_attempts:
                     next_attempt = datetime.now(timezone.utc) + timedelta(
-                        seconds=self._policy.backoff_seconds,
+                        seconds=backoff_seconds,
                     )
                     await self._store.mark_failed(
                         message.notification_id,
@@ -315,6 +371,13 @@ class FederationNotificationService:
                         next_attempt_at=next_attempt,
                     )
                 else:
+                    # Max retries exceeded — check DLQ eligibility
+                    if send_to_dlq and self._dlq_store is not None:
+                        await self._create_dlq_entry(
+                            message=message,
+                            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+                            error=error_msg,
+                        )
                     await self._store.mark_failed(
                         message.notification_id,
                         error=error_msg,
@@ -426,3 +489,57 @@ class FederationNotificationService:
             )
         except Exception:  # noqa: BLE001 — best-effort
             logger.debug("History recording failed for federation %s", federation_id, exc_info=True)
+
+    async def _create_dlq_entry(
+        self,
+        *,
+        message: FederationNotificationMessage,
+        reason: FederationNotificationDLQReason,
+        error: str,
+    ) -> None:
+        """Create a dead-letter queue entry for a notification that exceeded retries."""
+        now = datetime.now(timezone.utc)
+        dlq_item = FederationNotificationDeadLetter(
+            dlq_id=f"fdlq_{uuid.uuid4().hex}",
+            notification_id=message.notification_id,
+            approval_id=message.approval_id,
+            federation_id=message.federation_id,
+            channel=message.channel.value,
+            adapter=None,
+            recipient=message.recipients[0] if message.recipients else None,
+            reason=reason,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=message.attempt_count + 1,
+            last_error=error,
+            payload=message.payload,
+            metadata={
+                "event_type": message.event_type.value,
+                "subject": message.subject,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            await self._dlq_store.create(dlq_item)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 — best-effort, never crash dispatch
+            logger.debug("DLQ creation failed for notification %s", message.notification_id, exc_info=True)
+            return
+
+        self._record_change_event(
+            event_type="federation.notification.dlq_created",
+            payload={
+                "dlq_id": dlq_item.dlq_id,
+                "notification_id": message.notification_id,
+                "channel": message.channel.value,
+                "reason": reason.value,
+            },
+        )
+        self._record_history(
+            federation_id=message.federation_id,
+            event_type="notification_dlq_created",
+            details={
+                "dlq_id": dlq_item.dlq_id,
+                "notification_id": message.notification_id,
+                "reason": reason.value,
+            },
+        )

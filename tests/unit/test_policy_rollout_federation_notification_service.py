@@ -1,6 +1,7 @@
 """Tests for FederationNotificationService — enqueue and dispatch federation approval notifications.
 
 Phase 49 Task 4.
+Phase 50 Task 3: DLQ Integration + Retry Policy tests.
 """
 from __future__ import annotations
 
@@ -12,15 +13,22 @@ import pytest
 
 from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationChannel,
+    FederationNotificationDeadLetter,
     FederationNotificationDelivery,
     FederationNotificationDispatchResult,
+    FederationNotificationDLQReason,
+    FederationNotificationDLQStatus,
     FederationNotificationEventType,
     FederationNotificationMessage,
     FederationNotificationPolicy,
+    FederationNotificationRetryPolicy,
     FederationNotificationStatus,
 )
 from agent_app.runtime.policy_rollout_federation_notification_adapters import (
     FakeFederationNotificationAdapter,
+)
+from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
+    InMemoryFederationNotificationDLQStore,
 )
 from agent_app.runtime.policy_rollout_federation_notification_service import (
     FederationNotificationService,
@@ -59,6 +67,9 @@ def _make_service(
     audit_logger: Any | None = None,
     change_event_store: Any | None = None,
     history_recorder: Any | None = None,
+    dlq_store: Any | None = None,
+    retry_policy: FederationNotificationRetryPolicy | None = None,
+    by_channel_retry_policy: dict[str, FederationNotificationRetryPolicy] | None = None,
 ) -> FederationNotificationService:
     policy = policy or _make_policy()
     store = store or InMemoryFederationNotificationStore()
@@ -71,6 +82,9 @@ def _make_service(
         audit_logger=audit_logger,
         change_event_store=change_event_store,
         history_recorder=history_recorder,
+        dlq_store=dlq_store,
+        retry_policy=retry_policy,
+        by_channel_retry_policy=by_channel_retry_policy,
     )
 
 
@@ -606,3 +620,371 @@ class TestMessageProperties:
             requested_by="alice",
         )
         assert messages[0].created_at.tzinfo is not None
+
+
+# ---------------------------------------------------------------------------
+# Helpers for DLQ tests
+# ---------------------------------------------------------------------------
+
+
+class FailingFakeAdapter:
+    """Adapter that always fails."""
+
+    async def send(self, message: FederationNotificationMessage) -> FederationNotificationDelivery:
+        return FederationNotificationDelivery(
+            notification_id=message.notification_id,
+            channel=message.channel,
+            status=FederationNotificationStatus.FAILED,
+            error="Simulated failure",
+        )
+
+
+# ---------------------------------------------------------------------------
+# DLQ Integration (Phase 50 Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestFederationNotificationServiceDLQ:
+    """Tests for DLQ integration in notification service (Phase 50)."""
+
+    def test_retry_policy_default_applies(self) -> None:
+        """Default retry policy used when no channel override."""
+        policy = FederationNotificationRetryPolicy(max_attempts=5, backoff_seconds=120)
+        svc = _make_service(retry_policy=policy)
+        result = svc.get_retry_policy_for_channel(FederationNotificationChannel.EMAIL)
+        assert result is not None
+        assert result.max_attempts == 5
+        assert result.backoff_seconds == 120
+
+    def test_retry_policy_channel_override_applies(self) -> None:
+        """Channel override takes precedence over default."""
+        default_policy = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=60)
+        email_policy = FederationNotificationRetryPolicy(max_attempts=10, backoff_seconds=30)
+        svc = _make_service(
+            retry_policy=default_policy,
+            by_channel_retry_policy={"email": email_policy},
+        )
+        result = svc.get_retry_policy_for_channel(FederationNotificationChannel.EMAIL)
+        assert result is not None
+        assert result.max_attempts == 10
+        assert result.backoff_seconds == 30
+
+    def test_retry_policy_fallback_to_default(self) -> None:
+        """Unknown channel falls back to default policy."""
+        default_policy = FederationNotificationRetryPolicy(max_attempts=5, backoff_seconds=120)
+        email_policy = FederationNotificationRetryPolicy(max_attempts=10, backoff_seconds=30)
+        svc = _make_service(
+            retry_policy=default_policy,
+            by_channel_retry_policy={"email": email_policy},
+        )
+        # SLACK is not overridden, so should fall back to default
+        result = svc.get_retry_policy_for_channel(FederationNotificationChannel.SLACK)
+        assert result is not None
+        assert result.max_attempts == 5
+        assert result.backoff_seconds == 120
+
+    @pytest.mark.asyncio
+    async def test_below_max_attempts_does_not_create_dlq(self) -> None:
+        """Failure below max_attempts doesn't create DLQ entry."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=3),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_1",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+        # No DLQ entry yet — still below max_attempts
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+    @pytest.mark.asyncio
+    async def test_exceeding_max_attempts_creates_dlq(self) -> None:
+        """Failure at max_attempts creates DLQ entry."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_2",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 1
+
+    @pytest.mark.asyncio
+    async def test_dlq_entry_has_correct_fields(self) -> None:
+        """DLQ entry has correct notification_id, channel, reason, etc."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_3",
+            federation_id="fed_1",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 1
+        entry = dlq_items[0]
+        assert entry.dlq_id.startswith("fdlq_")
+        assert entry.approval_id == "ap_dlq_3"
+        assert entry.federation_id == "fed_1"
+        assert entry.channel == "console"
+        assert entry.reason == FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED
+        assert entry.status == FederationNotificationDLQStatus.PENDING
+        assert entry.failure_count == 1
+        assert entry.last_error == "Simulated failure"
+
+    @pytest.mark.asyncio
+    async def test_send_to_dlq_false_does_not_create_dlq(self) -> None:
+        """When send_to_dlq=False, no DLQ entry created even at max_attempts."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=False)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_4",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_dlq_store_does_not_crash(self) -> None:
+        """Missing dlq_store doesn't crash when max retries exceeded."""
+        store = InMemoryFederationNotificationStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=None,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_5",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+
+    @pytest.mark.asyncio
+    async def test_channel_specific_backoff_applied(self) -> None:
+        """Channel override backoff is used for next_attempt_at."""
+        store = InMemoryFederationNotificationStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=10, send_to_dlq=True)
+        channel_override = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=300, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=3, backoff_seconds=10),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            retry_policy=retry_policy,
+            by_channel_retry_policy={"console": channel_override},
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_6",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        # The message should have next_attempt_at set with the channel override backoff
+        msg = (await store.list_by_approval("ap_dlq_6"))[0]
+        assert msg.next_attempt_at is not None
+        # Verify backoff is from channel override (300s), not default (10s)
+        delta = msg.next_attempt_at - datetime.now(timezone.utc)
+        # Allow generous bounds — the backoff should be around 300 seconds
+        assert delta.total_seconds() > 200
+
+    @pytest.mark.asyncio
+    async def test_dlq_creation_records_change_event(self) -> None:
+        """Change event recorded when DLQ entry created."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        change_event_store = MagicMock()
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+            change_event_store=change_event_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_7",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        # Check that a change event with type "federation.notification.dlq_created" was recorded
+        dlq_events = [
+            call for call in change_event_store.record.call_args_list
+            if call.kwargs.get("event_type") == "federation.notification.dlq_created"
+        ]
+        assert len(dlq_events) == 1
+        payload = dlq_events[0].kwargs["payload"]
+        assert payload["channel"] == "console"
+        assert payload["reason"] == "max_retries_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_successful_dispatch_does_not_create_dlq(self) -> None:
+        """Successful delivery never creates DLQ."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_8",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+    @pytest.mark.asyncio
+    async def test_multiple_failures_accumulate(self) -> None:
+        """Repeated failures increment attempt_count before DLQ."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=0, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=3, backoff_seconds=0),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_9",
+            action="deploy",
+            requested_by="alice",
+        )
+        # First two dispatches should fail but not create DLQ
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+        # Third failure should create DLQ
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 1
+        assert dlq_items[0].failure_count == 3
+
+    def test_retry_policy_default_when_none_configured(self) -> None:
+        """When no retry_policy is configured, get_retry_policy_for_channel returns None."""
+        svc = _make_service()
+        result = svc.get_retry_policy_for_channel(FederationNotificationChannel.CONSOLE)
+        # No retry policy configured — returns None so dispatch falls back to message.max_attempts
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_dlq_reason_max_retries_exceeded(self) -> None:
+        """DLQ reason is MAX_RETRIES_EXCEEDED for adapter failures."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_10",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 1
+        assert dlq_items[0].reason == FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED
+
+    @pytest.mark.asyncio
+    async def test_dlq_reason_adapter_error_when_no_adapter(self) -> None:
+        """Missing adapter creates DLQ with ADAPTER_ERROR reason."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.EMAIL], max_attempts=1),
+            store=store,
+            adapters={},  # No adapter for EMAIL
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_dlq_11",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 1
+        assert dlq_items[0].reason == FederationNotificationDLQReason.ADAPTER_ERROR
