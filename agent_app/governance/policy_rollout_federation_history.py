@@ -37,6 +37,11 @@ class FederationHistoryEventType(str, Enum):
     NOTIFICATION_CREATED = "federation.notification.created"
     NOTIFICATION_SENT = "federation.notification.sent"
     NOTIFICATION_FAILED = "federation.notification.failed"
+    APPROVAL_CREATED = "approval.created"
+    APPROVAL_APPROVED = "approval.approved"
+    APPROVAL_REJECTED = "approval.rejected"
+    APPROVAL_ESCALATED = "approval.escalated"
+    APPROVAL_CANCELLED = "approval.cancelled"
 
 
 class FederationHistoryEvent(BaseModel):
