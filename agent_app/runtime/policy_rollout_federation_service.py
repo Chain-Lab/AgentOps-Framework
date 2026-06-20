@@ -36,6 +36,10 @@ from agent_app.governance.policy_rollout_federation import (
     RolloutConflict,
     RolloutConflictSeverity,
 )
+from agent_app.governance.policy_rollout_federation_approval import (
+    FederationApprovalRequest,
+    FederationApprovalStatus,
+)
 from agent_app.runtime.policy_rollout_conflict_detector import RolloutConflictDetector
 from agent_app.runtime.policy_rollout_federation_store import (
     FederatedRolloutPlanStore,
@@ -65,6 +69,7 @@ class RolloutFederationService:
         event_store: Any | None = None,
         fail_on_error_conflicts: bool = True,
         warn_on_bundle_conflict: bool = True,
+        approval_service: Any | None = None,
     ) -> None:
         self._target_store = target_store
         self._federation_store = federation_store
@@ -78,6 +83,7 @@ class RolloutFederationService:
         self._event_store = event_store
         self._fail_on_error_conflicts = fail_on_error_conflicts
         self._warn_on_bundle_conflict = warn_on_bundle_conflict
+        self._approval_service = approval_service
 
     # ------------------------------------------------------------------
     # Permission helpers
@@ -100,6 +106,64 @@ class RolloutFederationService:
         raise PermissionError(
             f"Permission denied: {permission.value} required"
         )
+
+    # ------------------------------------------------------------------
+    # Approval helpers
+    # ------------------------------------------------------------------
+
+    async def _check_approval(
+        self,
+        federation_id: str,
+        action: str,
+    ) -> bool:
+        """Check whether a federation action is approved.
+
+        Returns True if:
+        - No approval_service is configured
+        - Approval is not required for the action
+        - An approval request exists and is APPROVED
+
+        Returns False if:
+        - Approval is required and no request exists (creates one)
+        - An approval request exists and is PENDING or ESCALATED
+        - An approval request exists and is REJECTED
+        """
+        if self._approval_service is None:
+            return True
+
+        # Check if approval is required for this action
+        if not await self._approval_service.requires_approval(action):
+            return True
+
+        # Check for existing approval request
+        latest = await self._approval_service.check_approval_status(federation_id, action)
+        if latest is None:
+            # No request exists — create one
+            await self._approval_service.create_approval_request(
+                federation_id=federation_id,
+                action=action,
+                requested_by="system",
+            )
+            return False
+
+        if latest.status == FederationApprovalStatus.APPROVED:
+            return True
+
+        # PENDING, ESCALATED, REJECTED, EXPIRED, CANCELLED → not approved
+        return False
+
+    def _create_approval_result(
+        self,
+        approval_request: FederationApprovalRequest,
+    ) -> dict[str, Any]:
+        """Create a result dict for an approval-required response."""
+        return {
+            "status": "approval_required",
+            "approval_id": approval_request.approval_id,
+            "action": approval_request.action,
+            "required_approvers": approval_request.required_approvers,
+            "message": f"Approval required for {approval_request.action}",
+        }
 
     # ------------------------------------------------------------------
     # Audit / event helpers
@@ -377,6 +441,15 @@ class RolloutFederationService:
         Requires ``FEDERATION_PLAN_START`` permission.  Rechecks conflicts
         and fails on ERROR severity.
         """
+        # Approval check
+        if self._approval_service is not None:
+            allowed = await self._check_approval(federation_id, "federation.plan.start")
+            if not allowed:
+                latest = await self._approval_service.check_approval_status(federation_id, "federation.plan.start")
+                if latest:
+                    return self._create_approval_result(latest)  # type: ignore[return-value]
+                return {"status": "approval_required", "action": "federation.plan.start"}  # type: ignore[return-value]
+
         await self._check_permission(
             PolicyReleasePermission.FEDERATION_PLAN_START, context,
         )
@@ -625,6 +698,15 @@ class RolloutFederationService:
         rollout via the rollout service, runs it, and maps the result back
         to the federation execution.
         """
+        # Approval check
+        if self._approval_service is not None:
+            allowed = await self._check_approval(federation_id, "federation.plan.run_next")
+            if not allowed:
+                latest = await self._approval_service.check_approval_status(federation_id, "federation.plan.run_next")
+                if latest:
+                    return self._create_approval_result(latest)  # type: ignore[return-value]
+                return {"status": "approval_required", "action": "federation.plan.run_next"}  # type: ignore[return-value]
+
         await self._check_permission(
             PolicyReleasePermission.FEDERATION_PLAN_EXECUTE, context,
         )
@@ -899,6 +981,15 @@ class RolloutFederationService:
         Loops calling ``run_next_target`` until no progress or terminal state.
         Max iterations = len(executions) + 1.
         """
+        # Approval check
+        if self._approval_service is not None:
+            allowed = await self._check_approval(federation_id, "federation.plan.run_all")
+            if not allowed:
+                latest = await self._approval_service.check_approval_status(federation_id, "federation.plan.run_all")
+                if latest:
+                    return self._create_approval_result(latest)  # type: ignore[return-value]
+                return {"status": "approval_required", "action": "federation.plan.run_all"}  # type: ignore[return-value]
+
         plan = await self._federation_store.get(federation_id)
         if plan is None:
             raise KeyError(f"Federated plan '{federation_id}' not found")
@@ -932,6 +1023,15 @@ class RolloutFederationService:
         Requires ``FEDERATION_PLAN_CANCEL`` permission.  Marks all
         PENDING/RUNNING executions as CANCELLED.
         """
+        # Approval check
+        if self._approval_service is not None:
+            allowed = await self._check_approval(federation_id, "federation.plan.cancel")
+            if not allowed:
+                latest = await self._approval_service.check_approval_status(federation_id, "federation.plan.cancel")
+                if latest:
+                    return self._create_approval_result(latest)  # type: ignore[return-value]
+                return {"status": "approval_required", "action": "federation.plan.cancel"}  # type: ignore[return-value]
+
         await self._check_permission(
             PolicyReleasePermission.FEDERATION_PLAN_CANCEL, context,
         )
