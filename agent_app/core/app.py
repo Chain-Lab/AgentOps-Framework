@@ -288,6 +288,22 @@ class AgentApp:
     def federation_approval_service(self, value: Any) -> None:
         self._federation_approval_service = value
 
+    @property
+    def federation_notification_store(self) -> Any:
+        return getattr(self, "_federation_notification_store", None)
+
+    @property
+    def federation_notification_service(self) -> Any:
+        return getattr(self, "_federation_notification_service", None)
+
+    @property
+    def federation_escalation_worker(self) -> Any:
+        return getattr(self, "_federation_escalation_worker", None)
+
+    @property
+    def distributed_lock(self) -> Any:
+        return getattr(self, "_distributed_lock", None)
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

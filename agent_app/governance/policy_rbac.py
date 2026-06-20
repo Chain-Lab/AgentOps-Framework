@@ -133,6 +133,9 @@ class PolicyReleasePermission(StrEnum):
     FEDERATION_APPROVAL_APPROVE = "policy.federation.approval.approve"
     FEDERATION_APPROVAL_REJECT = "policy.federation.approval.reject"
     FEDERATION_APPROVAL_ESCALATE = "policy.federation.approval.escalate"
+    FEDERATION_NOTIFICATION_LIST = "policy.federation.notification.list"
+    FEDERATION_NOTIFICATION_DISPATCH = "policy.federation.notification.dispatch"
+    FEDERATION_ESCALATION_RUN = "policy.federation.escalation.run"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -161,6 +164,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.FEDERATION_HISTORY_VIEW,
     PolicyReleasePermission.FEDERATION_ANALYTICS_VIEW,
     PolicyReleasePermission.FEDERATION_APPROVAL_LIST,
+    PolicyReleasePermission.FEDERATION_NOTIFICATION_LIST,
 }
 
 

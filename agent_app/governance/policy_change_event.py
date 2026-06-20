@@ -106,6 +106,12 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_APPROVAL_ESCALATED = "policy.federation.approval.escalated"
     FEDERATION_APPROVAL_CANCELLED = "policy.federation.approval.cancelled"
     FEDERATION_APPROVAL_PERMISSION_DENIED = "policy.federation.approval.permission_denied"
+    FEDERATION_NOTIFICATION_CREATED = "policy.federation.notification.created"
+    FEDERATION_NOTIFICATION_SENT = "policy.federation.notification.sent"
+    FEDERATION_NOTIFICATION_FAILED = "policy.federation.notification.failed"
+    FEDERATION_APPROVAL_ESCALATION_WORKER_TICKED = "policy.federation.approval.escalation_worker_ticked"
+    FEDERATION_APPROVAL_ESCALATION_DUE = "policy.federation.approval.escalation_due"
+    FEDERATION_APPROVAL_ESCALATION_LOCK_SKIPPED = "policy.federation.approval.escalation_lock_skipped"
 
 
 class PolicyChangeEvent(BaseModel):

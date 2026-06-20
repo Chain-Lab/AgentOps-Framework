@@ -56,7 +56,7 @@ class TestFederationHistoryChangeEvents:
     """Tests for federation history change event types."""
 
     def test_event_type_count(self) -> None:
-        assert len(PolicyChangeEventType) == 94
+        assert len(PolicyChangeEventType) == 100
 
     def test_federation_history_events_exist(self) -> None:
         assert PolicyChangeEventType.FEDERATION_HISTORY_RECORDED.value == "policy.federation.history.recorded"

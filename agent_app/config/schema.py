@@ -601,6 +601,31 @@ class RolloutFederationApprovalConfig(BaseModel):
     escalate_to: list[str] = Field(default_factory=list, description="Roles to escalate to")
 
 
+class RolloutFederationNotificationConfig(BaseModel):
+    """Configuration for federation notification (Phase 49)."""
+    enabled: bool = Field(default=False, description="Enable federation notification")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str = Field(default=".agent_app/federation_notifications.db", description="SQLite db path")
+    default_channels: list[str] = Field(
+        default_factory=lambda: ["console"],
+        description="Default notification channels",
+    )
+    channels: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Channel-specific configuration (e.g. webhook url, timeout)",
+    )
+    retry_max_attempts: int = Field(default=3, description="Max retry attempts for failed notifications")
+    retry_backoff_seconds: int = Field(default=60, description="Backoff seconds between retries")
+
+
+class RolloutFederationWorkerConfig(BaseModel):
+    """Configuration for federation escalation worker (Phase 49)."""
+    enabled: bool = Field(default=False, description="Enable escalation worker")
+    lock_type: str = Field(default="memory", description="Lock type: memory | sqlite")
+    lock_path: str = Field(default=".agent_app/federation_worker_locks.db", description="Lock SQLite db path")
+    lock_ttl_seconds: int = Field(default=300, description="Lock TTL in seconds")
+
+
 class RolloutFederationConfig(BaseModel):
     """Rollout federation configuration (Phase 46)."""
     enabled: bool = Field(default=False, description="Enable rollout federation services")
@@ -608,6 +633,8 @@ class RolloutFederationConfig(BaseModel):
     plan_store: PolicyReleaseStoreConfig | None = Field(default=None, description="Federated rollout plan store")
     conflict_policy: RolloutFederationConflictPolicyConfig = Field(default_factory=RolloutFederationConflictPolicyConfig, description="Federation conflict policy")
     approvals: RolloutFederationApprovalConfig = Field(default_factory=RolloutFederationApprovalConfig, description="Federation approval config (Phase 48)")
+    notifications: RolloutFederationNotificationConfig = Field(default_factory=RolloutFederationNotificationConfig, description="Federation notification config (Phase 49)")
+    worker: RolloutFederationWorkerConfig = Field(default_factory=RolloutFederationWorkerConfig, description="Federation escalation worker config (Phase 49)")
 
 
 class RolloutFederationHistoryConfig(BaseModel):

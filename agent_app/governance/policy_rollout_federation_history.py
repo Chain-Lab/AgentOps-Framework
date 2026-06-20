@@ -42,6 +42,8 @@ class FederationHistoryEventType(str, Enum):
     APPROVAL_REJECTED = "approval.rejected"
     APPROVAL_ESCALATED = "approval.escalated"
     APPROVAL_CANCELLED = "approval.cancelled"
+    ESCALATION_WORKER_TICKED = "federation.escalation.worker_ticked"
+    ESCALATION_LOCK_SKIPPED = "federation.escalation.lock_skipped"
 
 
 class FederationHistoryEvent(BaseModel):

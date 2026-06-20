@@ -1083,6 +1083,89 @@ def build_app(
         except Exception:
             pass  # Phase 48 wiring failure should not break existing behavior
 
+        # -- Phase 49: Federation Notification & Escalation Worker --
+        try:
+            if fed_cfg is not None:
+
+                # Notification store and service
+                if hasattr(fed_cfg, "notifications") and fed_cfg.notifications is not None and fed_cfg.notifications.enabled:
+                    from agent_app.runtime.policy_rollout_federation_notification_store import create_federation_notification_store
+                    from agent_app.runtime.policy_rollout_federation_notification_service import FederationNotificationService
+                    from agent_app.runtime.policy_rollout_federation_notification_adapters import (
+                        NoopFederationNotificationAdapter,
+                        ConsoleFederationNotificationAdapter,
+                    )
+                    from agent_app.governance.policy_rollout_federation_notification import (
+                        FederationNotificationChannel,
+                        FederationNotificationPolicy,
+                    )
+
+                    fed_notif_store = create_federation_notification_store(
+                        store_type=fed_cfg.notifications.type,
+                        db_path=fed_cfg.notifications.path,
+                    )
+
+                    # Build adapters
+                    adapters: dict[FederationNotificationChannel, Any] = {}
+                    for ch in fed_cfg.notifications.default_channels:
+                        channel = FederationNotificationChannel(ch)
+                        if channel == FederationNotificationChannel.CONSOLE:
+                            adapters[channel] = ConsoleFederationNotificationAdapter()
+                        elif channel == FederationNotificationChannel.NOOP:
+                            adapters[channel] = NoopFederationNotificationAdapter()
+                        elif channel == FederationNotificationChannel.WEBHOOK:
+                            from agent_app.runtime.policy_rollout_federation_notification_adapters import WebhookFederationNotificationAdapter
+                            webhook_url = fed_cfg.notifications.channels.get("webhook", {}).get("url", "")
+                            timeout = fed_cfg.notifications.channels.get("webhook", {}).get("timeout_seconds", 5)
+                            adapters[channel] = WebhookFederationNotificationAdapter(url=webhook_url, timeout_seconds=timeout)
+
+                    fed_notif_policy = FederationNotificationPolicy(
+                        enabled=True,
+                        default_channels=[FederationNotificationChannel(ch) for ch in fed_cfg.notifications.default_channels],
+                        max_attempts=fed_cfg.notifications.retry_max_attempts,
+                        backoff_seconds=fed_cfg.notifications.retry_backoff_seconds,
+                    )
+
+                    fed_notif_service = FederationNotificationService(
+                        notification_store=fed_notif_store,
+                        adapters=adapters,
+                        notification_policy=fed_notif_policy,
+                    )
+
+                    app._federation_notification_store = fed_notif_store
+                    app._federation_notification_service = fed_notif_service
+
+                # Distributed lock and escalation worker
+                if hasattr(fed_cfg, "worker") and fed_cfg.worker is not None and fed_cfg.worker.enabled:
+                    from agent_app.runtime.distributed_lock import create_distributed_lock
+                    from agent_app.runtime.policy_rollout_federation_escalation_worker import FederationApprovalEscalationWorker
+
+                    dlock = create_distributed_lock(
+                        store_type=fed_cfg.worker.lock_type,
+                        db_path=fed_cfg.worker.lock_path,
+                    )
+                    app._distributed_lock = dlock
+
+                    # Build worker if approval service and store are available
+                    fed_approval_store = getattr(app, "_federation_approval_store", None)
+                    fed_approval_service = getattr(app, "_federation_approval_service", None)
+                    if fed_approval_store is not None and fed_approval_service is not None:
+                        escalation_minutes = 60
+                        if hasattr(fed_cfg, "approvals") and fed_cfg.approvals is not None:
+                            escalation_minutes = fed_cfg.approvals.escalation_after_minutes
+
+                        fed_notif_service = getattr(app, "_federation_notification_service", None)
+                        worker = FederationApprovalEscalationWorker(
+                            approval_store=fed_approval_store,
+                            approval_service=fed_approval_service,
+                            notification_service=fed_notif_service,
+                            distributed_lock=dlock,
+                            escalation_after_minutes=escalation_minutes,
+                        )
+                        app._federation_escalation_worker = worker
+        except Exception:
+            pass  # Phase 49 wiring failure should not break existing behavior
+
     app._release_config = release_config
     return app
 
