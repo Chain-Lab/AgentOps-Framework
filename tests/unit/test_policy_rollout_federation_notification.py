@@ -16,6 +16,10 @@ from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationPolicy,
     FederationNotificationTarget,
     FederationNotificationDispatchResult,
+    FederationNotificationDLQStatus,
+    FederationNotificationDLQReason,
+    FederationNotificationDeadLetter,
+    FederationNotificationRetryPolicy,
 )
 
 
@@ -61,8 +65,8 @@ class TestFederationNotificationStatus:
     """Tests for the FederationNotificationStatus enum."""
 
     def test_all_5_statuses_exist(self) -> None:
-        expected = ["pending", "sent", "failed", "cancelled", "skipped"]
-        assert len(FederationNotificationStatus) == 5
+        expected = ["pending", "sent", "failed", "cancelled", "skipped", "dead_lettered"]
+        assert len(FederationNotificationStatus) == 6
         for value in expected:
             assert value in [e.value for e in FederationNotificationStatus]
 
@@ -72,6 +76,7 @@ class TestFederationNotificationStatus:
         assert FederationNotificationStatus.FAILED.value == "failed"
         assert FederationNotificationStatus.CANCELLED.value == "cancelled"
         assert FederationNotificationStatus.SKIPPED.value == "skipped"
+        assert FederationNotificationStatus.DEAD_LETTERED.value == "dead_lettered"
 
     def test_is_str_enum(self) -> None:
         assert isinstance(FederationNotificationStatus.PENDING, str)
@@ -410,3 +415,240 @@ class TestFederationNotificationDispatchResult:
         r2 = FederationNotificationDispatchResult()
         r1.errors.append("some error")
         assert r2.errors == []
+
+
+# ===========================================================================
+# FederationNotificationDLQStatus
+# ===========================================================================
+
+class TestFederationNotificationDLQStatus:
+    """Tests for the FederationNotificationDLQStatus enum."""
+
+    def test_dlq_status_enum_values(self) -> None:
+        expected = ["pending", "retried", "purged", "resolved"]
+        assert len(FederationNotificationDLQStatus) == 4
+        for value in expected:
+            assert value in [e.value for e in FederationNotificationDLQStatus]
+
+    def test_is_str_enum(self) -> None:
+        assert isinstance(FederationNotificationDLQStatus.PENDING, str)
+        assert FederationNotificationDLQStatus.PENDING == "pending"
+
+
+# ===========================================================================
+# FederationNotificationDLQReason
+# ===========================================================================
+
+class TestFederationNotificationDLQReason:
+    """Tests for the FederationNotificationDLQReason enum."""
+
+    def test_dlq_reason_enum_values(self) -> None:
+        expected = [
+            "max_retries_exceeded",
+            "delivery_failed",
+            "adapter_error",
+            "invalid_recipient",
+            "manual",
+        ]
+        assert len(FederationNotificationDLQReason) == 5
+        for value in expected:
+            assert value in [e.value for e in FederationNotificationDLQReason]
+
+    def test_is_str_enum(self) -> None:
+        assert isinstance(FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED, str)
+        assert FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED == "max_retries_exceeded"
+
+
+# ===========================================================================
+# FederationNotificationStatus — dead_lettered addition
+# ===========================================================================
+
+class TestFederationNotificationStatusDeadLettered:
+    """Tests for the DEAD_LETTERED addition to FederationNotificationStatus."""
+
+    def test_notification_status_has_dead_lettered(self) -> None:
+        assert len(FederationNotificationStatus) == 6
+        assert FederationNotificationStatus.DEAD_LETTERED.value == "dead_lettered"
+        assert "dead_lettered" in [e.value for e in FederationNotificationStatus]
+
+
+# ===========================================================================
+# FederationNotificationDeadLetter
+# ===========================================================================
+
+class TestFederationNotificationDeadLetter:
+    """Tests for the FederationNotificationDeadLetter model."""
+
+    def test_dead_letter_model_valid(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            channel="email",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.dlq_id == "fdlq_001"
+        assert dl.notification_id == "fn_001"
+        assert dl.channel == "email"
+        assert dl.reason == FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED
+        assert dl.created_at == now
+        assert dl.updated_at == now
+
+    def test_dead_letter_id_prefix_valid(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_abc123",
+            notification_id="fn_001",
+            channel="email",
+            reason=FederationNotificationDLQReason.DELIVERY_FAILED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.dlq_id == "fdlq_abc123"
+
+    def test_dead_letter_id_prefix_invalid(self) -> None:
+        now = _now()
+        with pytest.raises(ValidationError, match="fdlq_"):
+            FederationNotificationDeadLetter(
+                dlq_id="bad_id",
+                notification_id="fn_001",
+                channel="email",
+                reason=FederationNotificationDLQReason.ADAPTER_ERROR,
+                created_at=now,
+                updated_at=now,
+            )
+
+    def test_dead_letter_tz_aware_created_at(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            channel="email",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.created_at.tzinfo is not None
+
+    def test_dead_letter_tz_naive_created_at_rejected(self) -> None:
+        naive = datetime(2026, 1, 1, 12, 0, 0)
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            FederationNotificationDeadLetter(
+                dlq_id="fdlq_001",
+                notification_id="fn_001",
+                channel="email",
+                reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+                created_at=naive,
+                updated_at=_now(),
+            )
+
+    def test_dead_letter_tz_aware_updated_at(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            channel="email",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.updated_at.tzinfo is not None
+
+    def test_dead_letter_tz_naive_updated_at_rejected(self) -> None:
+        naive = datetime(2026, 1, 1, 12, 0, 0)
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            FederationNotificationDeadLetter(
+                dlq_id="fdlq_001",
+                notification_id="fn_001",
+                channel="email",
+                reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+                created_at=_now(),
+                updated_at=naive,
+            )
+
+    def test_dead_letter_defaults(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            channel="email",
+            reason=FederationNotificationDLQReason.DELIVERY_FAILED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.status == FederationNotificationDLQStatus.PENDING
+        assert dl.failure_count == 0
+        assert dl.approval_id is None
+        assert dl.federation_id is None
+        assert dl.adapter is None
+        assert dl.recipient is None
+        assert dl.last_error is None
+        assert dl.retried_at is None
+        assert dl.purged_at is None
+
+    def test_dead_letter_optional_fields(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            approval_id=None,
+            federation_id=None,
+            channel="slack",
+            adapter=None,
+            recipient=None,
+            reason=FederationNotificationDLQReason.MANUAL,
+            status=FederationNotificationDLQStatus.RETRIED,
+            failure_count=3,
+            last_error=None,
+            created_at=now,
+            updated_at=now,
+            retried_at=now,
+            purged_at=None,
+        )
+        assert dl.approval_id is None
+        assert dl.federation_id is None
+        assert dl.adapter is None
+        assert dl.recipient is None
+        assert dl.last_error is None
+        assert dl.purged_at is None
+
+    def test_dead_letter_payload_and_metadata(self) -> None:
+        now = _now()
+        dl = FederationNotificationDeadLetter(
+            dlq_id="fdlq_001",
+            notification_id="fn_001",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.ADAPTER_ERROR,
+            payload={"subject": "Test", "body": "Hello"},
+            metadata={"source": "unit-test", "retry_count": 2},
+            created_at=now,
+            updated_at=now,
+        )
+        assert dl.payload == {"subject": "Test", "body": "Hello"}
+        assert dl.metadata == {"source": "unit-test", "retry_count": 2}
+
+
+# ===========================================================================
+# FederationNotificationRetryPolicy
+# ===========================================================================
+
+class TestFederationNotificationRetryPolicy:
+    """Tests for the FederationNotificationRetryPolicy model."""
+
+    def test_retry_policy_defaults(self) -> None:
+        policy = FederationNotificationRetryPolicy()
+        assert policy.max_attempts == 3
+        assert policy.backoff_seconds == 60
+        assert policy.send_to_dlq is True
+
+    def test_retry_policy_custom(self) -> None:
+        policy = FederationNotificationRetryPolicy(
+            max_attempts=5,
+            backoff_seconds=120,
+            send_to_dlq=False,
+        )
+        assert policy.max_attempts == 5
+        assert policy.backoff_seconds == 120
+        assert policy.send_to_dlq is False

@@ -1,6 +1,7 @@
-"""Federation notification models — notification messages, delivery, policy, and dispatch for federation approval workflows.
+"""Federation notification models — notification messages, delivery, policy, dispatch, DLQ, and retry for federation approval workflows.
 
 Phase 49: Federation Notification Models.
+Phase 50: DLQ Models and Retry Policy.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ class FederationNotificationStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SKIPPED = "skipped"
+    DEAD_LETTERED = "dead_lettered"
 
 
 class FederationNotificationEventType(StrEnum):
@@ -40,6 +42,25 @@ class FederationNotificationEventType(StrEnum):
     APPROVAL_ESCALATED = "approval.escalated"
     APPROVAL_CANCELLED = "approval.cancelled"
     APPROVAL_EXPIRED = "approval.expired"
+
+
+class FederationNotificationDLQStatus(StrEnum):
+    """Status of a notification dead-letter queue entry."""
+
+    PENDING = "pending"
+    RETRIED = "retried"
+    PURGED = "purged"
+    RESOLVED = "resolved"
+
+
+class FederationNotificationDLQReason(StrEnum):
+    """Reason a notification entered the dead-letter queue."""
+
+    MAX_RETRIES_EXCEEDED = "max_retries_exceeded"
+    DELIVERY_FAILED = "delivery_failed"
+    ADAPTER_ERROR = "adapter_error"
+    INVALID_RECIPIENT = "invalid_recipient"
+    MANUAL = "manual"
 
 
 class FederationNotificationMessage(BaseModel):
@@ -122,3 +143,47 @@ class FederationNotificationDispatchResult(BaseModel):
     total_failed: int = Field(default=0, description="Total notifications that failed delivery")
     total_skipped: int = Field(default=0, description="Total notifications skipped")
     errors: list[str] = Field(default_factory=list, description="List of error messages from failed dispatches")
+
+
+class FederationNotificationDeadLetter(BaseModel):
+    """A notification that has been moved to the dead-letter queue after exhausting retries."""
+
+    dlq_id: str = Field(..., description="Unique DLQ entry identifier (fdlq_ prefix)")
+    notification_id: str = Field(..., description="Original notification ID")
+    approval_id: str | None = Field(default=None, description="Related approval ID")
+    federation_id: str | None = Field(default=None, description="Related federation ID")
+    channel: str = Field(..., description="Notification channel")
+    adapter: str | None = Field(default=None, description="Adapter that failed")
+    recipient: str | None = Field(default=None, description="Intended recipient")
+    reason: FederationNotificationDLQReason = Field(..., description="Reason for DLQ entry")
+    status: FederationNotificationDLQStatus = Field(default=FederationNotificationDLQStatus.PENDING, description="DLQ entry status")
+    failure_count: int = Field(default=0, description="Number of delivery failures")
+    last_error: str | None = Field(default=None, description="Last error message")
+    payload: dict[str, Any] = Field(default_factory=dict, description="Original notification payload")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    created_at: datetime = Field(..., description="Timezone-aware creation timestamp")
+    updated_at: datetime = Field(..., description="Timezone-aware last update timestamp")
+    retried_at: datetime | None = Field(default=None, description="Timezone-aware retry timestamp")
+    purged_at: datetime | None = Field(default=None, description="Timezone-aware purge timestamp")
+
+    @field_validator("dlq_id")
+    @classmethod
+    def _validate_dlq_id(cls, v: str) -> str:
+        if not v.startswith("fdlq_"):
+            raise ValueError(f"ID must start with 'fdlq_', got '{v}'")
+        return v
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _validate_tz_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
+            raise ValueError("datetime must be timezone-aware")
+        return v
+
+
+class FederationNotificationRetryPolicy(BaseModel):
+    """Retry policy for federation notification delivery."""
+
+    max_attempts: int = Field(default=3, description="Maximum delivery attempts")
+    backoff_seconds: int = Field(default=60, description="Backoff interval between retries in seconds")
+    send_to_dlq: bool = Field(default=True, description="Whether to send to DLQ after max retries")
