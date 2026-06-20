@@ -2,6 +2,32 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.38.0 — Phase 50: Federation Approval Dead-Letter Queue & Scheduled Worker
+
+### Added
+- Federation notification dead-letter queue (DLQ) — FederationNotificationDeadLetter model with fdlq_ prefix
+- DLQ store — InMemory and SQLite backends with filtering and pagination
+- Notification retry policy — FederationNotificationRetryPolicy with per-channel overrides
+- DLQ entry creation on max retries exceeded
+- Scheduled federation worker — FederationScheduledWorker with start/stop/status/tick lifecycle
+- Worker state model — FederationScheduledWorkerState
+- DLQ CLI commands — list, show, retry, purge, export (JSON/CSV)
+- Worker CLI commands — status, start --once
+- DLQ console pages — list and detail
+- Worker status console page
+- DLQ JSON and CSV export helpers
+- DLQ and worker observability integration
+- 3 new RBAC permissions: FEDERATION_DLQ_LIST, FEDERATION_DLQ_MANAGE, FEDERATION_WORKER_MANAGE
+- 6 new policy change event types
+- 3 new federation history event types
+- DEAD_LETTERED notification status
+
+### Changed
+- PolicyChangeEventType count: 100 → 106
+- FederationHistoryEventType count: 30 → 33
+- PolicyReleasePermission count: 79 → 82
+- FederationNotificationStatus count: 5 → 6
+
 ## v0.37.0 — Phase 49: Federation Approval Notification & Escalation Workers
 
 ### Added

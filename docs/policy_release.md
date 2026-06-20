@@ -4114,3 +4114,83 @@ agentapp policy federation worker tick
 - PolicyChangeEventType: 94 → 100 (6 new FEDERATION_NOTIFICATION_* and ESCALATION_* events)
 - FederationHistoryEventType: 28 → 30 (2 new ESCALATION_* events)
 - PolicyReleasePermission: 76 → 79 (3 new FEDERATION_NOTIFICATION_* and ESCALATION_* permissions)
+
+---
+
+## Phase 50: Federation Approval Dead-Letter Queue & Scheduled Worker
+
+### Overview
+Phase 50 adds a dead-letter queue (DLQ) for federation notifications that exceed retry limits, configurable retry policies with per-channel overrides, and a persistent scheduled worker that orchestrates notification dispatch and escalation on a configurable interval.
+
+### Models
+- `FederationNotificationDLQStatus` (4 values: pending, retried, purged, resolved)
+- `FederationNotificationDLQReason` (5 values: max_retries_exceeded, delivery_failed, adapter_error, invalid_recipient, manual)
+- `FederationNotificationDeadLetter` — DLQ entry with fdlq_ prefix, tz-aware datetimes
+- `FederationNotificationRetryPolicy` — max_attempts, backoff_seconds, send_to_dlq
+- `FederationScheduledWorkerStatus` (4 values: stopped, running, stopping, failed)
+- `FederationScheduledWorkerState` — worker lifecycle state
+
+### DLQ Store
+- `FederationNotificationDLQStore` Protocol with create, get, list, mark_retried, mark_purged, delete
+- InMemory and SQLite implementations
+- Factory function: `create_federation_notification_dlq_store()`
+
+### Retry Policy
+- Default retry policy with max_attempts=3, backoff_seconds=60, send_to_dlq=True
+- Per-channel override via `by_channel_retry` config
+- Applied during `FederationNotificationService.dispatch_pending()`
+- Failed notifications exceeding max_attempts enter DLQ if send_to_dlq=True
+
+### Scheduled Worker
+- `FederationScheduledWorker` with start/stop/status/tick lifecycle
+- Based on asyncio task with configurable interval
+- Acquires distributed lock before each tick
+- Calls notification_service.dispatch_pending() + escalation_worker.tick()
+- Graceful shutdown via asyncio.Event
+
+### CLI Commands
+- `agentapp policy federation notification dlq list [--status] [--channel] [--limit] [--offset]`
+- `agentapp policy federation notification dlq show --dlq-id fdlq_...`
+- `agentapp policy federation notification dlq retry --dlq-id fdlq_...`
+- `agentapp policy federation notification dlq purge --dlq-id fdlq_...`
+- `agentapp policy federation notification dlq export --format json|csv`
+- `agentapp policy federation worker status`
+- `agentapp policy federation worker start --once`
+
+### Console Pages
+- `/policy-console/federation/notifications/dlq` — DLQ list
+- `/policy-console/federation/notifications/dlq/{dlq_id}` — DLQ detail
+- `/policy-console/federation/workers` — Worker status
+
+### Configuration
+```yaml
+governance:
+  policy_rollout:
+    federation:
+      notifications:
+        dlq:
+          enabled: true
+          type: sqlite
+          path: .agent_app/federation_notification_dlq.db
+        retry:
+          max_attempts: 3
+          backoff_seconds: 60
+          send_to_dlq: true
+        by_channel_retry:
+          webhook:
+            max_attempts: 5
+            backoff_seconds: 30
+            send_to_dlq: true
+      scheduled_worker:
+        enabled: true
+        interval_seconds: 60
+        lock_type: sqlite
+        lock_path: .agent_app/federation_scheduled_worker_locks.db
+```
+
+### Event Count Changes
+
+- PolicyChangeEventType: 100 → 106 (6 new DLQ and worker event types)
+- FederationHistoryEventType: 30 → 33 (3 new DLQ and worker history event types)
+- PolicyReleasePermission: 79 → 82 (3 new FEDERATION_DLQ_* and FEDERATION_WORKER_* permissions)
+- FederationNotificationStatus: 5 → 6 (DEAD_LETTERED added)

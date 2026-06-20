@@ -1262,3 +1262,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - [x] **Phase 47**: Federation Observability and Reporting
 - [x] **Phase 48**: Federation Approval Workflows
 - **Phase 49**: Federation Approval Notification & Escalation Workers — notification adapters, outbox store, dispatch service, escalation worker, distributed lock, CLI commands, console pages
+- **Phase 50**: Federation Approval Dead-Letter Queue & Scheduled Worker — DLQ for failed notifications, retry policies with per-channel overrides, persistent scheduled worker for notification dispatch and escalation
