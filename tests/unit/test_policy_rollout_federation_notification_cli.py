@@ -9,12 +9,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationChannel,
     FederationNotificationDispatchResult,
+    FederationNotificationDLQReason,
+    FederationNotificationDLQStatus,
+    FederationNotificationDeadLetter,
     FederationNotificationEventType,
     FederationNotificationMessage,
     FederationNotificationStatus,
 )
 from agent_app.runtime.policy_rollout_federation_escalation_worker import (
     FederationApprovalEscalationWorkerResult,
+)
+from agent_app.runtime.policy_rollout_federation_scheduled_worker import (
+    FederationScheduledWorkerState,
+    FederationScheduledWorkerStatus,
 )
 
 
@@ -468,3 +475,390 @@ class TestFederationWorkerTickCLI:
         assert rc == 0
         output = capsys.readouterr().out
         assert "Lock unavailable" in output
+
+
+# ---------------------------------------------------------------------------
+# Phase 50: DLQ CLI helpers
+# ---------------------------------------------------------------------------
+
+
+def _dlq_entry(
+    dlq_id: str = "fdlq_test001",
+    notification_id: str = "fn_test001",
+    approval_id: str | None = "fap_test001",
+    federation_id: str | None = "frp_test001",
+    channel: str = "email",
+    reason: FederationNotificationDLQReason = FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+    status: FederationNotificationDLQStatus = FederationNotificationDLQStatus.PENDING,
+    failure_count: int = 3,
+    last_error: str | None = "Connection timeout",
+) -> FederationNotificationDeadLetter:
+    now = _now()
+    return FederationNotificationDeadLetter(
+        dlq_id=dlq_id,
+        notification_id=notification_id,
+        approval_id=approval_id,
+        federation_id=federation_id,
+        channel=channel,
+        reason=reason,
+        status=status,
+        failure_count=failure_count,
+        last_error=last_error,
+        payload={"subject": "Test"},
+        metadata={"adapter": "smtp"},
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _app_with_dlq_store(store=None):
+    app = MagicMock()
+    app.federation_dlq_store = store
+    return app
+
+
+def _app_with_scheduled_worker(worker=None):
+    app = MagicMock()
+    app.federation_scheduled_worker = worker
+    return app
+
+
+# ---------------------------------------------------------------------------
+# _cmd_policy_federation_notification_dlq_list
+# ---------------------------------------------------------------------------
+
+
+class TestFederationDLQCLI:
+    """Tests for DLQ CLI commands (Phase 50)."""
+
+    def test_dlq_list_empty(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_list
+
+        store = MagicMock()
+        store.list = AsyncMock(return_value=[])
+        args = argparse.Namespace(config="agentapp.yaml", status=None, channel=None, limit=100, offset=0)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_list(args))
+        assert rc == 0
+        assert "No DLQ entries found" in capsys.readouterr().out
+
+    def test_dlq_list_with_entries(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_list
+
+        store = MagicMock()
+        store.list = AsyncMock(
+            return_value=[
+                _dlq_entry(dlq_id="fdlq_001", notification_id="fn_001"),
+                _dlq_entry(
+                    dlq_id="fdlq_002",
+                    notification_id="fn_002",
+                    channel="slack",
+                    reason=FederationNotificationDLQReason.ADAPTER_ERROR,
+                ),
+            ]
+        )
+        args = argparse.Namespace(config="agentapp.yaml", status=None, channel=None, limit=100, offset=0)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_list(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fdlq_001" in output
+        assert "fdlq_002" in output
+        assert "max_retries_exceeded" in output
+        assert "adapter_error" in output
+
+    def test_dlq_list_with_status_filter(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_list
+
+        store = MagicMock()
+        store.list = AsyncMock(
+            return_value=[
+                _dlq_entry(dlq_id="fdlq_001", status=FederationNotificationDLQStatus.RETRIED),
+            ]
+        )
+        args = argparse.Namespace(config="agentapp.yaml", status="retried", channel=None, limit=100, offset=0)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_list(args))
+        assert rc == 0
+        store.list.assert_called_once_with(status="retried", channel=None, limit=100, offset=0)
+
+    def test_dlq_list_with_channel_filter(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_list
+
+        store = MagicMock()
+        store.list = AsyncMock(return_value=[])
+        args = argparse.Namespace(config="agentapp.yaml", status=None, channel="email", limit=50, offset=10)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_list(args))
+        assert rc == 0
+        store.list.assert_called_once_with(status=None, channel="email", limit=50, offset=10)
+
+    def test_dlq_show_existing(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_show
+
+        store = MagicMock()
+        entry = _dlq_entry(dlq_id="fdlq_001", notification_id="fn_001")
+        store.get = AsyncMock(return_value=entry)
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_001")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_show(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fdlq_001" in output
+        assert "fn_001" in output
+        assert "max_retries_exceeded" in output
+        assert "Connection timeout" in output
+
+    def test_dlq_show_nonexistent(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_show
+
+        store = MagicMock()
+        store.get = AsyncMock(return_value=None)
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_nonexistent")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_show(args))
+        assert rc == 1
+        assert "not found" in capsys.readouterr().err
+
+    def test_dlq_retry_success(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_retry
+
+        store = MagicMock()
+        retried_entry = _dlq_entry(dlq_id="fdlq_001", status=FederationNotificationDLQStatus.RETRIED)
+        store.mark_retried = AsyncMock(return_value=retried_entry)
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_001")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_retry(args))
+        assert rc == 0
+        assert "marked as retried" in capsys.readouterr().out
+        store.mark_retried.assert_called_once_with("fdlq_001")
+
+    def test_dlq_retry_nonexistent(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_retry
+
+        store = MagicMock()
+        store.mark_retried = AsyncMock(side_effect=ValueError("DLQ entry 'fdlq_nonexistent' not found"))
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_nonexistent")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_retry(args))
+        assert rc == 1
+        assert "not found" in capsys.readouterr().err
+
+    def test_dlq_purge_success(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_purge
+
+        store = MagicMock()
+        purged_entry = _dlq_entry(dlq_id="fdlq_001", status=FederationNotificationDLQStatus.PURGED)
+        store.mark_purged = AsyncMock(return_value=purged_entry)
+        store.delete = AsyncMock(return_value=None)
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_001")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_purge(args))
+        assert rc == 0
+        assert "purged and deleted" in capsys.readouterr().out
+        store.mark_purged.assert_called_once_with("fdlq_001")
+        store.delete.assert_called_once_with("fdlq_001")
+
+    def test_dlq_purge_nonexistent(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_purge
+
+        store = MagicMock()
+        store.mark_purged = AsyncMock(side_effect=ValueError("DLQ entry 'fdlq_nonexistent' not found"))
+        args = argparse.Namespace(config="agentapp.yaml", dlq_id="fdlq_nonexistent")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_purge(args))
+        assert rc == 1
+        assert "not found" in capsys.readouterr().err
+
+    def test_dlq_export_json(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_export
+
+        store = MagicMock()
+        store.list = AsyncMock(
+            return_value=[
+                _dlq_entry(dlq_id="fdlq_001", notification_id="fn_001"),
+            ]
+        )
+        args = argparse.Namespace(config="agentapp.yaml", format="json")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_export(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fdlq_001" in output
+        assert "fn_001" in output
+
+    def test_dlq_export_csv(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_export
+
+        store = MagicMock()
+        store.list = AsyncMock(
+            return_value=[
+                _dlq_entry(dlq_id="fdlq_001", notification_id="fn_001"),
+            ]
+        )
+        args = argparse.Namespace(config="agentapp.yaml", format="csv")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_dlq_store(store),
+        ):
+            rc = _run(_cmd_policy_federation_notification_dlq_export(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "dlq_id" in output
+        assert "fdlq_001" in output
+
+
+# ---------------------------------------------------------------------------
+# _cmd_policy_federation_worker_status / _cmd_policy_federation_worker_start
+# ---------------------------------------------------------------------------
+
+
+class TestFederationWorkerCLI:
+    """Tests for worker CLI commands (Phase 50)."""
+
+    def test_worker_status_not_configured(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_worker_status
+
+        app = MagicMock()
+        app.federation_scheduled_worker = None
+        args = argparse.Namespace(config="agentapp.yaml")
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run(_cmd_policy_federation_worker_status(args))
+        assert rc == 1
+        assert "not configured" in capsys.readouterr().err
+
+    def test_worker_status_running(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_worker_status
+
+        worker = MagicMock()
+        now = _now()
+        worker.status = AsyncMock(
+            return_value=FederationScheduledWorkerState(
+                worker_id="fsw_abc123",
+                status=FederationScheduledWorkerStatus.RUNNING,
+                interval_seconds=60,
+                started_at=now,
+                tick_count=42,
+                last_tick_at=now,
+                last_error=None,
+            )
+        )
+        args = argparse.Namespace(config="agentapp.yaml")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_scheduled_worker(worker),
+        ):
+            rc = _run(_cmd_policy_federation_worker_status(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fsw_abc123" in output
+        assert "running" in output
+        assert "42" in output
+
+    def test_worker_status_stopped(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_worker_status
+
+        worker = MagicMock()
+        worker.status = AsyncMock(
+            return_value=FederationScheduledWorkerState(
+                worker_id="fsw_abc123",
+                status=FederationScheduledWorkerStatus.STOPPED,
+                interval_seconds=60,
+                tick_count=0,
+                last_error=None,
+            )
+        )
+        args = argparse.Namespace(config="agentapp.yaml")
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_scheduled_worker(worker),
+        ):
+            rc = _run(_cmd_policy_federation_worker_status(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "stopped" in output
+
+    def test_worker_tick_once(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_worker_start
+
+        worker = MagicMock()
+        now = _now()
+        worker.tick = AsyncMock(
+            return_value=FederationScheduledWorkerState(
+                worker_id="fsw_abc123",
+                status=FederationScheduledWorkerStatus.STOPPED,
+                interval_seconds=60,
+                tick_count=1,
+                last_tick_at=now,
+                last_error=None,
+            )
+        )
+        args = argparse.Namespace(config="agentapp.yaml", once=True)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_scheduled_worker(worker),
+        ):
+            rc = _run(_cmd_policy_federation_worker_start(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fsw_abc123" in output
+        assert "1" in output
+        worker.tick.assert_called_once()
+
+    def test_worker_tick_no_services(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_worker_start
+
+        worker = MagicMock()
+        now = _now()
+        worker.tick = AsyncMock(
+            return_value=FederationScheduledWorkerState(
+                worker_id="fsw_nosvc",
+                status=FederationScheduledWorkerStatus.STOPPED,
+                interval_seconds=30,
+                tick_count=1,
+                last_tick_at=now,
+                last_error=None,
+            )
+        )
+        args = argparse.Namespace(config="agentapp.yaml", once=True)
+        with patch(
+            "agent_app.config.loader.build_app",
+            return_value=_app_with_scheduled_worker(worker),
+        ):
+            rc = _run(_cmd_policy_federation_worker_start(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "fsw_nosvc" in output

@@ -901,6 +901,38 @@ def main() -> int:
     federation_notification_by_approval_parser.add_argument("--approval-id", required=True, help="Approval request ID")
     federation_notification_by_approval_parser.set_defaults(func=_cmd_policy_federation_notification_by_approval)
 
+    # Phase 50: federation notification DLQ subcommands
+    federation_notification_dlq_parser = federation_notification_sub.add_parser("dlq", help="Federation notification dead-letter queue commands (Phase 50)")
+    federation_notification_dlq_sub = federation_notification_dlq_parser.add_subparsers(dest="federation_notification_dlq_command")
+
+    federation_notification_dlq_list_parser = federation_notification_dlq_sub.add_parser("list", help="List DLQ entries")
+    federation_notification_dlq_list_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dlq_list_parser.add_argument("--status", default=None, help="Filter by status")
+    federation_notification_dlq_list_parser.add_argument("--channel", default=None, help="Filter by channel")
+    federation_notification_dlq_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    federation_notification_dlq_list_parser.add_argument("--offset", type=int, default=0, help="Offset for pagination")
+    federation_notification_dlq_list_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_list)
+
+    federation_notification_dlq_show_parser = federation_notification_dlq_sub.add_parser("show", help="Show DLQ entry detail")
+    federation_notification_dlq_show_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dlq_show_parser.add_argument("--dlq-id", required=True, help="DLQ entry ID")
+    federation_notification_dlq_show_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_show)
+
+    federation_notification_dlq_retry_parser = federation_notification_dlq_sub.add_parser("retry", help="Retry a DLQ entry")
+    federation_notification_dlq_retry_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dlq_retry_parser.add_argument("--dlq-id", required=True, help="DLQ entry ID to retry")
+    federation_notification_dlq_retry_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_retry)
+
+    federation_notification_dlq_purge_parser = federation_notification_dlq_sub.add_parser("purge", help="Purge a DLQ entry")
+    federation_notification_dlq_purge_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dlq_purge_parser.add_argument("--dlq-id", required=True, help="DLQ entry ID to purge")
+    federation_notification_dlq_purge_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_purge)
+
+    federation_notification_dlq_export_parser = federation_notification_dlq_sub.add_parser("export", help="Export DLQ entries")
+    federation_notification_dlq_export_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dlq_export_parser.add_argument("--format", default="json", choices=["json", "csv"], help="Export format (default: json)")
+    federation_notification_dlq_export_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_export)
+
     federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
     federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
     federation_escalate_due_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
@@ -909,6 +941,19 @@ def main() -> int:
     federation_worker_tick_parser = federation_sub.add_parser("worker-tick", help="Run a single escalation worker tick")
     federation_worker_tick_parser.add_argument("--config", required=True, help="Config file path")
     federation_worker_tick_parser.set_defaults(func=_cmd_policy_federation_worker_tick)
+
+    # Phase 50: federation worker subcommands
+    federation_worker_parser = federation_sub.add_parser("worker", help="Federation scheduled worker commands (Phase 50)")
+    federation_worker_sub = federation_worker_parser.add_subparsers(dest="federation_worker_command")
+
+    federation_worker_status_parser = federation_worker_sub.add_parser("status", help="Show worker status")
+    federation_worker_status_parser.add_argument("--config", required=True, help="Config file path")
+    federation_worker_status_parser.set_defaults(func=_cmd_policy_federation_worker_status)
+
+    federation_worker_start_parser = federation_worker_sub.add_parser("start", help="Run a single worker tick")
+    federation_worker_start_parser.add_argument("--config", required=True, help="Config file path")
+    federation_worker_start_parser.add_argument("--once", action="store_true", default=True, help="Run a single tick (default: True)")
+    federation_worker_start_parser.set_defaults(func=_cmd_policy_federation_worker_start)
 
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
@@ -1420,6 +1465,20 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_federation_notification_dispatch(args))
             if args.federation_notification_command == "by-approval":
                 return asyncio.run(_cmd_policy_federation_notification_by_approval(args))
+            # Phase 50: federation notification DLQ subcommands
+            if args.federation_notification_command == "dlq":
+                if args.federation_notification_dlq_command == "list":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_list(args))
+                if args.federation_notification_dlq_command == "show":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_show(args))
+                if args.federation_notification_dlq_command == "retry":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_retry(args))
+                if args.federation_notification_dlq_command == "purge":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_purge(args))
+                if args.federation_notification_dlq_command == "export":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_export(args))
+                federation_notification_dlq_parser.print_help()
+                return 1
             federation_notification_parser.print_help()
             return 1
         # Phase 49: federation escalate-due subcommand
@@ -1428,6 +1487,14 @@ def main() -> int:
         # Phase 49: federation worker-tick subcommand
         if args.federation_command == "worker-tick":
             return asyncio.run(_cmd_policy_federation_worker_tick(args))
+        # Phase 50: federation worker subcommands
+        if args.federation_command == "worker":
+            if args.federation_worker_command == "status":
+                return asyncio.run(_cmd_policy_federation_worker_status(args))
+            if args.federation_worker_command == "start":
+                return asyncio.run(_cmd_policy_federation_worker_start(args))
+            federation_worker_parser.print_help()
+            return 1
         federation_parser.print_help()
         return 1
 
@@ -8206,6 +8273,262 @@ async def _cmd_policy_federation_worker_tick(args: argparse.Namespace) -> int:
         print("Errors:")
         for err in result.errors:
             print(f"  - {err}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 50: DLQ CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_dlq_list(args: argparse.Namespace) -> int:
+    """List DLQ entries."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await dlq_store.list(
+            status=args.status,
+            channel=args.channel,
+            limit=args.limit,
+            offset=args.offset,
+        )
+    except Exception as exc:
+        print(f"Error listing DLQ entries: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No DLQ entries found.")
+        return 0
+
+    print(f"{'DLQ ID':<24} {'Notification ID':<24} {'Channel':<10} {'Reason':<24} {'Status':<10} {'Failures':<10} {'Created At':<24}")
+    print("-" * 126)
+    for item in results:
+        did = item.dlq_id[:24]
+        nid = item.notification_id[:24]
+        ch = item.channel[:10]
+        reason = item.reason.value[:24]
+        st = item.status.value[:10]
+        fc = str(item.failure_count)[:10]
+        ca = item.created_at.isoformat()[:24]
+        print(f"{did:<24} {nid:<24} {ch:<10} {reason:<24} {st:<10} {fc:<10} {ca:<24}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_show(args: argparse.Namespace) -> int:
+    """Show DLQ entry detail."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        item = await dlq_store.get(args.dlq_id)
+    except Exception as exc:
+        print(f"Error fetching DLQ entry: {exc}", file=sys.stderr)
+        return 1
+
+    if item is None:
+        print(f"DLQ entry '{args.dlq_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"DLQ ID:          {item.dlq_id}")
+    print(f"Notification ID: {item.notification_id}")
+    print(f"Approval ID:     {item.approval_id or '-'}")
+    print(f"Federation ID:   {item.federation_id or '-'}")
+    print(f"Channel:         {item.channel}")
+    print(f"Adapter:         {item.adapter or '-'}")
+    print(f"Recipient:       {item.recipient or '-'}")
+    print(f"Reason:          {item.reason.value}")
+    print(f"Status:          {item.status.value}")
+    print(f"Failure Count:   {item.failure_count}")
+    print(f"Last Error:      {item.last_error or '-'}")
+    print(f"Created At:      {item.created_at.isoformat()}")
+    print(f"Updated At:      {item.updated_at.isoformat()}")
+    print(f"Retried At:      {item.retried_at.isoformat() if item.retried_at else '-'}")
+    print(f"Purged At:       {item.purged_at.isoformat() if item.purged_at else '-'}")
+    if item.payload:
+        print(f"Payload:         {item.payload}")
+    if item.metadata:
+        print(f"Metadata:        {item.metadata}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_retry(args: argparse.Namespace) -> int:
+    """Retry a DLQ entry."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        item = await dlq_store.mark_retried(args.dlq_id)
+    except ValueError:
+        print(f"DLQ entry '{args.dlq_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error retrying DLQ entry: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"DLQ entry '{item.dlq_id}' marked as retried.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_purge(args: argparse.Namespace) -> int:
+    """Purge a DLQ entry."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        item = await dlq_store.mark_purged(args.dlq_id)
+        await dlq_store.delete(args.dlq_id)
+    except ValueError:
+        print(f"DLQ entry '{args.dlq_id}' not found.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error purging DLQ entry: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"DLQ entry '{item.dlq_id}' purged and deleted.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_export(args: argparse.Namespace) -> int:
+    """Export DLQ entries."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_compliance_export import (
+        export_federation_dlq_summary_csv,
+        export_federation_dlq_summary_json,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        items = await dlq_store.list(limit=10000, offset=0)
+    except Exception as exc:
+        print(f"Error listing DLQ entries for export: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "csv":
+        output = export_federation_dlq_summary_csv(items)
+    else:
+        output = export_federation_dlq_summary_json(items)
+
+    print(output)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 50: Worker CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_worker_status(args: argparse.Namespace) -> int:
+    """Show federation scheduled worker status."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    scheduled_worker = getattr(app, "federation_scheduled_worker", None)
+    if scheduled_worker is None:
+        print("Federation scheduled worker not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        state = await scheduled_worker.status()
+    except Exception as exc:
+        print(f"Error getting worker status: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Worker ID:        {state.worker_id}")
+    print(f"Status:           {state.status.value}")
+    print(f"Interval (sec):   {state.interval_seconds}")
+    print(f"Tick Count:       {state.tick_count}")
+    print(f"Last Tick At:     {state.last_tick_at.isoformat() if state.last_tick_at else '-'}")
+    print(f"Last Error:       {state.last_error or '-'}")
+
+    return 0
+
+
+async def _cmd_policy_federation_worker_start(args: argparse.Namespace) -> int:
+    """Run a single tick of the federation scheduled worker."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    scheduled_worker = getattr(app, "federation_scheduled_worker", None)
+    if scheduled_worker is None:
+        print("Federation scheduled worker not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        # For safety, CLI always runs a single tick regardless of --once flag
+        state = await scheduled_worker.tick()
+    except Exception as exc:
+        print(f"Error running worker tick: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Worker ID:        {state.worker_id}")
+    print(f"Status:           {state.status.value}")
+    print(f"Tick Count:       {state.tick_count}")
+    print(f"Last Tick At:     {state.last_tick_at.isoformat() if state.last_tick_at else '-'}")
+    print(f"Last Error:       {state.last_error or '-'}")
 
     return 0
 
