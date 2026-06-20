@@ -112,6 +112,12 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_APPROVAL_ESCALATION_WORKER_TICKED = "policy.federation.approval.escalation_worker_ticked"
     FEDERATION_APPROVAL_ESCALATION_DUE = "policy.federation.approval.escalation_due"
     FEDERATION_APPROVAL_ESCALATION_LOCK_SKIPPED = "policy.federation.approval.escalation_lock_skipped"
+    FEDERATION_NOTIFICATION_DLQ_CREATED = "policy.federation.notification.dlq_created"
+    FEDERATION_NOTIFICATION_DLQ_RETRIED = "policy.federation.notification.dlq_retried"
+    FEDERATION_NOTIFICATION_DLQ_PURGED = "policy.federation.notification.dlq_purged"
+    FEDERATION_WORKER_STARTED = "policy.federation.worker.started"
+    FEDERATION_WORKER_STOPPED = "policy.federation.worker.stopped"
+    FEDERATION_WORKER_TICK_FAILED = "policy.federation.worker.tick_failed"
 
 
 class PolicyChangeEvent(BaseModel):

@@ -157,8 +157,8 @@ class TestPolicyChangeEventTypePhase49:
         assert PolicyChangeEventType.FEDERATION_APPROVAL_ESCALATION_LOCK_SKIPPED == "policy.federation.approval.escalation_lock_skipped"
 
     def test_event_type_count(self):
-        """94 original + 6 new = 100."""
-        assert len(PolicyChangeEventType) == 100
+        """94 original + 6 Phase 49 + 6 Phase 50 = 106."""
+        assert len(PolicyChangeEventType) == 106
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +193,8 @@ class TestFederationHistoryEventTypePhase49:
         assert FederationHistoryEventType.ESCALATION_LOCK_SKIPPED == "federation.escalation.lock_skipped"
 
     def test_event_type_count(self):
-        """28 original + 2 new (ESCALATION_WORKER_TICKED, ESCALATION_LOCK_SKIPPED) = 30."""
-        assert len(FederationHistoryEventType) == 30
+        """28 original + 2 Phase 49 + 3 Phase 50 = 33."""
+        assert len(FederationHistoryEventType) == 33
 
 
 # ---------------------------------------------------------------------------

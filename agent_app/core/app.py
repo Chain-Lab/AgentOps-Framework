@@ -304,6 +304,14 @@ class AgentApp:
     def distributed_lock(self) -> Any:
         return getattr(self, "_distributed_lock", None)
 
+    @property
+    def federation_dlq_store(self) -> Any:
+        return getattr(self, "_federation_dlq_store", None)
+
+    @property
+    def federation_scheduled_worker(self) -> Any:
+        return getattr(self, "_federation_scheduled_worker", None)
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

@@ -44,6 +44,9 @@ class FederationHistoryEventType(str, Enum):
     APPROVAL_CANCELLED = "approval.cancelled"
     ESCALATION_WORKER_TICKED = "federation.escalation.worker_ticked"
     ESCALATION_LOCK_SKIPPED = "federation.escalation.lock_skipped"
+    NOTIFICATION_DLQ_CREATED = "federation.notification.dlq_created"
+    NOTIFICATION_DLQ_RETRIED = "federation.notification.dlq_retried"
+    SCHEDULED_WORKER_TICK = "federation.scheduled.worker_ticked"
 
 
 class FederationHistoryEvent(BaseModel):

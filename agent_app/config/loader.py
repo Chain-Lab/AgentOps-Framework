@@ -1166,6 +1166,70 @@ def build_app(
         except Exception:
             pass  # Phase 49 wiring failure should not break existing behavior
 
+        # Phase 50: DLQ, retry policy, scheduled worker
+        try:
+            if fed_cfg is not None:
+
+                # DLQ store
+                if hasattr(fed_cfg, "notifications") and fed_cfg.notifications is not None:
+                    dlq_cfg = getattr(fed_cfg.notifications, "dlq", None)
+                    if dlq_cfg is not None and dlq_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_dlq_store import create_federation_notification_dlq_store
+                        dlq_store = create_federation_notification_dlq_store(
+                            store_type=dlq_cfg.type,
+                            db_path=dlq_cfg.path,
+                        )
+                        app._federation_dlq_store = dlq_store
+
+                        # Attach DLQ store to notification service if it exists
+                        ns = getattr(app, "_federation_notification_service", None)
+                        if ns is not None:
+                            ns._dlq_store = dlq_store
+
+                    # Retry policy
+                    retry_cfg = getattr(fed_cfg.notifications, "retry", None)
+                    if retry_cfg is not None:
+                        from agent_app.governance.policy_rollout_federation_notification import FederationNotificationRetryPolicy
+                        retry_policy = FederationNotificationRetryPolicy(
+                            max_attempts=retry_cfg.max_attempts,
+                            backoff_seconds=retry_cfg.backoff_seconds,
+                            send_to_dlq=retry_cfg.send_to_dlq,
+                        )
+                        ns = getattr(app, "_federation_notification_service", None)
+                        if ns is not None:
+                            ns._retry_policy = retry_policy
+
+                            # Per-channel retry policies
+                            by_channel = getattr(fed_cfg.notifications, "by_channel_retry", None)
+                            if by_channel:
+                                ns._by_channel_retry_policy = {
+                                    ch: FederationNotificationRetryPolicy(**cfg.model_dump())
+                                    for ch, cfg in by_channel.items()
+                                }
+
+                # Scheduled worker
+                sw_cfg = getattr(fed_cfg, "scheduled_worker", None)
+                if sw_cfg is not None and sw_cfg.enabled:
+                    from agent_app.runtime.policy_rollout_federation_scheduled_worker import FederationScheduledWorker
+                    from agent_app.runtime.distributed_lock import create_distributed_lock
+
+                    sw_lock = None
+                    if sw_cfg.lock_type:
+                        sw_lock = create_distributed_lock(
+                            store_type=sw_cfg.lock_type,
+                            db_path=sw_cfg.lock_path,
+                        )
+
+                    scheduled_worker = FederationScheduledWorker(
+                        escalation_worker=getattr(app, "_federation_escalation_worker", None),
+                        notification_service=getattr(app, "_federation_notification_service", None),
+                        distributed_lock=sw_lock,
+                        interval_seconds=sw_cfg.interval_seconds,
+                    )
+                    app._federation_scheduled_worker = scheduled_worker
+        except Exception:  # noqa: BLE001 — graceful failure
+            pass
+
     app._release_config = release_config
     return app
 
