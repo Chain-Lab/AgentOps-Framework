@@ -2,6 +2,34 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## [0.36.0] - Phase 48: Policy Rollout Federation Approval Workflows
+
+### Added
+- FederationApprovalStatus enum (pending, approved, rejected, expired, escalated, cancelled)
+- FederationApprovalRequest model with fap_ prefix
+- FederationApprovalPolicy model
+- FederationApprovalDecision model
+- FederationApprovalEscalation model
+- FederationApprovalDashboardSummary model
+- FederationApprovalStore (Protocol + InMemory + SQLite)
+- FederationApprovalService with approval check, delegation, escalation
+- RolloutFederationApprovalConfig in schema.py
+- Federation approval wiring in config loader
+- 4 RBAC permissions (federation.approval.list/approve/reject/escalate)
+- 6 PolicyChangeEventType values (FEDERATION_APPROVAL_*)
+- 5 FederationHistoryEventType values (APPROVAL_*)
+- 3 AgentApp properties (federation_approval_store/policy/service)
+- CLI federation approval commands (list, approve, reject, escalate)
+- Console federation approval pages (list, detail, plan approvals, approve/reject actions)
+- FederationObservabilityService approval summary integration
+- Federation approval JSON/CSV export helpers
+- RolloutFederationService approval integration (blocks sensitive actions)
+
+### Changed
+- PolicyChangeEventType: 88 → 94 event types
+- FederationHistoryEventType: 23 → 28 event types
+- Fixed Phase 47 console batch-mode asyncio test failures
+
 ## v0.35.0 — Phase 47: Policy Rollout Federation Observability and Reporting
 
 ### Added

@@ -3755,3 +3755,308 @@ governance:
 - No persisted scheduled reports
 - Existing old federations may have partial history if recorder was disabled
 - Parallel strategy remains logical/deterministic, not concurrent execution
+
+## Phase 48: Federation Approval Workflows
+
+### Purpose
+
+Phase 48 adds approval workflows to federation rollout operations. Sensitive
+federation actions — starting a plan, running targets, running all available
+targets, and cancelling — can be configured to require explicit approval before
+proceeding. This gives operators a safety gate before federated rollout actions
+affect multiple environments, regions, or tenants simultaneously.
+
+### Approval Policy Config
+
+Federation approval policies are configured under `rollout_federation_approval`:
+
+```yaml
+governance:
+  rollout_federation_approval:
+    enabled: true
+    require_approval_for:
+      - start
+      - run_next
+      - run_all
+      - cancel
+    auto_approve_roles:
+      - federation_admin
+    escalation_timeout_seconds: 3600
+    store:
+      type: sqlite
+      path: .agent_app/policy_federation_approvals.db
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `False` | Enable federation approval checks |
+| `require_approval_for` | `list[str]` | `[]` | Actions requiring approval: `start`, `run_next`, `run_all`, `cancel` |
+| `auto_approve_roles` | `list[str]` | `[]` | Roles that bypass approval (auto-approved) |
+| `escalation_timeout_seconds` | `int \| None` | `None` | Seconds before pending approval escalates |
+| `store` | `StoreConfig \| None` | `None` | Approval store config (memory/sqlite) |
+
+### Approval Lifecycle
+
+```
+create → approve/reject/escalate → execute
+```
+
+1. **Create** — When a sensitive action is attempted, `FederationApprovalService`
+   checks if approval is required. If so, a `FederationApprovalRequest` is
+   created with status `pending`.
+2. **Approve** — An authorized actor approves the request. Status transitions
+   to `approved`. The original action can then proceed.
+3. **Reject** — An authorized actor rejects the request. Status transitions to
+   `rejected`. The original action is blocked.
+4. **Escalate** — If `escalation_timeout_seconds` is configured and the request
+   remains pending past the timeout, the request is escalated. Status
+   transitions to `escalated`.
+5. **Expire** — Requests that are not resolved within their TTL transition to
+   `expired`.
+6. **Cancel** — The requester or an admin can cancel a pending request.
+
+### FederationApprovalStatus Enum
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Awaiting approval |
+| `approved` | Approved by authorized actor |
+| `rejected` | Rejected by authorized actor |
+| `expired` | TTL exceeded without resolution |
+| `escalated` | Escalated due to timeout |
+| `cancelled` | Cancelled by requester or admin |
+
+### FederationApprovalRequest Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `approval_id` | `str` | Unique ID (`fap_` prefix) |
+| `federation_id` | `str` | Target federated rollout plan |
+| `action` | `str` | Requested action (start, run_next, run_all, cancel) |
+| `status` | `FederationApprovalStatus` | Current lifecycle status |
+| `requested_by` | `str` | Who requested the action |
+| `reason` | `str \| None` | Why the action is requested |
+| `approved_by` | `str \| None` | Who approved |
+| `approved_reason` | `str \| None` | Why it was approved |
+| `rejected_by` | `str \| None` | Who rejected |
+| `rejected_reason` | `str \| None` | Why it was rejected |
+| `escalated_by` | `str \| None` | Who escalated (system or actor) |
+| `delegated_to` | `str \| None` | Delegated approver |
+| `created_at` | `datetime` | Request timestamp |
+| `resolved_at` | `datetime \| None` | Resolution timestamp |
+
+### FederationApprovalPolicy Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `require_approval_for` | `list[str]` | Actions requiring approval |
+| `auto_approve_roles` | `list[str]` | Roles that bypass approval |
+| `escalation_timeout_seconds` | `int \| None` | Escalation timeout |
+| `require_reason` | `bool` | Whether approve/reject require reason |
+
+### FederationApprovalDecision Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `decision_id` | `str` | Unique ID |
+| `approval_id` | `str` | Parent approval request |
+| `decision_type` | `str` | `approve`, `reject`, `escalate`, `cancel` |
+| `decided_by` | `str` | Who made the decision |
+| `reason` | `str \| None` | Why the decision was made |
+| `created_at` | `datetime` | Decision timestamp |
+
+### FederationApprovalEscalation Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `escalation_id` | `str` | Unique ID |
+| `approval_id` | `str` | Parent approval request |
+| `escalated_by` | `str` | Who triggered escalation |
+| `reason` | `str \| None` | Why it was escalated |
+| `delegated_to` | `str \| None` | New approver after delegation |
+| `created_at` | `datetime` | Escalation timestamp |
+
+### FederationApprovalDashboardSummary Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total` | `int` | Total approval requests |
+| `pending` | `int` | Pending requests |
+| `approved` | `int` | Approved requests |
+| `rejected` | `int` | Rejected requests |
+| `expired` | `int` | Expired requests |
+| `escalated` | `int` | Escalated requests |
+| `cancelled` | `int` | Cancelled requests |
+
+### Delegated Approval
+
+Approval requests can be delegated to another actor via the `delegate_approval()`
+method. Delegation sets `delegated_to` on the approval request, indicating the
+new responsible approver. The original requester is not notified (no notification
+adapter integration yet).
+
+### Escalation
+
+If `escalation_timeout_seconds` is configured, pending requests that exceed the
+timeout can be escalated via the `escalate()` method. Escalation transitions the
+request status to `escalated` and records a `FederationApprovalEscalation` record.
+Escalation is checked at action time, not by a background worker.
+
+### FederationApprovalStore
+
+Protocol + InMemory + SQLite persistence:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create()` | `create(request) -> FederationApprovalRequest` | Create a new approval request |
+| `get()` | `get(approval_id) -> FederationApprovalRequest \| None` | Get by approval ID |
+| `list()` | `list(federation_id=None, status=None, action=None) -> list` | List with optional filters |
+| `update()` | `update(request) -> FederationApprovalRequest` | Update an existing request |
+| `delete()` | `delete(approval_id) -> None` | Delete an approval request |
+
+Factory: `create_federation_approval_store(store_type, db_path)` supports
+`"memory"` and `"sqlite"` types.
+
+### FederationApprovalService
+
+Core service with the following methods:
+
+| Method | Description |
+|--------|-------------|
+| `requires_approval(federation_id, action, context)` | Check if approval is required for the action |
+| `create_approval_request(federation_id, action, requested_by, ...)` | Create a pending approval request |
+| `approve(approval_id, approved_by, context, reason)` | Approve a pending request |
+| `reject(approval_id, rejected_by, context, reason)` | Reject a pending request |
+| `escalate(approval_id, escalated_by, reason)` | Escalate a pending request |
+| `cancel(approval_id, cancelled_by, reason)` | Cancel a pending request |
+| `delegate_approval(approval_id, delegated_to, delegated_by, reason)` | Delegate to another approver |
+| `check_approval_status(approval_id)` | Check current approval status |
+| `is_action_approved(federation_id, action)` | Check if a specific action is approved |
+| `get_dashboard_summary()` | Get approval counts summary |
+
+### RolloutFederationService Integration
+
+The `RolloutFederationService` checks approval before executing sensitive
+actions. When `federation_approval_service` is configured:
+
+- `start_federated_rollout()` — blocks if approval required and not approved
+- `run_next_target()` — blocks if approval required and not approved
+- `run_all_available()` — blocks if approval required and not approved
+- `cancel_federated_rollout()` — blocks if approval required and not approved
+
+When an action is blocked, the service returns an approval-required result
+instead of executing the action.
+
+### CLI Workflows
+
+```bash
+# List federation approval requests
+agentapp policy federation approval list --config agentapp.yaml \
+  [--federation-id frp_abc123] [--status pending] [--json]
+
+# Approve a federation approval request
+agentapp policy federation approval approve --config agentapp.yaml \
+  --approval-id fap_xxx --approved-by admin [--reason "Approved after review"]
+
+# Reject a federation approval request
+agentapp policy federation approval reject --config agentapp.yaml \
+  --approval-id fap_xxx --rejected-by admin [--reason "Risk too high"]
+
+# Escalate a federation approval request
+agentapp policy federation approval escalate --config agentapp.yaml \
+  --approval-id fap_xxx --escalated-by admin [--reason "Needs senior review"]
+```
+
+The `run-all` command displays approval-required status when actions are
+blocked by pending approvals.
+
+### Console Workflow
+
+| Route | Description |
+|-------|-------------|
+| `GET /policy-console/federation/approvals` | List all federation approval requests |
+| `GET /policy-console/federation/approvals/{approval_id}` | Approval detail with action forms |
+| `GET /policy-console/federation/plans/{federation_id}/approvals` | Plan-specific approval list |
+| `POST /policy-console/federation/approvals/{approval_id}/approve` | Approve a pending request |
+| `POST /policy-console/federation/approvals/{approval_id}/reject` | Reject a pending request |
+
+### Observability Fields
+
+The `FederationObservabilityService` now includes approval summary data:
+
+- Pending approval count in analytics reports
+- Approval outcome breakdown (approved/rejected/expired/escalated/cancelled)
+- Approval export helpers (JSON, CSV) include approval fields
+
+### RBAC Permissions (Phase 48 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `FEDERATION_APPROVAL_LIST` | `federation.approval.list` | Allowed |
+| `FEDERATION_APPROVAL_APPROVE` | `federation.approval.approve` | Requires grant |
+| `FEDERATION_APPROVAL_REJECT` | `federation.approval.reject` | Requires grant |
+| `FEDERATION_APPROVAL_ESCALATE` | `federation.approval.escalate` | Requires grant |
+
+### Change Events (Phase 48 additions)
+
+6 new `PolicyChangeEventType` values (88 → 94 total):
+
+| Event Type | Trigger |
+|-----------|---------|
+| `FEDERATION_APPROVAL_REQUESTED` | Approval requested for federation action |
+| `FEDERATION_APPROVAL_APPROVED` | Federation approval granted |
+| `FEDERATION_APPROVAL_REJECTED` | Federation approval denied |
+| `FEDERATION_APPROVAL_ESCALATED` | Federation approval escalated |
+| `FEDERATION_APPROVAL_EXPIRED` | Federation approval expired |
+| `FEDERATION_APPROVAL_CANCELLED` | Federation approval cancelled |
+
+### Federation History Events (Phase 48 additions)
+
+5 new `FederationHistoryEventType` values (23 → 28 total):
+
+| Event Type | Trigger |
+|-----------|---------|
+| `APPROVAL_REQUESTED` | Federation approval requested |
+| `APPROVAL_APPROVED` | Federation approval granted |
+| `APPROVAL_REJECTED` | Federation approval denied |
+| `APPROVAL_ESCALATED` | Federation approval escalated |
+| `APPROVAL_EXPIRED` | Federation approval expired |
+
+### AgentApp Properties (Phase 48 additions)
+
+3 new properties on `AgentApp`:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `federation_approval_store` | `FederationApprovalStore \| None` | Approval store instance |
+| `federation_approval_policy` | `FederationApprovalPolicy \| None` | Active approval policy |
+| `federation_approval_service` | `FederationApprovalService \| None` | Approval service instance |
+
+### Known Limitations
+
+1. **Approval workflows are framework-level** — No integration with external
+   identity providers. Approval identities are simple strings supplied via
+   RunContext or CLI flags.
+
+2. **No external identity provider integration yet** — Roles and permissions
+   are supplied through RunContext / CLI, not from LDAP, SAML, OIDC, or other
+   identity providers.
+
+3. **No notification adapter yet** — When an approval is requested, there is
+   no email, Slack, webhook, or other notification to approvers. Operators
+   must poll the approval list or check the console.
+
+4. **No persisted scheduled escalation worker** — Escalation timeout is checked
+   at action time, not by a background worker. A pending approval that exceeds
+   the timeout will only transition to `escalated` when explicitly escalated
+   or when the next approval-related action is taken, unless a worker is
+   implemented explicitly.
+
+5. **No distributed lock** — Approval operations are local to a single process.
+   Concurrent approval decisions from multiple processes are not protected by
+   a distributed lock.
+
+6. **Approval resume is deterministic service-level resume** — When a federation
+   action is blocked by a pending approval and the approval is later granted,
+   the action does not automatically resume. Operators must re-invoke the
+   original action (start, run-next, run-all, cancel) after approval.

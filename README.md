@@ -1260,3 +1260,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - [x] **Phase 45**: Policy Rollout Analytics, History, and Gate Outcome Reporting
 - [x] **Phase 46**: Policy Rollout Federation and Conflict Detection
 - [x] **Phase 47**: Federation Observability and Reporting
+- [x] **Phase 48**: Federation Approval Workflows
