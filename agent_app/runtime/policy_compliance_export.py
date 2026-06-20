@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 from agent_app.governance.policy_observability import PolicyObservabilityReport
+from agent_app.governance.policy_rollout_federation_notification import FederationNotificationDeadLetter
 from agent_app.governance.policy_simulation import PolicySimulationReport
 from agent_app.runtime.policy_validation import PolicyValidationReport
 
@@ -297,4 +298,81 @@ def export_federation_notification_summary_csv(summary: dict[str, Any]) -> str:
     writer.writerow(["metric", "value"])
     for key, value in summary.items():
         writer.writerow([key, value])
+    return output.getvalue()
+
+
+def export_federation_dlq_summary_json(
+    items: list[FederationNotificationDeadLetter],
+) -> str:
+    """Export DLQ entries as JSON string.
+
+    Args:
+        items: List of DLQ entries to export.
+
+    Returns:
+        JSON string with dlq_id, notification_id, approval_id, federation_id,
+        channel, reason, status, failure_count, last_error, created_at, updated_at.
+    """
+    rows = []
+    for item in items:
+        rows.append({
+            "dlq_id": item.dlq_id,
+            "notification_id": item.notification_id,
+            "approval_id": item.approval_id or "",
+            "federation_id": item.federation_id or "",
+            "channel": item.channel,
+            "reason": item.reason.value,
+            "status": item.status.value,
+            "failure_count": item.failure_count,
+            "last_error": item.last_error or "",
+            "created_at": item.created_at.isoformat(),
+            "updated_at": item.updated_at.isoformat(),
+        })
+    return json.dumps(rows, indent=2)
+
+
+def export_federation_dlq_summary_csv(
+    items: list[FederationNotificationDeadLetter],
+) -> str:
+    """Export DLQ entries as CSV string.
+
+    Args:
+        items: List of DLQ entries to export.
+
+    Returns:
+        CSV string with header row and one row per entry.
+    """
+    import csv
+    import io
+
+    headers = [
+        "dlq_id",
+        "notification_id",
+        "approval_id",
+        "federation_id",
+        "channel",
+        "reason",
+        "status",
+        "failure_count",
+        "last_error",
+        "created_at",
+        "updated_at",
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for item in items:
+        writer.writerow([
+            item.dlq_id,
+            item.notification_id,
+            item.approval_id or "",
+            item.federation_id or "",
+            item.channel,
+            item.reason.value,
+            item.status.value,
+            item.failure_count,
+            item.last_error or "",
+            item.created_at.isoformat(),
+            item.updated_at.isoformat(),
+        ])
     return output.getvalue()
