@@ -261,6 +261,33 @@ class AgentApp:
     def federation_observability_service(self, value: Any) -> None:
         self._federation_observability_service = value
 
+    @property
+    def federation_approval_store(self) -> Any:
+        """Phase 48: Return the federation approval store, if configured."""
+        return getattr(self, "_federation_approval_store", None)
+
+    @federation_approval_store.setter
+    def federation_approval_store(self, value: Any) -> None:
+        self._federation_approval_store = value
+
+    @property
+    def federation_approval_policy(self) -> Any:
+        """Phase 48: Return the federation approval policy, if configured."""
+        return getattr(self, "_federation_approval_policy", None)
+
+    @federation_approval_policy.setter
+    def federation_approval_policy(self, value: Any) -> None:
+        self._federation_approval_policy = value
+
+    @property
+    def federation_approval_service(self) -> Any:
+        """Phase 48: Return the federation approval service, if configured."""
+        return getattr(self, "_federation_approval_service", None)
+
+    @federation_approval_service.setter
+    def federation_approval_service(self, value: Any) -> None:
+        self._federation_approval_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

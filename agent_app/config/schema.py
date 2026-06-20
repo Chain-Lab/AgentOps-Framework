@@ -574,12 +574,40 @@ class RolloutFederationConflictPolicyConfig(BaseModel):
     warn_on_bundle_conflict: bool = Field(default=True, description="Report active different-bundle overlaps as warnings")
 
 
+class RolloutFederationApprovalConfig(BaseModel):
+    """Configuration for federation approval workflows (Phase 48)."""
+
+    enabled: bool = Field(default=False, description="Enable federation approval workflows")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str = Field(default=".agent_app/federation_approvals.db", description="SQLite db path")
+    require_approval_for: list[str] = Field(
+        default_factory=lambda: [
+            "federation.plan.start",
+            "federation.plan.run_all",
+            "federation.override_conflicts",
+        ],
+        description="Actions that require approval",
+    )
+    default_required_approvers: list[str] = Field(
+        default_factory=lambda: ["release_manager", "policy_admin"],
+        description="Default required approver roles",
+    )
+    delegation_enabled: bool = Field(default=False, description="Enable approval delegation")
+    escalation_enabled: bool = Field(default=False, description="Enable approval escalation")
+    escalation_after_minutes: int = Field(
+        default=60,
+        description="Minutes before escalating an unactioned approval",
+    )
+    escalate_to: list[str] = Field(default_factory=list, description="Roles to escalate to")
+
+
 class RolloutFederationConfig(BaseModel):
     """Rollout federation configuration (Phase 46)."""
     enabled: bool = Field(default=False, description="Enable rollout federation services")
     target_store: PolicyReleaseStoreConfig | None = Field(default=None, description="Federated rollout target store")
     plan_store: PolicyReleaseStoreConfig | None = Field(default=None, description="Federated rollout plan store")
     conflict_policy: RolloutFederationConflictPolicyConfig = Field(default_factory=RolloutFederationConflictPolicyConfig, description="Federation conflict policy")
+    approvals: RolloutFederationApprovalConfig = Field(default_factory=RolloutFederationApprovalConfig, description="Federation approval config (Phase 48)")
 
 
 class RolloutFederationHistoryConfig(BaseModel):

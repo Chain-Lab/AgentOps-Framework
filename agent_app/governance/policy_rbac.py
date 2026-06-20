@@ -51,6 +51,10 @@ class PolicyReleasePermission(StrEnum):
         FEDERATION_PLAN_CANCEL: Cancel a federated rollout plan.
         FEDERATION_PLAN_VIEW: View federated rollout plans (default-allowed).
         FEDERATION_CONFLICT_VIEW: View federated rollout conflicts (default-allowed).
+        FEDERATION_APPROVAL_LIST: List federation approvals (default-allowed).
+        FEDERATION_APPROVAL_APPROVE: Approve a federation approval request.
+        FEDERATION_APPROVAL_REJECT: Reject a federation approval request.
+        FEDERATION_APPROVAL_ESCALATE: Escalate a federation approval request.
     """
 
     BUNDLE_CREATE = "policy.bundle.create"
@@ -125,6 +129,10 @@ class PolicyReleasePermission(StrEnum):
     FEDERATION_HISTORY_VIEW = "policy.federation.history.view"
     FEDERATION_ANALYTICS_VIEW = "policy.federation.analytics.view"
     FEDERATION_ANALYTICS_EXPORT = "policy.federation.analytics.export"
+    FEDERATION_APPROVAL_LIST = "policy.federation.approval.list"
+    FEDERATION_APPROVAL_APPROVE = "policy.federation.approval.approve"
+    FEDERATION_APPROVAL_REJECT = "policy.federation.approval.reject"
+    FEDERATION_APPROVAL_ESCALATE = "policy.federation.approval.escalate"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -152,6 +160,7 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.FEDERATION_CONFLICT_VIEW,
     PolicyReleasePermission.FEDERATION_HISTORY_VIEW,
     PolicyReleasePermission.FEDERATION_ANALYTICS_VIEW,
+    PolicyReleasePermission.FEDERATION_APPROVAL_LIST,
 }
 
 

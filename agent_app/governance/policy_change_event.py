@@ -100,6 +100,12 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_ANALYTICS_EXPORT_GENERATED = "policy.federation.analytics.export_generated"
     FEDERATION_ANALYTICS_EXPORT_FAILED = "policy.federation.analytics.export_failed"
     FEDERATION_ANALYTICS_PERMISSION_DENIED = "policy.federation.analytics.permission_denied"
+    FEDERATION_APPROVAL_CREATED = "policy.federation.approval.created"
+    FEDERATION_APPROVAL_APPROVED = "policy.federation.approval.approved"
+    FEDERATION_APPROVAL_REJECTED = "policy.federation.approval.rejected"
+    FEDERATION_APPROVAL_ESCALATED = "policy.federation.approval.escalated"
+    FEDERATION_APPROVAL_CANCELLED = "policy.federation.approval.cancelled"
+    FEDERATION_APPROVAL_PERMISSION_DENIED = "policy.federation.approval.permission_denied"
 
 
 class PolicyChangeEvent(BaseModel):

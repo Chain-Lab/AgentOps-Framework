@@ -1049,6 +1049,40 @@ def build_app(
         except Exception:
             pass  # Phase 47 wiring failure should not break existing behavior
 
+        # -- Phase 48: Federation Approval --
+        try:
+            _fed_approval_cfg = getattr(fed_cfg, 'approvals', None) if fed_cfg else None
+            if _fed_approval_cfg and _fed_approval_cfg.enabled:
+                from agent_app.runtime.policy_rollout_federation_approval_store import create_federation_approval_store
+                from agent_app.runtime.policy_rollout_federation_approval_service import FederationApprovalService
+                from agent_app.governance.policy_rollout_federation_approval import FederationApprovalPolicy
+
+                federation_approval_store = create_federation_approval_store(
+                    type=_fed_approval_cfg.type,
+                    path=_fed_approval_cfg.path,
+                )
+                federation_approval_policy = FederationApprovalPolicy(
+                    enabled=_fed_approval_cfg.enabled,
+                    require_approval_for=_fed_approval_cfg.require_approval_for,
+                    default_required_approvers=_fed_approval_cfg.default_required_approvers,
+                    delegation_enabled=_fed_approval_cfg.delegation_enabled,
+                    escalation_enabled=_fed_approval_cfg.escalation_enabled,
+                    escalation_after_minutes=_fed_approval_cfg.escalation_after_minutes,
+                    escalate_to=_fed_approval_cfg.escalate_to,
+                )
+                federation_approval_service = FederationApprovalService(
+                    approval_store=federation_approval_store,
+                    approval_policy=federation_approval_policy,
+                    audit_logger=audit_logger,
+                    change_event_store=event_store,
+                    federation_history_recorder=getattr(app, 'federation_history_recorder', None),
+                )
+                app.federation_approval_store = federation_approval_store
+                app.federation_approval_policy = federation_approval_policy
+                app.federation_approval_service = federation_approval_service
+        except Exception:
+            pass  # Phase 48 wiring failure should not break existing behavior
+
     app._release_config = release_config
     return app
 
