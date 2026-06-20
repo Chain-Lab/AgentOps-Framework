@@ -23,6 +23,9 @@ from agent_app.governance.policy_rollout_federation_history import (
     FederationWaveOutcomeSummary,
     FederationWaveTimeline,
 )
+from agent_app.governance.policy_rollout_federation_approval import (
+    FederationApprovalDashboardSummary,
+)
 from agent_app.runtime.policy_rollout_federation_history_store import (
     FederationHistoryStore,
 )
@@ -48,6 +51,7 @@ class FederationObservabilityService:
         rollout_history_service: Any | None = None,
         notification_store: Any | None = None,
         audit_logger: Any | None = None,
+        approval_store: Any | None = None,
     ) -> None:
         self._history_store = history_store
         self._federation_plan_store = federation_plan_store
@@ -55,6 +59,7 @@ class FederationObservabilityService:
         self._rollout_history_service = rollout_history_service
         self._notification_store = notification_store
         self._audit_logger = audit_logger
+        self._approval_store = approval_store
 
     # ------------------------------------------------------------------
     # Timeline
@@ -411,6 +416,37 @@ class FederationObservabilityService:
             for tenant, count in sorted(tenant_counts.items(), key=lambda x: (-x[1], x[0]))
         ]
 
+        # Approval summary enrichment from approval_store
+        if self._approval_store is not None:
+            try:
+                approval_summary = await self._approval_store.get_dashboard_summary()
+                report.metadata["approvals_pending_count"] = approval_summary.total_pending
+                report.metadata["approvals_approved_count"] = approval_summary.total_approved
+                report.metadata["approvals_rejected_count"] = approval_summary.total_rejected
+                report.metadata["average_approval_latency_seconds"] = approval_summary.average_approval_latency_seconds
+                report.metadata["approvals_by_tenant"] = approval_summary.by_tenant
+                report.metadata["approvals_by_target"] = approval_summary.by_action
+                report.metadata["escalated_approvals_count"] = approval_summary.total_escalated
+                report.metadata["blocked_federation_actions_count"] = approval_summary.blocked_federation_actions
+            except Exception:
+                report.metadata["approvals_pending_count"] = 0
+                report.metadata["approvals_approved_count"] = 0
+                report.metadata["approvals_rejected_count"] = 0
+                report.metadata["average_approval_latency_seconds"] = None
+                report.metadata["approvals_by_tenant"] = {}
+                report.metadata["approvals_by_target"] = {}
+                report.metadata["escalated_approvals_count"] = 0
+                report.metadata["blocked_federation_actions_count"] = 0
+        else:
+            report.metadata["approvals_pending_count"] = 0
+            report.metadata["approvals_approved_count"] = 0
+            report.metadata["approvals_rejected_count"] = 0
+            report.metadata["average_approval_latency_seconds"] = None
+            report.metadata["approvals_by_tenant"] = {}
+            report.metadata["approvals_by_target"] = {}
+            report.metadata["escalated_approvals_count"] = 0
+            report.metadata["blocked_federation_actions_count"] = 0
+
         return report
 
     # ------------------------------------------------------------------
@@ -438,3 +474,18 @@ class FederationObservabilityService:
             event_type=event_type,
             limit=limit,
         )
+
+    # ------------------------------------------------------------------
+    # Approval summary
+    # ------------------------------------------------------------------
+
+    async def get_approval_summary(
+        self, tenant_id: str | None = None
+    ) -> FederationApprovalDashboardSummary:
+        """Return a FederationApprovalDashboardSummary from the approval store.
+
+        If no approval_store is configured, returns an empty summary.
+        """
+        if self._approval_store is None:
+            return FederationApprovalDashboardSummary()
+        return await self._approval_store.get_dashboard_summary(tenant_id=tenant_id)

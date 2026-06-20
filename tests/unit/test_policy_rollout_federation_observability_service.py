@@ -36,6 +36,18 @@ from agent_app.runtime.policy_rollout_federation_store import (
 from agent_app.runtime.policy_rollout_federation_observability_service import (
     FederationObservabilityService,
 )
+from agent_app.governance.policy_rollout_federation_approval import (
+    FederationApprovalDashboardSummary,
+    FederationApprovalRequest,
+    FederationApprovalStatus,
+)
+from agent_app.runtime.policy_rollout_federation_approval_store import (
+    InMemoryFederationApprovalStore,
+)
+from agent_app.runtime.policy_compliance_export import (
+    export_federation_approval_summary_json,
+    export_federation_approval_summary_csv,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -473,3 +485,244 @@ class TestFederationObservabilityListEvents:
         events = await service.list_history_events(federation_id="frp_f1")
         assert len(events) == 2
         assert all(e.federation_id == "frp_f1" for e in events)
+
+
+# ===========================================================================
+# TestFederationObservabilityApprovalSummary
+# ===========================================================================
+
+
+class TestFederationObservabilityApprovalSummary:
+    """Tests for FederationObservabilityService approval summary integration."""
+
+    @pytest.mark.asyncio
+    async def test_get_approval_summary_returns_empty_when_no_store(self) -> None:
+        """get_approval_summary returns empty FederationApprovalDashboardSummary when no store."""
+        store = InMemoryFederationHistoryStore()
+        service = FederationObservabilityService(history_store=store)
+
+        summary = await service.get_approval_summary()
+        assert isinstance(summary, FederationApprovalDashboardSummary)
+        assert summary.total_pending == 0
+        assert summary.total_approved == 0
+        assert summary.total_rejected == 0
+        assert summary.average_approval_latency_seconds is None
+        assert summary.by_tenant == {}
+        assert summary.by_action == {}
+        assert summary.blocked_federation_actions == 0
+
+    @pytest.mark.asyncio
+    async def test_get_approval_summary_returns_empty_with_tenant_filter(self) -> None:
+        """get_approval_summary with tenant_id returns empty when no store."""
+        store = InMemoryFederationHistoryStore()
+        service = FederationObservabilityService(history_store=store)
+
+        summary = await service.get_approval_summary(tenant_id="tenant_1")
+        assert isinstance(summary, FederationApprovalDashboardSummary)
+        assert summary.total_pending == 0
+
+    @pytest.mark.asyncio
+    async def test_get_approval_summary_returns_populated_summary(self) -> None:
+        """get_approval_summary returns populated data from approval store."""
+        history_store = InMemoryFederationHistoryStore()
+        approval_store = InMemoryFederationApprovalStore()
+        service = FederationObservabilityService(
+            history_store=history_store,
+            approval_store=approval_store,
+        )
+
+        # Create approval requests
+        req1 = FederationApprovalRequest(
+            approval_id="fap_001",
+            federation_id="frp_f1",
+            action="federation.plan.start",
+            requested_by="user1",
+            tenant_id="tenant_a",
+            required_approvers=["approver1"],
+            created_at=_now(),
+        )
+        req2 = FederationApprovalRequest(
+            approval_id="fap_002",
+            federation_id="frp_f2",
+            action="federation.target.execute",
+            requested_by="user2",
+            tenant_id="tenant_b",
+            required_approvers=["approver2"],
+            created_at=_now(-60),
+        )
+        await approval_store.create(req1)
+        await approval_store.create(req2)
+
+        # Approve one
+        await approval_store.approve("fap_002", "approver2")
+
+        summary = await service.get_approval_summary()
+        assert summary.total_pending == 1
+        assert summary.total_approved == 1
+        assert summary.average_approval_latency_seconds is not None
+        assert summary.average_approval_latency_seconds > 0
+
+    @pytest.mark.asyncio
+    async def test_get_approval_summary_with_tenant_filter(self) -> None:
+        """get_approval_summary with tenant_id filters to that tenant."""
+        history_store = InMemoryFederationHistoryStore()
+        approval_store = InMemoryFederationApprovalStore()
+        service = FederationObservabilityService(
+            history_store=history_store,
+            approval_store=approval_store,
+        )
+
+        req1 = FederationApprovalRequest(
+            approval_id="fap_001",
+            federation_id="frp_f1",
+            action="federation.plan.start",
+            requested_by="user1",
+            tenant_id="tenant_a",
+            required_approvers=["approver1"],
+            created_at=_now(),
+        )
+        req2 = FederationApprovalRequest(
+            approval_id="fap_002",
+            federation_id="frp_f2",
+            action="federation.target.execute",
+            requested_by="user2",
+            tenant_id="tenant_b",
+            required_approvers=["approver2"],
+            created_at=_now(),
+        )
+        await approval_store.create(req1)
+        await approval_store.create(req2)
+
+        summary = await service.get_approval_summary(tenant_id="tenant_a")
+        assert summary.total_pending == 1
+        assert "tenant_a" in summary.by_tenant
+
+    @pytest.mark.asyncio
+    async def test_generate_report_includes_approval_metadata_when_store_present(self) -> None:
+        """generate_report includes approval summary metadata when approval_store is configured."""
+        history_store = InMemoryFederationHistoryStore()
+        approval_store = InMemoryFederationApprovalStore()
+        service = FederationObservabilityService(
+            history_store=history_store,
+            approval_store=approval_store,
+        )
+
+        # Add a history event so report is non-empty
+        await history_store.append(_make_event(
+            FederationHistoryEventType.FEDERATION_STARTED,
+            federation_id="frp_f1",
+        ))
+
+        # Add an approval request
+        req = FederationApprovalRequest(
+            approval_id="fap_001",
+            federation_id="frp_f1",
+            action="federation.plan.start",
+            requested_by="user1",
+            tenant_id="tenant_a",
+            required_approvers=["approver1"],
+            created_at=_now(),
+        )
+        await approval_store.create(req)
+
+        report = await service.generate_report()
+        assert report.metadata["approvals_pending_count"] == 1
+        assert report.metadata["approvals_approved_count"] == 0
+        assert report.metadata["approvals_rejected_count"] == 0
+        assert report.metadata["escalated_approvals_count"] == 0
+        assert report.metadata["blocked_federation_actions_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_generate_report_has_zero_approval_metadata_when_no_store(self) -> None:
+        """generate_report has zero/default approval metadata when no approval_store."""
+        history_store = InMemoryFederationHistoryStore()
+        service = FederationObservabilityService(history_store=history_store)
+
+        await history_store.append(_make_event(
+            FederationHistoryEventType.FEDERATION_STARTED,
+            federation_id="frp_f1",
+        ))
+
+        report = await service.generate_report()
+        assert report.metadata["approvals_pending_count"] == 0
+        assert report.metadata["approvals_approved_count"] == 0
+        assert report.metadata["approvals_rejected_count"] == 0
+        assert report.metadata["average_approval_latency_seconds"] is None
+        assert report.metadata["approvals_by_tenant"] == {}
+        assert report.metadata["approvals_by_target"] == {}
+        assert report.metadata["escalated_approvals_count"] == 0
+        assert report.metadata["blocked_federation_actions_count"] == 0
+
+
+# ===========================================================================
+# TestFederationApprovalExportHelpers
+# ===========================================================================
+
+
+class TestFederationApprovalExportHelpers:
+    """Tests for federation approval summary export helpers."""
+
+    def test_export_federation_approval_summary_json(self) -> None:
+        """export_federation_approval_summary_json returns valid JSON string."""
+        summary = FederationApprovalDashboardSummary(
+            total_pending=2,
+            total_approved=5,
+            total_rejected=1,
+            total_expired=0,
+            total_escalated=1,
+            total_cancelled=0,
+            average_approval_latency_seconds=42.5,
+            by_tenant={"tenant_a": 2},
+            by_action={"federation.plan.start": 2},
+            blocked_federation_actions=2,
+        )
+        result = export_federation_approval_summary_json(summary)
+        assert isinstance(result, str)
+        assert "total_pending" in result
+        assert "total_approved" in result
+        assert "42.5" in result
+
+    def test_export_federation_approval_summary_csv(self) -> None:
+        """export_federation_approval_summary_csv returns flat rows."""
+        summary = FederationApprovalDashboardSummary(
+            total_pending=2,
+            total_approved=5,
+            total_rejected=1,
+            total_expired=0,
+            total_escalated=1,
+            total_cancelled=0,
+            average_approval_latency_seconds=42.5,
+            by_tenant={"tenant_a": 2},
+            by_action={"federation.plan.start": 2},
+            blocked_federation_actions=2,
+        )
+        rows = export_federation_approval_summary_csv(summary)
+        assert len(rows) >= 1
+
+        totals_row = next(r for r in rows if r["section"] == "totals")
+        assert totals_row["total_pending"] == 2
+        assert totals_row["total_approved"] == 5
+        assert totals_row["average_approval_latency_seconds"] == 42.5
+
+        tenant_rows = [r for r in rows if r["section"] == "by_tenant"]
+        assert len(tenant_rows) == 1
+        assert tenant_rows[0]["tenant_id"] == "tenant_a"
+
+        action_rows = [r for r in rows if r["section"] == "by_action"]
+        assert len(action_rows) == 1
+        assert action_rows[0]["action"] == "federation.plan.start"
+
+    def test_export_federation_approval_summary_json_empty(self) -> None:
+        """export_federation_approval_summary_json works with empty summary."""
+        summary = FederationApprovalDashboardSummary()
+        result = export_federation_approval_summary_json(summary)
+        assert isinstance(result, str)
+        assert "total_pending" in result
+
+    def test_export_federation_approval_summary_csv_empty(self) -> None:
+        """export_federation_approval_summary_csv works with empty summary."""
+        summary = FederationApprovalDashboardSummary()
+        rows = export_federation_approval_summary_csv(summary)
+        assert len(rows) >= 1
+        totals_row = next(r for r in rows if r["section"] == "totals")
+        assert totals_row["total_pending"] == 0

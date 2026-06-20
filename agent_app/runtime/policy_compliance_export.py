@@ -232,4 +232,51 @@ def federation_analytics_report_to_csv_rows(report: Any) -> list[dict[str, Any]]
     # Tenant summary rows
     for ten in report.tenant_summary:
         rows.append({"section": "tenant_summary", **ten})
+    # Approval summary row (if present in metadata)
+    approval_fields = {
+        k: report.metadata.get(k)
+        for k in (
+            "approvals_pending_count",
+            "approvals_approved_count",
+            "approvals_rejected_count",
+            "average_approval_latency_seconds",
+            "escalated_approvals_count",
+            "blocked_federation_actions_count",
+        )
+    }
+    if any(v is not None for v in approval_fields.values()):
+        rows.append({"section": "approval_summary", **approval_fields})
+    return rows
+
+
+def export_federation_approval_summary_json(
+    summary: Any,
+) -> str:
+    """Export a FederationApprovalDashboardSummary as JSON string."""
+    return summary.model_dump_json(indent=2)
+
+
+def export_federation_approval_summary_csv(
+    summary: Any,
+) -> list[dict[str, Any]]:
+    """Export a FederationApprovalDashboardSummary as flat CSV-compatible rows."""
+    rows: list[dict[str, Any]] = []
+    # Totals row
+    rows.append({
+        "section": "totals",
+        "total_pending": summary.total_pending,
+        "total_approved": summary.total_approved,
+        "total_rejected": summary.total_rejected,
+        "total_expired": summary.total_expired,
+        "total_escalated": summary.total_escalated,
+        "total_cancelled": summary.total_cancelled,
+        "average_approval_latency_seconds": summary.average_approval_latency_seconds or "",
+        "blocked_federation_actions": summary.blocked_federation_actions,
+    })
+    # By tenant rows
+    for tenant, count in sorted(summary.by_tenant.items()):
+        rows.append({"section": "by_tenant", "tenant_id": tenant, "count": count})
+    # By action rows
+    for action, count in sorted(summary.by_action.items()):
+        rows.append({"section": "by_action", "action": action, "count": count})
     return rows
