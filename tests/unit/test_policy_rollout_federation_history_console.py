@@ -1,6 +1,7 @@
 """Phase 47 Task 8: Console federation history/timeline/analytics page tests."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -164,9 +165,12 @@ def _observability_service_with_events() -> FederationObservabilityService:
     ]
 
     # Store events and return plan for the plan_store.get
-    import asyncio
-    for e in events:
-        asyncio.get_event_loop().run_until_complete(history_store.append(e))
+    loop = asyncio.new_event_loop()
+    try:
+        for e in events:
+            loop.run_until_complete(history_store.append(e))
+    finally:
+        loop.close()
 
     plan_store.get = AsyncMock(return_value=_plan())
 
