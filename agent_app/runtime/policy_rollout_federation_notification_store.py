@@ -24,6 +24,7 @@ class FederationNotificationStore(Protocol):
 
     async def create(self, message: FederationNotificationMessage) -> FederationNotificationMessage: ...
     async def get(self, notification_id: str) -> FederationNotificationMessage | None: ...
+    async def list(self, status: FederationNotificationStatus | None = None, limit: int = 100) -> list[FederationNotificationMessage]: ...
     async def list_pending(self, limit: int = 100) -> list[FederationNotificationMessage]: ...
     async def mark_sent(self, notification_id: str) -> FederationNotificationMessage: ...
     async def mark_failed(self, notification_id: str, error: str, next_attempt_at: datetime | None = None) -> FederationNotificationMessage: ...
@@ -48,6 +49,13 @@ class InMemoryFederationNotificationStore:
 
     async def get(self, notification_id: str) -> FederationNotificationMessage | None:
         return self._messages.get(notification_id)
+
+    async def list(self, status: FederationNotificationStatus | None = None, limit: int = 100) -> list[FederationNotificationMessage]:
+        msgs = list(self._messages.values())
+        if status is not None:
+            msgs = [m for m in msgs if m.status == status]
+        msgs.sort(key=lambda m: m.created_at)
+        return msgs[:limit]
 
     async def list_pending(self, limit: int = 100) -> list[FederationNotificationMessage]:
         pending = [
@@ -172,6 +180,19 @@ class SQLiteFederationNotificationStore:
         if row is None:
             return None
         return self._row_to_message(row)
+
+    async def list(self, status: FederationNotificationStatus | None = None, limit: int = 100) -> list[FederationNotificationMessage]:
+        if status is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM federation_notifications WHERE status=? ORDER BY created_at ASC LIMIT ?",
+                (status.value, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM federation_notifications ORDER BY created_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._row_to_message(row) for row in rows]
 
     async def list_pending(self, limit: int = 100) -> list[FederationNotificationMessage]:
         rows = self._conn.execute(

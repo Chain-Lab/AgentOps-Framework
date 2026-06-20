@@ -881,6 +881,35 @@ def main() -> int:
     approval_escalate_parser.add_argument("--reason", default=None, help="Reason for escalation")
     approval_escalate_parser.set_defaults(func=_cmd_policy_federation_approval_escalate)
 
+    # Phase 49: federation notification subcommands under federation
+    federation_notification_parser = federation_sub.add_parser("notification", help="Federation notification commands (Phase 49)")
+    federation_notification_sub = federation_notification_parser.add_subparsers(dest="federation_notification_command")
+
+    federation_notification_list_parser = federation_notification_sub.add_parser("list", help="List federation notifications")
+    federation_notification_list_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_list_parser.add_argument("--status", default="pending", help="Filter by status (default: pending)")
+    federation_notification_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    federation_notification_list_parser.set_defaults(func=_cmd_policy_federation_notification_list)
+
+    federation_notification_dispatch_parser = federation_notification_sub.add_parser("dispatch", help="Dispatch pending federation notifications")
+    federation_notification_dispatch_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_dispatch_parser.add_argument("--limit", type=int, default=100, help="Max notifications to dispatch")
+    federation_notification_dispatch_parser.set_defaults(func=_cmd_policy_federation_notification_dispatch)
+
+    federation_notification_by_approval_parser = federation_notification_sub.add_parser("by-approval", help="List notifications for a specific approval")
+    federation_notification_by_approval_parser.add_argument("--config", required=True, help="Config file path")
+    federation_notification_by_approval_parser.add_argument("--approval-id", required=True, help="Approval request ID")
+    federation_notification_by_approval_parser.set_defaults(func=_cmd_policy_federation_notification_by_approval)
+
+    federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
+    federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
+    federation_escalate_due_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    federation_escalate_due_parser.set_defaults(func=_cmd_policy_federation_approval_escalate_due)
+
+    federation_worker_tick_parser = federation_sub.add_parser("worker-tick", help="Run a single escalation worker tick")
+    federation_worker_tick_parser.add_argument("--config", required=True, help="Config file path")
+    federation_worker_tick_parser.set_defaults(func=_cmd_policy_federation_worker_tick)
+
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
     notification_sub = notification_parser.add_subparsers(dest="notification_command")
@@ -1383,6 +1412,22 @@ def main() -> int:
                 return asyncio.run(_cmd_policy_federation_approval_escalate(args))
             approval_parser.print_help()
             return 1
+        # Phase 49: federation notification subcommands
+        if args.federation_command == "notification":
+            if args.federation_notification_command == "list":
+                return asyncio.run(_cmd_policy_federation_notification_list(args))
+            if args.federation_notification_command == "dispatch":
+                return asyncio.run(_cmd_policy_federation_notification_dispatch(args))
+            if args.federation_notification_command == "by-approval":
+                return asyncio.run(_cmd_policy_federation_notification_by_approval(args))
+            federation_notification_parser.print_help()
+            return 1
+        # Phase 49: federation escalate-due subcommand
+        if args.federation_command == "escalate-due":
+            return asyncio.run(_cmd_policy_federation_approval_escalate_due(args))
+        # Phase 49: federation worker-tick subcommand
+        if args.federation_command == "worker-tick":
+            return asyncio.run(_cmd_policy_federation_worker_tick(args))
         federation_parser.print_help()
         return 1
 
@@ -7977,6 +8022,192 @@ async def _cmd_policy_federation_approval_escalate(args: argparse.Namespace) -> 
     except Exception as exc:
         print(f"Error escalating request: {exc}", file=sys.stderr)
         return 1
+
+
+async def _cmd_policy_federation_notification_list(args: argparse.Namespace) -> int:
+    """List federation notification messages."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_store", None)
+    if store is None:
+        print("Federation notification store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.status == "pending":
+            results = await store.list_pending(limit=args.limit)
+        else:
+            results = await store.list(status=None, limit=args.limit)
+            if args.status is not None:
+                results = [n for n in results if n.status.value == args.status]
+    except Exception as exc:
+        print(f"Error listing notifications: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No notifications found.")
+        return 0
+
+    print(f"{'Notification ID':<24} {'Approval ID':<24} {'Event Type':<24} {'Channel':<10} {'Status':<10} {'Attempts':<10}")
+    print("-" * 102)
+    for n in results:
+        nid = n.notification_id[:24]
+        aid = n.approval_id[:24]
+        etype = n.event_type.value[:24]
+        ch = n.channel.value[:10]
+        st = n.status.value[:10]
+        att = str(n.attempt_count)[:10]
+        print(f"{nid:<24} {aid:<24} {etype:<24} {ch:<10} {st:<10} {att:<10}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_dispatch(args: argparse.Namespace) -> int:
+    """Dispatch pending federation notifications."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_notification_service", None)
+    if service is None:
+        print("Federation notification service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.dispatch_pending(limit=args.limit)
+    except Exception as exc:
+        print(f"Error dispatching notifications: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Dispatched: {result.total_dispatched}")
+    print(f"Sent:       {result.total_sent}")
+    print(f"Failed:     {result.total_failed}")
+    print(f"Skipped:    {result.total_skipped}")
+    if result.errors:
+        print("Errors:")
+        for err in result.errors:
+            print(f"  - {err}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_by_approval(args: argparse.Namespace) -> int:
+    """List federation notifications for a specific approval."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_store", None)
+    if store is None:
+        print("Federation notification store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await store.list_by_approval(approval_id=args.approval_id)
+    except Exception as exc:
+        print(f"Error listing notifications by approval: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No notifications found.")
+        return 0
+
+    print(f"{'Notification ID':<24} {'Approval ID':<24} {'Event Type':<24} {'Channel':<10} {'Status':<10} {'Attempts':<10}")
+    print("-" * 102)
+    for n in results:
+        nid = n.notification_id[:24]
+        aid = n.approval_id[:24]
+        etype = n.event_type.value[:24]
+        ch = n.channel.value[:10]
+        st = n.status.value[:10]
+        att = str(n.attempt_count)[:10]
+        print(f"{nid:<24} {aid:<24} {etype:<24} {ch:<10} {st:<10} {att:<10}")
+
+    return 0
+
+
+async def _cmd_policy_federation_approval_escalate_due(args: argparse.Namespace) -> int:
+    """Escalate federation approvals that are due for escalation."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    worker = getattr(app, "federation_escalation_worker", None)
+    if worker is None:
+        print("Federation escalation worker not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.dry_run:
+            original_dry_run = worker._dry_run
+            worker._dry_run = True
+            result = await worker.tick()
+            worker._dry_run = original_dry_run
+        else:
+            result = await worker.tick()
+    except Exception as exc:
+        print(f"Error running escalation tick: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Scanned:   {result.scanned_count}")
+    print(f"Escalated: {result.escalated_count}")
+    print(f"Skipped:   {result.skipped_count}")
+    if result.errors:
+        print("Errors:")
+        for err in result.errors:
+            print(f"  - {err}")
+
+    return 0
+
+
+async def _cmd_policy_federation_worker_tick(args: argparse.Namespace) -> int:
+    """Run a single tick of the federation escalation worker."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    worker = getattr(app, "federation_escalation_worker", None)
+    if worker is None:
+        print("Federation escalation worker not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await worker.tick()
+    except Exception as exc:
+        print(f"Error running worker tick: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Scanned:   {result.scanned_count}")
+    print(f"Escalated: {result.escalated_count}")
+    print(f"Skipped:   {result.skipped_count}")
+    if result.errors:
+        print("Errors:")
+        for err in result.errors:
+            print(f"  - {err}")
+
+    return 0
 
 
 if __name__ == "__main__":
