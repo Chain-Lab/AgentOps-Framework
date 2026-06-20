@@ -1,0 +1,76 @@
+{% if approval %}
+<h2>Federation Approval: {{ approval.approval_id }}</h2>
+
+{% if message %}
+<div class="info">{{ message }}</div>
+{% endif %}
+
+<p>
+  <a href="{{ base_path }}/federation/approvals">&larr; Back to Federation Approvals</a> |
+  <a href="{{ base_path }}/federation/plans/{{ approval.federation_id }}">Federation Plan</a> |
+  <a href="{{ base_path }}/federation/plans/{{ approval.federation_id }}/history">History Timeline</a>
+</p>
+
+<table>
+  <tr><th>Approval ID</th><td>{{ approval.approval_id }}</td></tr>
+  <tr><th>Federation ID</th><td><a href="{{ base_path }}/federation/plans/{{ approval.federation_id }}">{{ approval.federation_id }}</a></td></tr>
+  <tr><th>Rollout ID</th><td>{{ approval.rollout_id or "&mdash;" }}</td></tr>
+  <tr><th>Target ID</th><td>{{ approval.target_id or "&mdash;" }}</td></tr>
+  <tr><th>Wave ID</th><td>{{ approval.wave_id or "&mdash;" }}</td></tr>
+  <tr><th>Tenant ID</th><td>{{ approval.tenant_id or "&mdash;" }}</td></tr>
+  <tr><th>Environment</th><td>{{ approval.environment or "&mdash;" }}</td></tr>
+  <tr><th>Region</th><td>{{ approval.region or "&mdash;" }}</td></tr>
+  <tr><th>Ring</th><td>{{ approval.ring or "&mdash;" }}</td></tr>
+  <tr><th>Action</th><td>{{ approval.action }}</td></tr>
+  <tr><th>Requested By</th><td>{{ approval.requested_by }}</td></tr>
+  <tr><th>Reason</th><td>{{ approval.reason or "&mdash;" }}</td></tr>
+  <tr><th>Status</th><td>
+    {% if approval.status == "pending" %}
+    <span style="color: #b58900;">{{ approval.status }}</span>
+    {% elif approval.status == "approved" %}
+    <span style="color: #2aa198;">{{ approval.status }}</span>
+    {% elif approval.status == "rejected" %}
+    <span style="color: #dc322f;">{{ approval.status }}</span>
+    {% elif approval.status == "escalated" %}
+    <span style="color: #cb4b16;">{{ approval.status }}</span>
+    {% else %}
+    {{ approval.status }}
+    {% endif %}
+  </td></tr>
+  <tr><th>Required Approvers</th><td>{{ approval.required_approvers | join(", ") }}</td></tr>
+  <tr><th>Delegated Approvers</th><td>{{ approval.delegated_approvers | join(", ") or "&mdash;" }}</td></tr>
+  <tr><th>Approvers Who Approved</th><td>{{ approval.approvers_who_approved | join(", ") or "&mdash;" }}</td></tr>
+  <tr><th>Approvers Who Rejected</th><td>{{ approval.approvers_who_rejected | join(", ") or "&mdash;" }}</td></tr>
+  <tr><th>Rejection Reason</th><td>{{ approval.rejection_reason or "&mdash;" }}</td></tr>
+  <tr><th>Escalation Level</th><td>{{ approval.escalation_level }}</td></tr>
+  <tr><th>Escalation Reason</th><td>{{ approval.escalation_reason or "&mdash;" }}</td></tr>
+  <tr><th>Created At</th><td>{{ approval.created_at }}</td></tr>
+  <tr><th>Resolved At</th><td>{{ approval.resolved_at or "&mdash;" }}</td></tr>
+  <tr><th>Resolved By</th><td>{{ approval.resolved_by or "&mdash;" }}</td></tr>
+  <tr><th>Expires At</th><td>{{ approval.expires_at or "&mdash;" }}</td></tr>
+</table>
+
+{% if approval.status == "pending" or approval.status == "escalated" %}
+<h3>Approve</h3>
+<form method="POST" action="{{ base_path }}/federation/approvals/{{ approval.approval_id }}/approve">
+  <input name="actor_id" placeholder="Actor ID" required>
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Approve</button>
+</form>
+
+<h3>Reject</h3>
+<form method="POST" action="{{ base_path }}/federation/approvals/{{ approval.approval_id }}/reject">
+  <input name="actor_id" placeholder="Actor ID" required>
+  <input name="reason" placeholder="Reason">
+  <button type="submit">Reject</button>
+</form>
+{% endif %}
+
+{% elif error %}
+<h2>Federation Approval</h2>
+<p class="error">{{ error }}</p>
+
+{% else %}
+<h2>Federation Approval</h2>
+<p>Approval store not configured or approval does not exist.</p>
+{% endif %}

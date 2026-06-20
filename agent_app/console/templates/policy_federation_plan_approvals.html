@@ -1,0 +1,55 @@
+<h2>Federation Approvals — {{ federation_id }}</h2>
+
+<p>
+  <a href="{{ base_path }}/federation/plans/{{ federation_id }}">&larr; Back to Federation Plan</a> |
+  <a href="{{ base_path }}/federation/approvals">All Federation Approvals</a>
+</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation approval store not configured.</p>
+</div>
+{% elif not approvals %}
+<div class="empty-state">
+  <p>No approval requests found for federation '{{ federation_id }}'.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Approval ID</th>
+      <th>Action</th>
+      <th>Status</th>
+      <th>Requested By</th>
+      <th>Required Approvers</th>
+      <th>Created At</th>
+      <th>Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in approvals %}
+    <tr>
+      <td>{{ a.approval_id }}</td>
+      <td>{{ a.action }}</td>
+      <td>
+        {% if a.status == "pending" %}
+        <span style="color: #b58900;">{{ a.status }}</span>
+        {% elif a.status == "approved" %}
+        <span style="color: #2aa198;">{{ a.status }}</span>
+        {% elif a.status == "rejected" %}
+        <span style="color: #dc322f;">{{ a.status }}</span>
+        {% elif a.status == "escalated" %}
+        <span style="color: #cb4b16;">{{ a.status }}</span>
+        {% else %}
+        {{ a.status }}
+        {% endif %}
+      </td>
+      <td>{{ a.requested_by }}</td>
+      <td>{{ a.required_approvers | join(", ") }}</td>
+      <td>{{ a.created_at }}</td>
+      <td><a href="{{ base_path }}/federation/approvals/{{ a.approval_id }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

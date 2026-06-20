@@ -68,6 +68,8 @@ def build_policy_console_router(
     federated_rollout_target_store: Any = None,
     federated_rollout_plan_store: Any = None,
     federation_observability_service: Any = None,
+    federation_approval_store: Any = None,
+    federation_approval_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -104,6 +106,8 @@ def build_policy_console_router(
         federated_rollout_target_store: Optional federated rollout target store (Phase 46).
         federated_rollout_plan_store: Optional federated rollout plan store (Phase 46).
         federation_observability_service: Optional federation observability service (Phase 47).
+        federation_approval_store: Optional federation approval store (Phase 48).
+        federation_approval_service: Optional federation approval service (Phase 48).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -4914,6 +4918,214 @@ def build_policy_console_router(
                 "until_default": until_default,
             },
         )
+
+    # -----------------------------------------------------------------------
+    # Phase 48 Task 7: Federation approval pages
+    # -----------------------------------------------------------------------
+
+    if federation_approval_store is not None:
+
+        def _federation_approval_to_row(req: Any) -> dict:
+            """Convert FederationApprovalRequest to a table row dict."""
+            created = req.created_at
+            if hasattr(created, "isoformat"):
+                created = created.isoformat()
+            return {
+                "approval_id": req.approval_id,
+                "federation_id": req.federation_id,
+                "action": req.action,
+                "status": req.status.value if hasattr(req.status, "value") else str(req.status),
+                "requested_by": req.requested_by,
+                "required_approvers": req.required_approvers,
+                "created_at": created,
+            }
+
+        def _federation_approval_to_detail(req: Any) -> dict:
+            """Convert FederationApprovalRequest to a detail dict."""
+            created = req.created_at
+            if hasattr(created, "isoformat"):
+                created = created.isoformat()
+            resolved = req.resolved_at
+            if hasattr(resolved, "isoformat"):
+                resolved = resolved.isoformat()
+            expires = req.expires_at
+            if hasattr(expires, "isoformat"):
+                expires = expires.isoformat()
+            return {
+                "approval_id": req.approval_id,
+                "federation_id": req.federation_id,
+                "rollout_id": req.rollout_id or "",
+                "target_id": req.target_id or "",
+                "wave_id": req.wave_id or "",
+                "tenant_id": req.tenant_id or "",
+                "environment": req.environment or "",
+                "region": req.region or "",
+                "ring": req.ring or "",
+                "action": req.action,
+                "requested_by": req.requested_by,
+                "required_approvers": req.required_approvers,
+                "delegated_approvers": req.delegated_approvers,
+                "approvers_who_approved": req.approvers_who_approved,
+                "approvers_who_rejected": req.approvers_who_rejected,
+                "status": req.status.value if hasattr(req.status, "value") else str(req.status),
+                "reason": req.reason or "",
+                "rejection_reason": req.rejection_reason or "",
+                "escalation_level": req.escalation_level,
+                "escalation_reason": req.escalation_reason or "",
+                "created_at": created,
+                "resolved_at": resolved or "",
+                "resolved_by": req.resolved_by or "",
+                "expires_at": expires or "",
+                "metadata": req.metadata,
+            }
+
+        @router.get("/federation/approvals", response_class=HTMLResponse)
+        async def federation_approvals_page(request: Request):
+            """Federation approval requests list."""
+            status_filter = request.query_params.get("status", "")
+            federation_id_filter = request.query_params.get("federation_id", "")
+            tenant_id_filter = request.query_params.get("tenant_id", "")
+            action_filter = request.query_params.get("action", "")
+
+            from agent_app.governance.policy_rollout_federation_approval import FederationApprovalStatus
+            status_enum = None
+            if status_filter:
+                try:
+                    status_enum = FederationApprovalStatus(status_filter)
+                except ValueError:
+                    status_enum = None
+
+            approvals_list: list[dict] = []
+            if federation_approval_store is not None:
+                approvals = await federation_approval_store.list(
+                    federation_id=federation_id_filter or None,
+                    status=status_enum,
+                    tenant_id=tenant_id_filter or None,
+                    action=action_filter or None,
+                )
+                for a in approvals:
+                    approvals_list.append(_federation_approval_to_row(a))
+
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_approval_list.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "approvals": approvals_list,
+                    "filters": {
+                        "status": status_filter,
+                        "federation_id": federation_id_filter,
+                        "tenant_id": tenant_id_filter,
+                        "action": action_filter,
+                    },
+                    "store_available": True,
+                },
+            )
+
+        @router.get("/federation/approvals/{approval_id}", response_class=HTMLResponse)
+        async def federation_approval_detail_page(request: Request, approval_id: str):
+            """Single federation approval request detail."""
+            approval = await federation_approval_store.get(approval_id)
+            if approval is None:
+                return templates.TemplateResponse(
+                    request,
+                    "policy_federation_approval_detail.html",
+                    {
+                        "title": title,
+                        "base_path": base_path,
+                        "approval": None,
+                        "error": f"Approval request '{approval_id}' not found.",
+                        "message": None,
+                    },
+                )
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_approval_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "approval": _federation_approval_to_detail(approval),
+                    "error": None,
+                    "message": None,
+                },
+            )
+
+        @router.get("/federation/plans/{federation_id}/approvals", response_class=HTMLResponse)
+        async def federation_plan_approvals_page(request: Request, federation_id: str):
+            """Approvals for a specific federation plan."""
+            approvals_list: list[dict] = []
+            if federation_approval_store is not None:
+                approvals = await federation_approval_store.list(federation_id=federation_id)
+                for a in approvals:
+                    approvals_list.append(_federation_approval_to_row(a))
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_plan_approvals.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "federation_id": federation_id,
+                    "approvals": approvals_list,
+                    "store_available": True,
+                },
+            )
+
+        @router.post("/federation/approvals/{approval_id}/approve", response_class=HTMLResponse)
+        async def federation_approval_approve_action(request: Request, approval_id: str):
+            """Approve a federation approval request."""
+            message = None
+            if federation_approval_service is None:
+                return HTMLResponse("Approval service not configured", status_code=400)
+            try:
+                form = await request.form()
+                actor_id = str(form.get("actor_id", ""))
+                reason = form.get("reason")
+                reason_str = str(reason) if reason is not None else None
+                await federation_approval_service.approve(approval_id, actor_id, reason_str)
+                message = f"Approval request '{approval_id}' approved."
+            except (ValueError, PermissionError) as e:
+                return HTMLResponse(f"Error: {e}", status_code=400)
+            approval = await federation_approval_store.get(approval_id)
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_approval_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "approval": _federation_approval_to_detail(approval) if approval else None,
+                    "error": None,
+                    "message": message,
+                },
+            )
+
+        @router.post("/federation/approvals/{approval_id}/reject", response_class=HTMLResponse)
+        async def federation_approval_reject_action(request: Request, approval_id: str):
+            """Reject a federation approval request."""
+            message = None
+            if federation_approval_service is None:
+                return HTMLResponse("Approval service not configured", status_code=400)
+            try:
+                form = await request.form()
+                actor_id = str(form.get("actor_id", ""))
+                reason = form.get("reason")
+                reason_str = str(reason) if reason is not None else None
+                await federation_approval_service.reject(approval_id, actor_id, reason_str)
+                message = f"Approval request '{approval_id}' rejected."
+            except (ValueError, PermissionError) as e:
+                return HTMLResponse(f"Error: {e}", status_code=400)
+            approval = await federation_approval_store.get(approval_id)
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_approval_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "approval": _federation_approval_to_detail(approval) if approval else None,
+                    "error": None,
+                    "message": message,
+                },
+            )
 
     return router
 

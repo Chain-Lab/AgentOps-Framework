@@ -1,0 +1,60 @@
+<h1>Federation Approvals</h1>
+
+<form method="get" action="{{ base_path }}/federation/approvals">
+  <input name="status" placeholder="Status (pending/approved/rejected/expired/escalated/cancelled)" value="{{ filters.status }}">
+  <input name="federation_id" placeholder="Federation ID" value="{{ filters.federation_id }}">
+  <input name="tenant_id" placeholder="Tenant ID" value="{{ filters.tenant_id }}">
+  <input name="action" placeholder="Action" value="{{ filters.action }}">
+  <button type="submit">Filter</button>
+</form>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation approval store not configured.</p>
+</div>
+{% elif not approvals %}
+<div class="empty-state">
+  <p>No federation approval requests found.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Approval ID</th>
+      <th>Federation ID</th>
+      <th>Action</th>
+      <th>Status</th>
+      <th>Requested By</th>
+      <th>Required Approvers</th>
+      <th>Created At</th>
+      <th>Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in approvals %}
+    <tr>
+      <td>{{ a.approval_id }}</td>
+      <td>{{ a.federation_id }}</td>
+      <td>{{ a.action }}</td>
+      <td>
+        {% if a.status == "pending" %}
+        <span style="color: #b58900;">{{ a.status }}</span>
+        {% elif a.status == "approved" %}
+        <span style="color: #2aa198;">{{ a.status }}</span>
+        {% elif a.status == "rejected" %}
+        <span style="color: #dc322f;">{{ a.status }}</span>
+        {% elif a.status == "escalated" %}
+        <span style="color: #cb4b16;">{{ a.status }}</span>
+        {% else %}
+        {{ a.status }}
+        {% endif %}
+      </td>
+      <td>{{ a.requested_by }}</td>
+      <td>{{ a.required_approvers | join(", ") }}</td>
+      <td>{{ a.created_at }}</td>
+      <td><a href="{{ base_path }}/federation/approvals/{{ a.approval_id }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
