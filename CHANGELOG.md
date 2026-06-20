@@ -2,6 +2,28 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.37.0 — Phase 49: Federation Approval Notification & Escalation Workers
+
+### Added
+- Federation notification models (FederationNotificationChannel, Status, EventType, Message, Delivery, Policy, Target, DispatchResult)
+- Federation notification store (InMemory + SQLite + factory)
+- Federation notification adapters (noop, console, fake, webhook)
+- Federation notification service (enqueue for approval lifecycle events + dispatch)
+- Federation approval escalation worker (single-tick, dry-run, distributed lock)
+- Distributed lock (InMemory + SQLite + factory)
+- CLI commands: notification list/dispatch/by-approval, escalate-due, worker tick
+- Console pages: notification list/detail, approval notifications, escalation dashboard
+- 6 new PolicyChangeEventType values (FEDERATION_NOTIFICATION_*, ESCALATION_*)
+- 2 new FederationHistoryEventType values (ESCALATION_*)
+- 3 new PolicyReleasePermission values (FEDERATION_NOTIFICATION_LIST/DISPATCH, FEDERATION_ESCALATION_RUN)
+- Observability notification summary and export helpers
+- Approval service notification integration (best-effort)
+
+### Changed
+- PolicyChangeEventType count: 94 → 100
+- FederationHistoryEventType count: 28 → 30
+- PolicyReleasePermission count: 76 → 79
+
 ## [0.36.0] - Phase 48: Policy Rollout Federation Approval Workflows
 
 ### Added

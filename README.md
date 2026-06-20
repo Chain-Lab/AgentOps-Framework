@@ -1261,3 +1261,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - [x] **Phase 46**: Policy Rollout Federation and Conflict Detection
 - [x] **Phase 47**: Federation Observability and Reporting
 - [x] **Phase 48**: Federation Approval Workflows
+- **Phase 49**: Federation Approval Notification & Escalation Workers — notification adapters, outbox store, dispatch service, escalation worker, distributed lock, CLI commands, console pages

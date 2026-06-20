@@ -4060,3 +4060,57 @@ The `FederationObservabilityService` now includes approval summary data:
    action is blocked by a pending approval and the approval is later granted,
    the action does not automatically resume. Operators must re-invoke the
    original action (start, run-next, run-all, cancel) after approval.
+
+---
+
+## Phase 49: Federation Approval Notification & Escalation Workers
+
+Phase 49 adds federation-level notification adapters, notification outbox, escalation worker, and distributed lock to make Phase 48's approval workflows production-ready.
+
+### New Modules
+
+| Module | Description |
+|--------|-------------|
+| `governance/policy_rollout_federation_notification` | Federation notification models (7 models: channel, status, event type enums; message, delivery, policy, target, dispatch result) |
+| `runtime/policy_rollout_federation_notification_store` | Federation notification store (Protocol + InMemory + SQLite) |
+| `runtime/policy_rollout_federation_notification_adapters` | Notification adapters (noop, console, fake, webhook) |
+| `runtime/policy_rollout_federation_notification_service` | Federation notification service (enqueue + dispatch) |
+| `runtime/policy_rollout_federation_escalation_worker` | Escalation worker (single-tick pattern) |
+| `runtime/distributed_lock` | Distributed lock (Protocol + InMemory + SQLite) |
+
+### Notification Architecture
+
+- **Outbox pattern**: Notification messages are written to an outbox store, then dispatched by a separate `dispatch_pending()` call
+- **Channel abstraction**: Adapters implement `FederationNotificationAdapter` protocol (noop, console, fake, webhook)
+- **Retry**: Failed notifications are retried with configurable backoff
+- **Best-effort**: Notification failures never break approval state transitions
+
+### Escalation Worker
+
+- **Single-tick pattern**: `tick()` runs once and returns, no infinite loop
+- **Distributed lock**: SQLite lock prevents duplicate worker execution
+- **Dry-run mode**: Scan without mutating approvals
+- **Configurable timeout**: Escalation after configurable minutes
+
+### CLI Commands
+
+```bash
+agentapp policy federation notification list --status pending
+agentapp policy federation notification dispatch --limit 100
+agentapp policy federation notification by-approval --approval-id fap_...
+agentapp policy federation approval escalate-due --dry-run
+agentapp policy federation worker tick
+```
+
+### Console Pages
+
+- `/policy-console/federation/notifications` — Notification list
+- `/policy-console/federation/notifications/{id}` — Notification detail
+- `/policy-console/federation/approvals/{id}/notifications` — Approval notifications
+- `/policy-console/federation/escalations` — Escalation dashboard
+
+### Event Count Changes
+
+- PolicyChangeEventType: 94 → 100 (6 new FEDERATION_NOTIFICATION_* and ESCALATION_* events)
+- FederationHistoryEventType: 28 → 30 (2 new ESCALATION_* events)
+- PolicyReleasePermission: 76 → 79 (3 new FEDERATION_NOTIFICATION_* and ESCALATION_* permissions)
