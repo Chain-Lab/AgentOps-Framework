@@ -280,3 +280,21 @@ def export_federation_approval_summary_csv(
     for action, count in sorted(summary.by_action.items()):
         rows.append({"section": "by_action", "action": action, "count": count})
     return rows
+
+
+def export_federation_notification_summary_json(summary: dict[str, Any]) -> str:
+    """Export federation notification summary as JSON."""
+    import json
+    return json.dumps(summary, indent=2, default=str)
+
+
+def export_federation_notification_summary_csv(summary: dict[str, Any]) -> str:
+    """Export federation notification summary as CSV."""
+    import csv
+    import io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["metric", "value"])
+    for key, value in summary.items():
+        writer.writerow([key, value])
+    return output.getvalue()

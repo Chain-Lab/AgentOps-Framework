@@ -66,9 +66,11 @@ class TestFederationHistoryEventType:
             "approval.rejected",
             "approval.escalated",
             "approval.cancelled",
+            "federation.escalation.worker_ticked",
+            "federation.escalation.lock_skipped",
         ]
-        # There should be exactly 28 enum members
-        assert len(FederationHistoryEventType) == 28
+        # There should be exactly 30 enum members
+        assert len(FederationHistoryEventType) == 30
         for value in expected:
             assert value in [e.value for e in FederationHistoryEventType]
 

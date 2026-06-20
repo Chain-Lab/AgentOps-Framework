@@ -447,6 +447,28 @@ class FederationObservabilityService:
             report.metadata["escalated_approvals_count"] = 0
             report.metadata["blocked_federation_actions_count"] = 0
 
+        # Notification summary enrichment from notification_store
+        if self._notification_store is not None:
+            try:
+                notif_summary = await self.get_notification_summary()
+                report.metadata["notifications_configured"] = notif_summary.get("notifications_configured", False)
+                report.metadata["notification_total_pending"] = notif_summary.get("total_pending", 0)
+                report.metadata["notification_total_sent"] = notif_summary.get("total_sent", 0)
+                report.metadata["notification_total_failed"] = notif_summary.get("total_failed", 0)
+                report.metadata["notification_total_notifications"] = notif_summary.get("total_notifications", 0)
+                report.metadata["notification_failure_rate"] = notif_summary.get("failure_rate", 0.0)
+                report.metadata["notification_average_attempts"] = notif_summary.get("average_attempts", 0.0)
+            except Exception:
+                report.metadata["notifications_configured"] = True
+                report.metadata["notification_total_pending"] = 0
+                report.metadata["notification_total_sent"] = 0
+                report.metadata["notification_total_failed"] = 0
+                report.metadata["notification_total_notifications"] = 0
+                report.metadata["notification_failure_rate"] = 0.0
+                report.metadata["notification_average_attempts"] = 0.0
+        else:
+            report.metadata["notifications_configured"] = False
+
         return report
 
     # ------------------------------------------------------------------
@@ -489,3 +511,33 @@ class FederationObservabilityService:
         if self._approval_store is None:
             return FederationApprovalDashboardSummary()
         return await self._approval_store.get_dashboard_summary(tenant_id=tenant_id)
+
+    # ------------------------------------------------------------------
+    # Notification summary
+    # ------------------------------------------------------------------
+
+    async def get_notification_summary(self, tenant_id: str | None = None) -> dict[str, Any]:
+        """Get federation notification summary metrics."""
+        if self._notification_store is None:
+            return {"notifications_configured": False}
+
+        pending = await self._notification_store.list_pending(limit=10000)
+
+        # Also get all notifications if the store has a list method
+        all_notifications = []
+        if hasattr(self._notification_store, "list"):
+            all_notifications = await self._notification_store.list(limit=10000)
+
+        sent_count = sum(1 for n in all_notifications if n.status.value == "sent")
+        failed_count = sum(1 for n in all_notifications if n.status.value == "failed")
+        total = len(pending) + sent_count + failed_count
+
+        return {
+            "notifications_configured": True,
+            "total_pending": len(pending),
+            "total_sent": sent_count,
+            "total_failed": failed_count,
+            "total_notifications": total,
+            "failure_rate": failed_count / total if total > 0 else 0.0,
+            "average_attempts": sum(n.attempt_count for n in all_notifications) / len(all_notifications) if all_notifications else 0.0,
+        }
