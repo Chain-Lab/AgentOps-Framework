@@ -1,0 +1,50 @@
+<h1>Federation Notifications</h1>
+
+{% if approval_id %}
+<p>Filtering by approval: <strong>{{ approval_id }}</strong></p>
+{% endif %}
+
+{% if not notifications %}
+<div class="empty-state">
+  <p>No federation notifications found.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Notification ID</th>
+      <th>Approval ID</th>
+      <th>Event Type</th>
+      <th>Channel</th>
+      <th>Status</th>
+      <th>Attempt Count</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for n in notifications %}
+    <tr>
+      <td><a href="{{ base_path }}/federation/notifications/{{ n.notification_id }}">{{ n.notification_id }}</a></td>
+      <td>{{ n.approval_id }}</td>
+      <td>{{ n.event_type }}</td>
+      <td>{{ n.channel }}</td>
+      <td>
+        {% if n.status == "pending" %}
+        <span style="color: #b58900;">{{ n.status }}</span>
+        {% elif n.status == "sent" %}
+        <span style="color: #2aa198;">{{ n.status }}</span>
+        {% elif n.status == "failed" %}
+        <span style="color: #dc322f;">{{ n.status }}</span>
+        {% elif n.status == "cancelled" %}
+        <span style="color: #6c71c4;">{{ n.status }}</span>
+        {% else %}
+        {{ n.status }}
+        {% endif %}
+      </td>
+      <td>{{ n.attempt_count }}</td>
+      <td>{{ n.created_at.isoformat() if n.created_at and n.created_at.isoformat is defined else n.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

@@ -1,0 +1,40 @@
+{% if notification %}
+<h2>Federation Notification: {{ notification.notification_id }}</h2>
+
+<p>
+  <a href="{{ base_path }}/federation/notifications">&larr; Back to Federation Notifications</a> |
+  <a href="{{ base_path }}/federation/approvals/{{ notification.approval_id }}">Approval</a>
+</p>
+
+<table>
+  <tr><th>Notification ID</th><td>{{ notification.notification_id }}</td></tr>
+  <tr><th>Approval ID</th><td><a href="{{ base_path }}/federation/approvals/{{ notification.approval_id }}">{{ notification.approval_id }}</a></td></tr>
+  <tr><th>Federation ID</th><td>{{ notification.federation_id or "&mdash;" }}</td></tr>
+  <tr><th>Event Type</th><td>{{ notification.event_type }}</td></tr>
+  <tr><th>Channel</th><td>{{ notification.channel }}</td></tr>
+  <tr><th>Recipients</th><td>{{ notification.recipients | join(", ") or "&mdash;" }}</td></tr>
+  <tr><th>Subject</th><td>{{ notification.subject or "&mdash;" }}</td></tr>
+  <tr><th>Body</th><td><pre>{{ notification.body }}</pre></td></tr>
+  <tr><th>Status</th><td>
+    {% if notification.status == "pending" %}
+    <span style="color: #b58900;">{{ notification.status }}</span>
+    {% elif notification.status == "sent" %}
+    <span style="color: #2aa198;">{{ notification.status }}</span>
+    {% elif notification.status == "failed" %}
+    <span style="color: #dc322f;">{{ notification.status }}</span>
+    {% else %}
+    {{ notification.status }}
+    {% endif %}
+  </td></tr>
+  <tr><th>Attempt Count</th><td>{{ notification.attempt_count }}</td></tr>
+  <tr><th>Max Attempts</th><td>{{ notification.max_attempts }}</td></tr>
+  <tr><th>Last Error</th><td>{{ notification.last_error or "&mdash;" }}</td></tr>
+  <tr><th>Created At</th><td>{{ notification.created_at.isoformat() if notification.created_at and notification.created_at.isoformat is defined else notification.created_at }}</td></tr>
+  <tr><th>Sent At</th><td>{{ notification.sent_at.isoformat() if notification.sent_at and notification.sent_at.isoformat is defined else "&mdash;" }}</td></tr>
+  <tr><th>Next Attempt At</th><td>{{ notification.next_attempt_at.isoformat() if notification.next_attempt_at and notification.next_attempt_at.isoformat is defined else "&mdash;" }}</td></tr>
+</table>
+
+{% else %}
+<h2>Federation Notification</h2>
+<p>Notification not found.</p>
+{% endif %}

@@ -822,6 +822,9 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 48: federation approval store and service
         federation_approval_store=getattr(agent_app, "federation_approval_store", None),
         federation_approval_service=getattr(agent_app, "federation_approval_service", None),
+        # Phase 49: federation notification store and escalation worker
+        federation_notification_store=getattr(agent_app, "federation_notification_store", None),
+        federation_escalation_worker=getattr(agent_app, "federation_escalation_worker", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

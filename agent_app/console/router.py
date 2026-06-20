@@ -70,6 +70,8 @@ def build_policy_console_router(
     federation_observability_service: Any = None,
     federation_approval_store: Any = None,
     federation_approval_service: Any = None,
+    federation_notification_store: Any = None,
+    federation_escalation_worker: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -108,6 +110,8 @@ def build_policy_console_router(
         federation_observability_service: Optional federation observability service (Phase 47).
         federation_approval_store: Optional federation approval store (Phase 48).
         federation_approval_service: Optional federation approval service (Phase 48).
+        federation_notification_store: Optional federation notification store (Phase 49).
+        federation_escalation_worker: Optional federation escalation worker (Phase 49).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -5126,6 +5130,74 @@ def build_policy_console_router(
                     "message": message,
                 },
             )
+
+    # -----------------------------------------------------------------------
+    # Phase 49 Task 10: Federation notification and escalation pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/notifications")
+    async def federation_notification_list(request: Request):
+        """Federation notification list page."""
+        if federation_notification_store is None:
+            return HTMLResponse("<h2>Federation notification store not configured</h2>")
+        messages = await federation_notification_store.list_pending(limit=200)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notifications": messages,
+            },
+        )
+
+    @router.get("/federation/notifications/{notification_id}")
+    async def federation_notification_detail(notification_id: str, request: Request):
+        """Single federation notification detail page."""
+        if federation_notification_store is None:
+            return HTMLResponse("<h2>Federation notification store not configured</h2>")
+        notification = await federation_notification_store.get(notification_id)
+        if notification is None:
+            return HTMLResponse(f"<h2>Notification '{notification_id}' not found</h2>", status_code=404)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notification": notification,
+            },
+        )
+
+    @router.get("/federation/approvals/{approval_id}/notifications")
+    async def federation_approval_notifications(approval_id: str, request: Request):
+        """Notifications for a specific federation approval."""
+        if federation_notification_store is None:
+            return HTMLResponse("<h2>Federation notification store not configured</h2>")
+        notifications = await federation_notification_store.list_by_approval(approval_id=approval_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notifications": notifications,
+                "approval_id": approval_id,
+            },
+        )
+
+    @router.get("/federation/escalations")
+    async def federation_escalation_dashboard(request: Request):
+        """Federation escalation dashboard page."""
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_escalation.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "worker": federation_escalation_worker,
+            },
+        )
 
     return router
 

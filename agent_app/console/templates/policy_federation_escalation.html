@@ -1,0 +1,39 @@
+<h1>Federation Escalation Dashboard</h1>
+
+{% if worker %}
+<h2>Worker Configured</h2>
+
+<table>
+  <tr><th>Property</th><th>Value</th></tr>
+  <tr><td>Type</td><td>{{ worker.__class__.__name__ }}</td></tr>
+  {% if worker.tick_interval_seconds is defined %}
+  <tr><td>Tick Interval (seconds)</td><td>{{ worker.tick_interval_seconds }}</td></tr>
+  {% endif %}
+  {% if worker.max_escalation_level is defined %}
+  <tr><td>Max Escalation Level</td><td>{{ worker.max_escalation_level }}</td></tr>
+  {% endif %}
+  {% if worker.escalation_levels is defined %}
+  <tr><td>Escalation Levels</td><td>{{ worker.escalation_levels | length }}</td></tr>
+  {% endif %}
+  {% if worker.notification_service is defined %}
+  <tr><td>Notification Service</td><td>Configured</td></tr>
+  {% else %}
+  <tr><td>Notification Service</td><td>Not configured</td></tr>
+  {% endif %}
+  {% if worker.approval_service is defined %}
+  <tr><td>Approval Service</td><td>Configured</td></tr>
+  {% else %}
+  <tr><td>Approval Service</td><td>Not configured</td></tr>
+  {% endif %}
+  {% if worker.lock is defined %}
+  <tr><td>Distributed Lock</td><td>Configured</td></tr>
+  {% else %}
+  <tr><td>Distributed Lock</td><td>Not configured</td></tr>
+  {% endif %}
+</table>
+
+{% else %}
+<div class="empty-state">
+  <p>Federation escalation worker not configured.</p>
+</div>
+{% endif %}
