@@ -40,12 +40,14 @@ class FederationApprovalService:
         audit_logger: Any | None = None,
         change_event_store: Any | None = None,
         federation_history_recorder: Any | None = None,
+        notification_service: Any | None = None,
     ) -> None:
         self._store = approval_store
         self._policy = approval_policy
         self._audit_logger = audit_logger
         self._change_event_store = change_event_store
         self._history_recorder = federation_history_recorder
+        self._notification_service = notification_service
 
     # ------------------------------------------------------------------
     # Policy evaluation
@@ -137,6 +139,18 @@ class FederationApprovalService:
             metadata={"approval_id": approval_id},
         )
 
+        # Notification — best-effort, never breaks approval creation
+        if self._notification_service is not None:
+            try:
+                await self._notification_service.enqueue_for_approval_created(
+                    approval_id=result.approval_id,
+                    federation_id=result.federation_id,
+                    action=result.action,
+                    requested_by=result.requested_by,
+                )
+            except Exception:
+                pass  # Notification failure must not break approval creation
+
         return result
 
     # ------------------------------------------------------------------
@@ -199,6 +213,18 @@ class FederationApprovalService:
             metadata={"approval_id": approval_id},
         )
 
+        # Notification — best-effort, never breaks approval
+        if self._notification_service is not None:
+            try:
+                await self._notification_service.enqueue_for_approval_approved(
+                    approval_id=result.approval_id,
+                    federation_id=result.federation_id,
+                    action=result.action,
+                    approved_by=actor_id,
+                )
+            except Exception:
+                pass  # Notification failure must not break approval
+
         return result
 
     async def reject(
@@ -257,6 +283,18 @@ class FederationApprovalService:
             metadata={"approval_id": approval_id},
         )
 
+        # Notification — best-effort, never breaks rejection
+        if self._notification_service is not None:
+            try:
+                await self._notification_service.enqueue_for_approval_rejected(
+                    approval_id=result.approval_id,
+                    federation_id=result.federation_id,
+                    action=result.action,
+                    rejected_by=actor_id,
+                )
+            except Exception:
+                pass  # Notification failure must not break rejection
+
         return result
 
     async def escalate(
@@ -313,6 +351,19 @@ class FederationApprovalService:
                 "escalation_level": result.escalation_level,
             },
         )
+
+        # Notification — best-effort, never breaks escalation
+        if self._notification_service is not None:
+            try:
+                await self._notification_service.enqueue_for_approval_escalated(
+                    approval_id=result.approval_id,
+                    federation_id=result.federation_id,
+                    action=result.action,
+                    escalated_by=escalated_by,
+                    escalation_level=result.escalation_level,
+                )
+            except Exception:
+                pass  # Notification failure must not break escalation
 
         return result
 
