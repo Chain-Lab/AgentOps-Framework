@@ -36,7 +36,7 @@ def _now() -> datetime:
 class TestFederationHistoryEventType:
     """Tests for the FederationHistoryEventType enum."""
 
-    def test_all_23_types_exist(self) -> None:
+    def test_all_28_types_exist(self) -> None:
         expected = [
             "federation.created",
             "federation.started",
@@ -61,9 +61,14 @@ class TestFederationHistoryEventType:
             "federation.notification.created",
             "federation.notification.sent",
             "federation.notification.failed",
+            "approval.created",
+            "approval.approved",
+            "approval.rejected",
+            "approval.escalated",
+            "approval.cancelled",
         ]
-        # There should be exactly 23 enum members
-        assert len(FederationHistoryEventType) == 23
+        # There should be exactly 28 enum members
+        assert len(FederationHistoryEventType) == 28
         for value in expected:
             assert value in [e.value for e in FederationHistoryEventType]
 
