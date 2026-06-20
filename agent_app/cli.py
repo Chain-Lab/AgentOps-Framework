@@ -848,6 +848,39 @@ def main() -> int:
     analytics_export_parser.add_argument("--until", default=None, help="Window end (ISO datetime)")
     analytics_export_parser.set_defaults(func=_cmd_policy_federation_analytics_export)
 
+    # Phase 48: federation approval subcommands
+    approval_parser = federation_sub.add_parser("approval", help="Federation approval commands (Phase 48)")
+    approval_sub = approval_parser.add_subparsers(dest="federation_approval_command")
+
+    approval_list_parser = approval_sub.add_parser("list", help="List federation approval requests")
+    approval_list_parser.add_argument("--config", required=True, help="Config file path")
+    approval_list_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    approval_list_parser.add_argument("--status", default=None, help="Filter by status")
+    approval_list_parser.add_argument("--tenant-id", default=None, help="Filter by tenant ID")
+    approval_list_parser.add_argument("--action", default=None, help="Filter by action")
+    approval_list_parser.set_defaults(func=_cmd_policy_federation_approval_list)
+
+    approval_approve_parser = approval_sub.add_parser("approve", help="Approve a federation approval request")
+    approval_approve_parser.add_argument("--config", required=True, help="Config file path")
+    approval_approve_parser.add_argument("--approval-id", required=True, help="Approval request ID (fap_...)")
+    approval_approve_parser.add_argument("--actor-id", required=True, help="ID of the approver")
+    approval_approve_parser.add_argument("--reason", default=None, help="Reason for approval")
+    approval_approve_parser.set_defaults(func=_cmd_policy_federation_approval_approve)
+
+    approval_reject_parser = approval_sub.add_parser("reject", help="Reject a federation approval request")
+    approval_reject_parser.add_argument("--config", required=True, help="Config file path")
+    approval_reject_parser.add_argument("--approval-id", required=True, help="Approval request ID (fap_...)")
+    approval_reject_parser.add_argument("--actor-id", required=True, help="ID of the rejector")
+    approval_reject_parser.add_argument("--reason", default=None, help="Reason for rejection")
+    approval_reject_parser.set_defaults(func=_cmd_policy_federation_approval_reject)
+
+    approval_escalate_parser = approval_sub.add_parser("escalate", help="Escalate a federation approval request")
+    approval_escalate_parser.add_argument("--config", required=True, help="Config file path")
+    approval_escalate_parser.add_argument("--approval-id", required=True, help="Approval request ID (fap_...)")
+    approval_escalate_parser.add_argument("--actor-id", default=None, help="ID of the actor escalating")
+    approval_escalate_parser.add_argument("--reason", default=None, help="Reason for escalation")
+    approval_escalate_parser.set_defaults(func=_cmd_policy_federation_approval_escalate)
+
     # Phase 44: policy notification subcommands
     notification_parser = policy_sub.add_parser("notification", help="Policy notification commands (Phase 44)")
     notification_sub = notification_parser.add_subparsers(dest="notification_command")
@@ -1338,6 +1371,18 @@ def main() -> int:
             if args.federation_analytics_command == "export":
                 return asyncio.run(_cmd_policy_federation_analytics_export(args))
             return asyncio.run(_cmd_policy_federation_analytics(args))
+        # Phase 48: federation approval subcommands
+        if args.federation_command == "approval":
+            if args.federation_approval_command == "list":
+                return asyncio.run(_cmd_policy_federation_approval_list(args))
+            if args.federation_approval_command == "approve":
+                return asyncio.run(_cmd_policy_federation_approval_approve(args))
+            if args.federation_approval_command == "reject":
+                return asyncio.run(_cmd_policy_federation_approval_reject(args))
+            if args.federation_approval_command == "escalate":
+                return asyncio.run(_cmd_policy_federation_approval_escalate(args))
+            approval_parser.print_help()
+            return 1
         federation_parser.print_help()
         return 1
 
@@ -7450,6 +7495,13 @@ async def _cmd_policy_federation_plan_run_all(args: argparse.Namespace) -> int:
             actor_id=args.actor_id,
             context=_federation_context(args),
         )
+        # Handle approval_required response from federation service
+        if isinstance(plan, dict) and plan.get("status") == "approval_required":
+            print("Approval required")
+            print(f"  approval_id: {plan.get('approval_id', 'N/A')}")
+            print(f"  action: {plan.get('action', 'N/A')}")
+            print(f"  required_approvers: {', '.join(plan.get('required_approvers', []))}")
+            return 0
         _format_federation_plan(plan)
         return 0
     except PermissionError as exc:
@@ -7796,6 +7848,135 @@ async def _cmd_policy_federation_analytics_export(args: argparse.Namespace) -> i
 
     print(f"Federation analytics report exported to {args.output} ({fmt}).")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 48: Federation approval CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_approval_list(args: argparse.Namespace) -> int:
+    """List federation approval requests."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_approval_service", None)
+    if service is None:
+        print("Federation approval service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await service._store.list(
+            federation_id=args.federation_id,
+            status=args.status,
+            tenant_id=args.tenant_id,
+            action=args.action,
+        )
+    except Exception as exc:
+        print(f"Error listing approval requests: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No approval requests found.")
+        return 0
+
+    print(f"{'Approval ID':<24} {'Action':<35} {'Status':<12} {'Requested By':<20} {'Created At':<20}")
+    print("-" * 115)
+    for r in results:
+        aid = r.approval_id[:24]
+        action = r.action[:35]
+        status = (r.status.value if hasattr(r.status, "value") else str(r.status))[:12]
+        req_by = r.requested_by[:20]
+        ts = r.created_at.isoformat()[:19] if r.created_at else "?"
+        print(f"{aid:<24} {action:<35} {status:<12} {req_by:<20} {ts:<20}")
+
+    return 0
+
+
+async def _cmd_policy_federation_approval_approve(args: argparse.Namespace) -> int:
+    """Approve a federation approval request."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_approval_service", None)
+    if service is None:
+        print("Federation approval service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.approve(args.approval_id, args.actor_id, args.reason)
+        print(f"Approved: {result.approval_id}")
+        return 0
+    except (ValueError, PermissionError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error approving request: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_approval_reject(args: argparse.Namespace) -> int:
+    """Reject a federation approval request."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_approval_service", None)
+    if service is None:
+        print("Federation approval service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.reject(args.approval_id, args.actor_id, args.reason)
+        print(f"Rejected: {result.approval_id}")
+        return 0
+    except (ValueError, PermissionError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error rejecting request: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_approval_escalate(args: argparse.Namespace) -> int:
+    """Escalate a federation approval request."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_approval_service", None)
+    if service is None:
+        print("Federation approval service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.escalate(args.approval_id, args.actor_id, args.reason)
+        print(f"Escalated: {result.approval_id} (level {result.escalation_level})")
+        return 0
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error escalating request: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
