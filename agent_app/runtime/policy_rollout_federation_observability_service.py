@@ -52,6 +52,8 @@ class FederationObservabilityService:
         notification_store: Any | None = None,
         audit_logger: Any | None = None,
         approval_store: Any | None = None,
+        dlq_store: Any | None = None,
+        scheduled_worker: Any | None = None,
     ) -> None:
         self._history_store = history_store
         self._federation_plan_store = federation_plan_store
@@ -60,6 +62,8 @@ class FederationObservabilityService:
         self._notification_store = notification_store
         self._audit_logger = audit_logger
         self._approval_store = approval_store
+        self._dlq_store = dlq_store
+        self._scheduled_worker = scheduled_worker
 
     # ------------------------------------------------------------------
     # Timeline
@@ -469,6 +473,16 @@ class FederationObservabilityService:
         else:
             report.metadata["notifications_configured"] = False
 
+        # DLQ summary
+        dlq_summary = await self.get_dlq_summary()
+        if dlq_summary.get("total", 0) > 0:
+            report.metadata["dlq_summary"] = dlq_summary
+
+        # Worker summary
+        worker_summary = await self.get_worker_summary()
+        if worker_summary.get("status") != "not_configured":
+            report.metadata["worker_summary"] = worker_summary
+
         return report
 
     # ------------------------------------------------------------------
@@ -541,3 +555,54 @@ class FederationObservabilityService:
             "failure_rate": failed_count / total if total > 0 else 0.0,
             "average_attempts": sum(n.attempt_count for n in all_notifications) / len(all_notifications) if all_notifications else 0.0,
         }
+
+    # ------------------------------------------------------------------
+    # DLQ summary
+    # ------------------------------------------------------------------
+
+    async def get_dlq_summary(self) -> dict[str, Any]:
+        """Get a summary of DLQ entries."""
+        if self._dlq_store is None:
+            return {"total": 0, "by_status": {}, "by_channel": {}, "by_reason": {}}
+
+        try:
+            all_items = await self._dlq_store.list(limit=10000)
+            by_status: dict[str, int] = {}
+            by_channel: dict[str, int] = {}
+            by_reason: dict[str, int] = {}
+            for item in all_items:
+                by_status[item.status.value if hasattr(item.status, "value") else str(item.status)] = by_status.get(str(item.status), 0) + 1
+                by_channel[item.channel] = by_channel.get(item.channel, 0) + 1
+                reason_str = item.reason.value if hasattr(item.reason, "value") else str(item.reason)
+                by_reason[reason_str] = by_reason.get(reason_str, 0) + 1
+            return {
+                "total": len(all_items),
+                "by_status": by_status,
+                "by_channel": by_channel,
+                "by_reason": by_reason,
+            }
+        except Exception:  # noqa: BLE001
+            return {"total": 0, "by_status": {}, "by_channel": {}, "by_reason": {}}
+
+    # ------------------------------------------------------------------
+    # Worker summary
+    # ------------------------------------------------------------------
+
+    async def get_worker_summary(self) -> dict[str, Any]:
+        """Get a summary of the scheduled worker state."""
+        if self._scheduled_worker is None:
+            return {"status": "not_configured", "tick_count": 0}
+
+        try:
+            state = await self._scheduled_worker.status()
+            return {
+                "worker_id": state.worker_id,
+                "status": state.status.value,
+                "interval_seconds": state.interval_seconds,
+                "tick_count": state.tick_count,
+                "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at else None,
+                "last_error": state.last_error,
+                "started_at": state.started_at.isoformat() if state.started_at else None,
+            }
+        except Exception:  # noqa: BLE001
+            return {"status": "error", "tick_count": 0}

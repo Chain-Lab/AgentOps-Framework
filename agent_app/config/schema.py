@@ -601,6 +601,27 @@ class RolloutFederationApprovalConfig(BaseModel):
     escalate_to: list[str] = Field(default_factory=list, description="Roles to escalate to")
 
 
+class RolloutFederationDLQConfig(BaseModel):
+    """Configuration for federation notification DLQ (Phase 50)."""
+    enabled: bool = Field(default=False, description="Enable DLQ for failed notifications")
+    type: str = Field(default="memory", description="DLQ store type: memory | sqlite")
+    path: str = Field(default=".agent_app/federation_notification_dlq.db", description="SQLite db path for DLQ")
+
+
+class RolloutFederationRetryPolicyConfig(BaseModel):
+    """Configuration for federation notification retry policy (Phase 50)."""
+    max_attempts: int = Field(default=3, description="Max retry attempts")
+    backoff_seconds: int = Field(default=60, description="Backoff seconds between retries")
+    send_to_dlq: bool = Field(default=True, description="Send to DLQ after max retries exceeded")
+
+
+class RolloutFederationChannelRetryConfig(BaseModel):
+    """Per-channel retry policy override (Phase 50)."""
+    max_attempts: int = Field(default=3, description="Max retry attempts for this channel")
+    backoff_seconds: int = Field(default=60, description="Backoff seconds for this channel")
+    send_to_dlq: bool = Field(default=True, description="Send to DLQ for this channel")
+
+
 class RolloutFederationNotificationConfig(BaseModel):
     """Configuration for federation notification (Phase 49)."""
     enabled: bool = Field(default=False, description="Enable federation notification")
@@ -616,6 +637,9 @@ class RolloutFederationNotificationConfig(BaseModel):
     )
     retry_max_attempts: int = Field(default=3, description="Max retry attempts for failed notifications")
     retry_backoff_seconds: int = Field(default=60, description="Backoff seconds between retries")
+    dlq: RolloutFederationDLQConfig = Field(default_factory=RolloutFederationDLQConfig, description="DLQ config (Phase 50)")
+    retry: RolloutFederationRetryPolicyConfig = Field(default_factory=RolloutFederationRetryPolicyConfig, description="Retry policy config (Phase 50)")
+    by_channel_retry: dict[str, RolloutFederationChannelRetryConfig] = Field(default_factory=dict, description="Per-channel retry policy overrides (Phase 50)")
 
 
 class RolloutFederationWorkerConfig(BaseModel):
@@ -623,6 +647,15 @@ class RolloutFederationWorkerConfig(BaseModel):
     enabled: bool = Field(default=False, description="Enable escalation worker")
     lock_type: str = Field(default="memory", description="Lock type: memory | sqlite")
     lock_path: str = Field(default=".agent_app/federation_worker_locks.db", description="Lock SQLite db path")
+    lock_ttl_seconds: int = Field(default=300, description="Lock TTL in seconds")
+
+
+class RolloutFederationScheduledWorkerConfig(BaseModel):
+    """Configuration for federation scheduled worker (Phase 50)."""
+    enabled: bool = Field(default=False, description="Enable scheduled worker")
+    interval_seconds: int = Field(default=60, description="Tick interval in seconds")
+    lock_type: str = Field(default="memory", description="Lock type: memory | sqlite")
+    lock_path: str = Field(default=".agent_app/federation_scheduled_worker_locks.db", description="Lock SQLite db path")
     lock_ttl_seconds: int = Field(default=300, description="Lock TTL in seconds")
 
 
@@ -635,6 +668,7 @@ class RolloutFederationConfig(BaseModel):
     approvals: RolloutFederationApprovalConfig = Field(default_factory=RolloutFederationApprovalConfig, description="Federation approval config (Phase 48)")
     notifications: RolloutFederationNotificationConfig = Field(default_factory=RolloutFederationNotificationConfig, description="Federation notification config (Phase 49)")
     worker: RolloutFederationWorkerConfig = Field(default_factory=RolloutFederationWorkerConfig, description="Federation escalation worker config (Phase 49)")
+    scheduled_worker: RolloutFederationScheduledWorkerConfig = Field(default_factory=RolloutFederationScheduledWorkerConfig, description="Scheduled worker config (Phase 50)")
 
 
 class RolloutFederationHistoryConfig(BaseModel):
