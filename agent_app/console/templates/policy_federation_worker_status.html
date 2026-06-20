@@ -1,0 +1,34 @@
+<h1>Federation Worker Status</h1>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Federation scheduled worker not configured.</p>
+</div>
+{% elif worker %}
+<table>
+  <tr><th>Worker ID</th><td>{{ worker.worker_id }}</td></tr>
+  <tr><th>Status</th><td>
+    {% if worker.status == "running" %}
+    <span style="color: #2aa198;">{{ worker.status }}</span>
+    {% elif worker.status == "stopped" %}
+    <span style="color: #6c71c4;">{{ worker.status }}</span>
+    {% elif worker.status == "stopping" %}
+    <span style="color: #b58900;">{{ worker.status }}</span>
+    {% elif worker.status == "failed" %}
+    <span style="color: #dc322f;">{{ worker.status }}</span>
+    {% else %}
+    {{ worker.status }}
+    {% endif %}
+  </td></tr>
+  <tr><th>Interval (seconds)</th><td>{{ worker.interval_seconds }}</td></tr>
+  <tr><th>Tick Count</th><td>{{ worker.tick_count }}</td></tr>
+  <tr><th>Last Tick At</th><td>{{ worker.last_tick_at or "&mdash;" }}</td></tr>
+  <tr><th>Last Error</th><td>{{ worker.last_error or "&mdash;" }}</td></tr>
+  <tr><th>Started At</th><td>{{ worker.started_at or "&mdash;" }}</td></tr>
+  <tr><th>Stopped At</th><td>{{ worker.stopped_at or "&mdash;" }}</td></tr>
+</table>
+{% else %}
+<div class="empty-state">
+  <p>No worker state available.</p>
+</div>
+{% endif %}

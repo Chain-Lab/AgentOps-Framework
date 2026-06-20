@@ -1,7 +1,8 @@
-"""Phase 49 Task 10: Console federation notification and escalation page tests."""
+"""Phase 50 Task 7: DLQ and worker status console page tests."""
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -15,223 +16,227 @@ from fastapi.testclient import TestClient
 
 from agent_app.console.router import build_policy_console_router
 from agent_app.governance.policy_rollout_federation_notification import (
-    FederationNotificationChannel,
-    FederationNotificationEventType,
-    FederationNotificationMessage,
-    FederationNotificationStatus,
+    FederationNotificationDeadLetter,
+    FederationNotificationDLQReason,
+    FederationNotificationDLQStatus,
 )
-from agent_app.runtime.policy_rollout_federation_notification_store import InMemoryFederationNotificationStore
+from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
+    InMemoryFederationNotificationDLQStore,
+)
+from agent_app.runtime.policy_rollout_federation_scheduled_worker import (
+    FederationScheduledWorker,
+    FederationScheduledWorkerStatus,
+    FederationScheduledWorkerState,
+)
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _notification(
+def _dlq_entry(
+    dlq_id: str = "fdlq_test_1",
     notification_id: str = "fn_test_1",
-    approval_id: str = "fa_test",
+    approval_id: str | None = "fa_test",
     federation_id: str | None = "frp_test",
-    event_type: FederationNotificationEventType = FederationNotificationEventType.APPROVAL_CREATED,
-    channel: FederationNotificationChannel = FederationNotificationChannel.EMAIL,
-    status: FederationNotificationStatus = FederationNotificationStatus.PENDING,
-    recipients: list[str] | None = None,
-    subject: str | None = "Approval Created",
-    body: str = "A federation approval has been created.",
-) -> FederationNotificationMessage:
-    return FederationNotificationMessage(
+    channel: str = "email",
+    reason: FederationNotificationDLQReason = FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+    status: FederationNotificationDLQStatus = FederationNotificationDLQStatus.PENDING,
+    failure_count: int = 3,
+    last_error: str | None = "Connection refused",
+    payload: dict | None = None,
+    metadata: dict | None = None,
+) -> FederationNotificationDeadLetter:
+    return FederationNotificationDeadLetter(
+        dlq_id=dlq_id,
         notification_id=notification_id,
         approval_id=approval_id,
         federation_id=federation_id,
-        event_type=event_type,
         channel=channel,
-        recipients=recipients or ["admin@example.com"],
-        subject=subject,
-        body=body,
+        adapter="smtp",
+        recipient="admin@example.com",
+        reason=reason,
         status=status,
-        attempt_count=0,
-        max_attempts=3,
+        failure_count=failure_count,
+        last_error=last_error,
+        payload=payload or {"subject": "Test notification", "body": "Test"},
+        metadata=metadata or {"source": "test"},
         created_at=_now(),
+        updated_at=_now(),
     )
 
 
-def _client(
-    notification_store=None,
-    escalation_worker=None,
-) -> TestClient:
-    app = FastAPI()
-    router = build_policy_console_router(
-        store=None,
-        federation_notification_store=notification_store,
-        federation_escalation_worker=escalation_worker,
-    )
-    app.include_router(router, prefix="/policy-console")
-    return TestClient(app)
-
-
-def _store_with_notifications() -> InMemoryFederationNotificationStore:
-    """Build a notification store with test data."""
-    store = InMemoryFederationNotificationStore()
-    msgs = [
-        _notification(
+def _store_with_dlq_entries() -> InMemoryFederationNotificationDLQStore:
+    """Build a DLQ store with test data."""
+    store = InMemoryFederationNotificationDLQStore()
+    entries = [
+        _dlq_entry(
+            dlq_id="fdlq_test_1",
             notification_id="fn_test_1",
-            approval_id="fa_approve_1",
-            event_type=FederationNotificationEventType.APPROVAL_CREATED,
-            channel=FederationNotificationChannel.EMAIL,
+            channel="email",
         ),
-        _notification(
+        _dlq_entry(
+            dlq_id="fdlq_test_2",
             notification_id="fn_test_2",
-            approval_id="fa_approve_1",
-            event_type=FederationNotificationEventType.APPROVAL_ESCALATED,
-            channel=FederationNotificationChannel.SLACK,
-            status=FederationNotificationStatus.SENT,
+            channel="slack",
+            status=FederationNotificationDLQStatus.RETRIED,
         ),
-        _notification(
+        _dlq_entry(
+            dlq_id="fdlq_test_3",
             notification_id="fn_test_3",
-            approval_id="fa_approve_2",
-            event_type=FederationNotificationEventType.APPROVAL_REJECTED,
-            channel=FederationNotificationChannel.WEBHOOK,
-            status=FederationNotificationStatus.PENDING,
+            channel="webhook",
         ),
     ]
     loop = asyncio.new_event_loop()
     try:
-        for m in msgs:
-            loop.run_until_complete(store.create(m))
+        for e in entries:
+            loop.run_until_complete(store.create(e))
     finally:
         loop.close()
     return store
 
 
-class TestFederationNotificationListConsole:
-    def test_notification_list_page_renders_with_notifications(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications")
+def _client(
+    dlq_store=None,
+    scheduled_worker=None,
+) -> TestClient:
+    app = FastAPI()
+    router = build_policy_console_router(
+        store=None,
+        federation_dlq_store=dlq_store,
+        federation_scheduled_worker=scheduled_worker,
+    )
+    app.include_router(router, prefix="/policy-console")
+    return TestClient(app)
+
+
+def _mock_worker(state: FederationScheduledWorkerState | None = None) -> MagicMock:
+    """Build a mock FederationScheduledWorker that returns the given state."""
+    worker = MagicMock(spec=FederationScheduledWorker)
+    if state is None:
+        state = FederationScheduledWorkerState(
+            worker_id="fsw_mock_1",
+            status=FederationScheduledWorkerStatus.STOPPED,
+            interval_seconds=60,
+            tick_count=5,
+            last_tick_at=_now(),
+            last_error=None,
+            started_at=_now(),
+            stopped_at=None,
+        )
+    worker.status.return_value = state
+    return worker
+
+
+class TestFederationDLQConsole:
+    """Tests for DLQ console pages (Phase 50)."""
+
+    def test_dlq_list_page_renders(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq")
         assert response.status_code == 200
+        assert "Federation Notification DLQ" in response.text
+
+    def test_dlq_list_page_with_entries(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq")
+        assert response.status_code == 200
+        assert "fdlq_test_1" in response.text
+        assert "fdlq_test_3" in response.text
+
+    def test_dlq_list_page_with_status_filter(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq?status=retried")
+        assert response.status_code == 200
+        assert "fdlq_test_2" in response.text
+
+    def test_dlq_list_page_empty(self) -> None:
+        store = InMemoryFederationNotificationDLQStore()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq")
+        assert response.status_code == 200
+        assert "No DLQ entries" in response.text
+
+    def test_dlq_detail_page_renders(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
+        assert response.status_code == 200
+        assert "fdlq_test_1" in response.text
         assert "fn_test_1" in response.text
-        assert "fn_test_3" in response.text
-        assert "Federation Notifications" in response.text
+        assert "DLQ Entry" in response.text
 
-    def test_notification_list_page_renders_when_store_not_configured(self) -> None:
-        client = _client(notification_store=None)
-        response = client.get("/policy-console/federation/notifications")
+    def test_dlq_detail_page_not_found(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_nonexistent")
         assert response.status_code == 200
-        assert "not configured" in response.text
-
-
-class TestFederationNotificationDetailConsole:
-    def test_notification_detail_page_renders(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications/fn_test_1")
-        assert response.status_code == 200
-        assert "fn_test_1" in response.text
-        assert "fa_approve_1" in response.text
-        assert "Federation Notification" in response.text
-
-    def test_notification_detail_page_404_for_missing_notification(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications/fn_nonexistent")
-        assert response.status_code == 404
         assert "not found" in response.text
 
-
-class TestFederationApprovalNotificationsConsole:
-    def test_approval_notifications_page_renders(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/approvals/fa_approve_1/notifications")
+    def test_dlq_detail_page_shows_payload(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
         assert response.status_code == 200
-        assert "fn_test_1" in response.text
-        assert "fn_test_2" in response.text
+        assert "Payload" in response.text
+        assert "subject" in response.text
 
-    def test_approval_notifications_page_renders_when_store_not_configured(self) -> None:
-        client = _client(notification_store=None)
-        response = client.get("/policy-console/federation/approvals/fa_approve_1/notifications")
-        assert response.status_code == 200
-        assert "not configured" in response.text
-
-
-class TestFederationEscalationDashboardConsole:
-    def test_escalation_dashboard_renders_with_worker(self) -> None:
-        worker = MagicMock()
-        worker.__class__.__name__ = "FederationEscalationWorker"
-        client = _client(escalation_worker=worker)
-        response = client.get("/policy-console/federation/escalations")
-        assert response.status_code == 200
-        assert "Escalation Dashboard" in response.text
-
-    def test_escalation_dashboard_renders_without_worker(self) -> None:
-        client = _client(escalation_worker=None)
-        response = client.get("/policy-console/federation/escalations")
-        assert response.status_code == 200
-        assert "not configured" in response.text
-
-    def test_escalation_dashboard_shows_worker_type(self) -> None:
-        worker = MagicMock()
-        worker.__class__.__name__ = "FederationEscalationWorker"
-        client = _client(escalation_worker=worker)
-        response = client.get("/policy-console/federation/escalations")
-        assert response.status_code == 200
-        assert "FederationEscalationWorker" in response.text
-
-
-class TestNotificationListShowsApprovalFilter:
-    def test_notification_list_shows_approval_id_filter(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/approvals/fa_approve_1/notifications")
-        assert response.status_code == 200
-        assert "fa_approve_1" in response.text
-
-
-class TestNotificationDetailShowsFields:
-    def test_notification_detail_shows_all_fields(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications/fn_test_1")
-        assert response.status_code == 200
-        assert "approval.created" in response.text
-        assert "email" in response.text
-        assert "admin@example.com" in response.text
-
-
-class TestNotificationDetailStoreNotConfigured:
-    def test_notification_detail_not_configured(self) -> None:
-        client = _client(notification_store=None)
-        response = client.get("/policy-console/federation/notifications/fn_any")
-        assert response.status_code == 200
-        assert "not configured" in response.text
-
-
-class TestNotificationListTableColumns:
-    def test_notification_list_shows_channel_column(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications")
+    def test_dlq_detail_page_shows_all_fields(self) -> None:
+        store = _store_with_dlq_entries()
+        client = _client(dlq_store=store)
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
         assert response.status_code == 200
         assert "Channel" in response.text
+        assert "Reason" in response.text
+        assert "Failure Count" in response.text
+        assert "Metadata" in response.text
+        assert "Adapter" in response.text
+        assert "Recipient" in response.text
+        assert "Last Error" in response.text
 
-    def test_notification_list_shows_event_type_column(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications")
+
+class TestFederationWorkerConsole:
+    """Tests for worker console pages (Phase 50)."""
+
+    def test_worker_status_page_renders(self) -> None:
+        worker = _mock_worker()
+        client = _client(scheduled_worker=worker)
+        response = client.get("/policy-console/federation/workers")
         assert response.status_code == 200
-        assert "Event Type" in response.text
+        assert "Federation Worker Status" in response.text
 
-    def test_notification_list_shows_status_column(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications")
+    def test_worker_status_page_shows_state(self) -> None:
+        worker = _mock_worker()
+        client = _client(scheduled_worker=worker)
+        response = client.get("/policy-console/federation/workers")
         assert response.status_code == 200
-        assert "Status" in response.text
+        assert "fsw_mock_1" in response.text
+        assert "stopped" in response.text
+        assert "60" in response.text
 
-
-class TestNotificationDetailLinks:
-    def test_notification_detail_links_back_to_list(self) -> None:
-        store = _store_with_notifications()
-        client = _client(notification_store=store)
-        response = client.get("/policy-console/federation/notifications/fn_test_1")
+    def test_worker_status_page_not_configured(self) -> None:
+        client = _client(scheduled_worker=None)
+        response = client.get("/policy-console/federation/workers")
         assert response.status_code == 200
-        assert "/federation/notifications" in response.text
+        assert "not configured" in response.text
+
+    def test_worker_status_page_shows_error(self) -> None:
+        state = FederationScheduledWorkerState(
+            worker_id="fsw_err_1",
+            status=FederationScheduledWorkerStatus.FAILED,
+            interval_seconds=30,
+            tick_count=3,
+            last_tick_at=_now(),
+            last_error="Connection timeout",
+            started_at=_now(),
+            stopped_at=None,
+        )
+        worker = _mock_worker(state=state)
+        client = _client(scheduled_worker=worker)
+        response = client.get("/policy-console/federation/workers")
+        assert response.status_code == 200
+        assert "Connection timeout" in response.text
+        assert "failed" in response.text

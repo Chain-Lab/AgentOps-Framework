@@ -72,6 +72,8 @@ def build_policy_console_router(
     federation_approval_service: Any = None,
     federation_notification_store: Any = None,
     federation_escalation_worker: Any = None,
+    federation_dlq_store: Any = None,
+    federation_scheduled_worker: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -112,6 +114,8 @@ def build_policy_console_router(
         federation_approval_service: Optional federation approval service (Phase 48).
         federation_notification_store: Optional federation notification store (Phase 49).
         federation_escalation_worker: Optional federation escalation worker (Phase 49).
+        federation_dlq_store: Optional federation notification DLQ store (Phase 50).
+        federation_scheduled_worker: Optional federation scheduled worker (Phase 50).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -5151,6 +5155,119 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 50 Task 7: DLQ and worker status console pages
+    # -----------------------------------------------------------------------
+
+    # NOTE: DLQ routes must be registered BEFORE the {notification_id}
+    # route, otherwise /federation/notifications/dlq would match the
+    # parameterized route instead.
+
+    @router.get("/federation/notifications/dlq", response_class=HTMLResponse)
+    async def federation_dlq_list(request: Request):
+        """DLQ list page."""
+        status_filter = request.query_params.get("status", "")
+        channel_filter = request.query_params.get("channel", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        entries_list: list[dict] = []
+        if federation_dlq_store is not None:
+            results = await federation_dlq_store.list(
+                status=status_filter or None,
+                channel=channel_filter or None,
+                limit=limit,
+                offset=offset,
+            )
+            for entry in results:
+                entries_list.append({
+                    "dlq_id": entry.dlq_id,
+                    "notification_id": entry.notification_id,
+                    "channel": entry.channel,
+                    "reason": entry.reason.value if hasattr(entry.reason, "value") else str(entry.reason),
+                    "status": entry.status.value if hasattr(entry.status, "value") else str(entry.status),
+                    "failure_count": entry.failure_count,
+                    "created_at": entry.created_at.isoformat() if hasattr(entry.created_at, "isoformat") else str(entry.created_at),
+                })
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_dlq_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "entries": entries_list,
+                "filters": {
+                    "status": status_filter,
+                    "channel": channel_filter,
+                },
+                "pagination": _paginate(offset, limit, len(entries_list)),
+                "store_available": federation_dlq_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/dlq/{dlq_id}", response_class=HTMLResponse)
+    async def federation_dlq_detail(request: Request, dlq_id: str):
+        """Single DLQ entry detail page."""
+        if federation_dlq_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_dlq_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "entry": None,
+                    "error": "DLQ store not configured.",
+                },
+            )
+        entry = await federation_dlq_store.get(dlq_id)
+        if entry is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_dlq_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "entry": None,
+                    "error": f"DLQ entry '{dlq_id}' not found.",
+                },
+            )
+        import json as _json
+        entry_dict = {
+            "dlq_id": entry.dlq_id,
+            "notification_id": entry.notification_id,
+            "approval_id": entry.approval_id or "",
+            "federation_id": entry.federation_id or "",
+            "channel": entry.channel,
+            "adapter": entry.adapter or "",
+            "recipient": entry.recipient or "",
+            "reason": entry.reason.value if hasattr(entry.reason, "value") else str(entry.reason),
+            "status": entry.status.value if hasattr(entry.status, "value") else str(entry.status),
+            "failure_count": entry.failure_count,
+            "last_error": entry.last_error or "",
+            "created_at": entry.created_at.isoformat() if hasattr(entry.created_at, "isoformat") else str(entry.created_at),
+            "updated_at": entry.updated_at.isoformat() if hasattr(entry.updated_at, "isoformat") else str(entry.updated_at),
+            "retried_at": entry.retried_at.isoformat() if entry.retried_at and hasattr(entry.retried_at, "isoformat") else "",
+            "purged_at": entry.purged_at.isoformat() if entry.purged_at and hasattr(entry.purged_at, "isoformat") else "",
+            "payload_json": _json.dumps(entry.payload, indent=2, default=str) if entry.payload else "{}",
+            "metadata_json": _json.dumps(entry.metadata, indent=2, default=str) if entry.metadata else "{}",
+        }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_dlq_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "entry": entry_dict,
+                "error": None,
+            },
+        )
+
     @router.get("/federation/notifications/{notification_id}")
     async def federation_notification_detail(notification_id: str, request: Request):
         """Single federation notification detail page."""
@@ -5196,6 +5313,37 @@ def build_policy_console_router(
                 "title": title,
                 "base_path": base_path,
                 "worker": federation_escalation_worker,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 50 Task 7: Worker status console page
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/workers", response_class=HTMLResponse)
+    async def federation_worker_status(request: Request):
+        """Worker status page."""
+        worker_state = None
+        if federation_scheduled_worker is not None:
+            state = await federation_scheduled_worker.status()
+            worker_state = {
+                "worker_id": state.worker_id,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "interval_seconds": state.interval_seconds,
+                "tick_count": state.tick_count,
+                "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at and hasattr(state.last_tick_at, "isoformat") else "",
+                "last_error": state.last_error or "",
+                "started_at": state.started_at.isoformat() if state.started_at and hasattr(state.started_at, "isoformat") else "",
+                "stopped_at": state.stopped_at.isoformat() if state.stopped_at and hasattr(state.stopped_at, "isoformat") else "",
+            }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_worker_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "worker": worker_state,
+                "store_available": federation_scheduled_worker is not None,
             },
         )
 

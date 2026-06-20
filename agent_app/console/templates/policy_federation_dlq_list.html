@@ -1,0 +1,54 @@
+<h1>Federation Notification DLQ</h1>
+
+<form method="get" action="{{ base_path }}/federation/notifications/dlq">
+  <label>Status: <input type="text" name="status" value="{{ filters.status }}"></label>
+  <label>Channel: <input type="text" name="channel" value="{{ filters.channel }}"></label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>DLQ store not configured.</p>
+</div>
+{% elif not entries %}
+<div class="empty-state">
+  <p>No DLQ entries found.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>DLQ ID</th>
+      <th>Notification ID</th>
+      <th>Channel</th>
+      <th>Reason</th>
+      <th>Status</th>
+      <th>Failure Count</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in entries %}
+    <tr>
+      <td><a href="{{ base_path }}/federation/notifications/dlq/{{ e.dlq_id }}">{{ e.dlq_id }}</a></td>
+      <td>{{ e.notification_id }}</td>
+      <td>{{ e.channel }}</td>
+      <td>{{ e.reason }}</td>
+      <td>
+        {% if e.status == "pending" %}
+        <span style="color: #b58900;">{{ e.status }}</span>
+        {% elif e.status == "retried" %}
+        <span style="color: #2aa198;">{{ e.status }}</span>
+        {% elif e.status == "purged" %}
+        <span style="color: #6c71c4;">{{ e.status }}</span>
+        {% else %}
+        {{ e.status }}
+        {% endif %}
+      </td>
+      <td>{{ e.failure_count }}</td>
+      <td>{{ e.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

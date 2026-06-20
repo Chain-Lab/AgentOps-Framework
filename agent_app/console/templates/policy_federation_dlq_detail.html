@@ -1,0 +1,46 @@
+{% if entry %}
+<h2>DLQ Entry: {{ entry.dlq_id }}</h2>
+
+<p>
+  <a href="{{ base_path }}/federation/notifications/dlq">&larr; Back to DLQ</a> |
+  <a href="{{ base_path }}/federation/notifications/{{ entry.notification_id }}">Notification</a>
+</p>
+
+<table>
+  <tr><th>DLQ ID</th><td>{{ entry.dlq_id }}</td></tr>
+  <tr><th>Notification ID</th><td>{{ entry.notification_id }}</td></tr>
+  <tr><th>Approval ID</th><td>{{ entry.approval_id or "&mdash;" }}</td></tr>
+  <tr><th>Federation ID</th><td>{{ entry.federation_id or "&mdash;" }}</td></tr>
+  <tr><th>Channel</th><td>{{ entry.channel }}</td></tr>
+  <tr><th>Adapter</th><td>{{ entry.adapter or "&mdash;" }}</td></tr>
+  <tr><th>Recipient</th><td>{{ entry.recipient or "&mdash;" }}</td></tr>
+  <tr><th>Reason</th><td>{{ entry.reason }}</td></tr>
+  <tr><th>Status</th><td>
+    {% if entry.status == "pending" %}
+    <span style="color: #b58900;">{{ entry.status }}</span>
+    {% elif entry.status == "retried" %}
+    <span style="color: #2aa198;">{{ entry.status }}</span>
+    {% elif entry.status == "purged" %}
+    <span style="color: #6c71c4;">{{ entry.status }}</span>
+    {% else %}
+    {{ entry.status }}
+    {% endif %}
+  </td></tr>
+  <tr><th>Failure Count</th><td>{{ entry.failure_count }}</td></tr>
+  <tr><th>Last Error</th><td>{{ entry.last_error or "&mdash;" }}</td></tr>
+  <tr><th>Created At</th><td>{{ entry.created_at }}</td></tr>
+  <tr><th>Updated At</th><td>{{ entry.updated_at }}</td></tr>
+  <tr><th>Retried At</th><td>{{ entry.retried_at or "&mdash;" }}</td></tr>
+  <tr><th>Purged At</th><td>{{ entry.purged_at or "&mdash;" }}</td></tr>
+</table>
+
+<h3>Payload</h3>
+<pre>{{ entry.payload_json }}</pre>
+
+<h3>Metadata</h3>
+<pre>{{ entry.metadata_json }}</pre>
+
+{% else %}
+<h2>DLQ Entry</h2>
+<p>{{ error or "DLQ entry not found." }}</p>
+{% endif %}
