@@ -4652,3 +4652,192 @@ Phase 52 notification observability relies on existing general permissions:
 4. **Health/SLA computed from framework-recorded events only** — Metrics reflect only events recorded by the Agent App framework. Gaps in event recording (e.g., network failures before the framework records `send_attempted`) may result in under-counting.
 
 5. **Production monitoring still requires external tools** — Phase 52 provides framework-internal observability for debugging and operational awareness. Production-grade monitoring, alerting, and dashboards require integration with external observability platforms (Datadog, New Relic, Grafana, etc.).
+
+## Phase 53: Federation Notification External Alert Delivery, Prometheus Export, Retention & Rollup
+
+### Alert Delivery
+
+#### Models
+
+| Model | Prefix | Description |
+|-------|--------|-------------|
+| `NotificationAlertDeliveryTarget` | `ndt_` | Target endpoint for alert delivery (URL, channel, severity filter, dry-run flag) |
+| `NotificationAlertDeliveryAttempt` | `nda_` | Record of a single delivery attempt with status, response code, latency, error |
+| `AlertDeliveryRetryPolicy` | — | Retry configuration: max attempts, backoff seconds, retryable status codes |
+
+#### Store
+
+| Component | Type |
+|-----------|------|
+| `NotificationAlertDeliveryStore` Protocol | Interface |
+| InMemory implementation | Testing |
+| SQLite implementation | Persistent storage (alert_delivery_targets, alert_delivery_attempts tables) |
+| Factory: `create_alert_delivery_store()` | Config-driven |
+
+#### Service
+
+`NotificationAlertDeliveryService` provides:
+
+- `create_target(federation_id, channel, url, severity_filter, dry_run)` — Register a delivery target
+- `deliver_alert(alert_event, targets=None)` — Match targets by federation_id, channel, and severity, then deliver
+- `list_targets(federation_id, channel)` — List active targets with filtering
+- `list_attempts(alert_id)` — List delivery attempts for a specific alert
+- Dry-run mode: records attempts with `dry_run=True` status without making HTTP calls
+
+#### Adapters
+
+| Adapter | Mode | Description |
+|---------|------|-------------|
+| `MemoryAlertDeliveryAdapter` | Live | In-process delivery (for testing) |
+| `WebhookAlertDeliveryAdapter` | Dry-run only | HTTP POST with timeout, respects `_SENSITIVE_KEYS` redaction |
+| `ConsoleAlertDeliveryAdapter` | Live | Prints alert payload to stdout (structured JSON) |
+
+#### CLI Commands
+
+```bash
+agentapp policy federation notification alert deliver <alert_id> [--target-id <id>] [--dry-run]
+agentapp policy federation notification alert targets list [--federation-id <id>] [--channel <ch>]
+agentapp policy federation notification alert attempts list [--alert-id <id>]
+```
+
+### Prometheus Export
+
+`NotificationPrometheusExporter` generates Prometheus text-format metrics:
+
+- HELP/TYPE comment blocks for each metric family
+- Label escaping per Prometheus spec (backslash, quote, newline)
+- No secrets in metric labels or values (sensitive key redaction)
+- Metrics exported: `notification_delivery_total`, `notification_delivery_duration_seconds`, `notification_channel_health`
+
+```bash
+agentapp policy federation notification prometheus export [--federation-id <id>] [--channel <ch>] [--output <path>]
+```
+
+### JSONL Export
+
+`NotificationJsonlExporter` produces structured JSONL files:
+
+- One JSON object per line for stream processing
+- Export types: delivery events, alerts, delivery attempts
+- Sensitive data redaction before serialization
+
+```bash
+agentapp policy federation notification jsonl export <events|alerts|attempts> \
+  [--federation-id <id>] [--channel <ch>] [--window-minutes <n>] [--output <path>]
+```
+
+### Retention Service
+
+`NotificationRetentionService` manages data lifecycle:
+
+- Per-type retention days: events, alerts, attempts, targets
+- Archive-before-purge: moves expired records to archive before deletion
+- Dry-run mode: reports what would be purged without deleting
+- Runs via CLI or programmatic trigger
+
+```bash
+agentapp policy federation notification retention cleanup [--dry-run] [--type <events|alerts|attempts|targets>]
+```
+
+### Metrics Rollup Service
+
+`NotificationRollupService` aggregates delivery metrics:
+
+- Granularity: hourly or daily
+- Upsert semantics: re-running rollup replaces existing aggregated data
+- Dimensions: federation_id, channel, event_type, status
+- Stored in SQLite for query efficiency
+
+```bash
+agentapp policy federation notification rollup build [--granularity hourly|daily] [--window-days <n>]
+agentapp policy federation notification rollup list [--federation-id <id>] [--channel <ch>]
+```
+
+### Console Pages
+
+| Route | Template | Description |
+|-------|----------|-------------|
+| `GET /federation/notifications/alert-delivery` | `policy_federation_notification_alert_delivery.html` | Alert delivery dashboard with target list and recent attempts |
+| `GET /federation/notifications/alert-delivery/targets` | `policy_federation_notification_alert_delivery_targets.html` | Target management: create, list, toggle dry-run |
+| `GET /federation/notifications/alert-delivery/attempts` | `policy_federation_notification_alert_delivery_attempts.html` | Delivery attempt history with status and latency |
+| `GET /federation/notifications/prometheus` | `policy_federation_notification_prometheus.html` | Prometheus metrics display with copy-to-clipboard |
+| `GET /federation/notifications/jsonl` | `policy_federation_notification_jsonl.html` | JSONL export interface with type and date range selection |
+| `GET /federation/notifications/retention` | `policy_federation_notification_retention.html` | Retention policy configuration and dry-run preview |
+| `GET /federation/notifications/rollup` | `policy_federation_notification_rollup.html` | Rollup dashboard with hourly/daily toggle and result table |
+
+### RBAC Permissions
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ALERT_DELIVERY_VIEW` | `policy.federation.notification.alert_delivery.view` | Allowed |
+| `ALERT_DELIVERY_MANAGE` | `policy.federation.notification.alert_delivery.manage` | Allowed |
+| `PROMETHEUS_EXPORT` | `policy.federation.notification.prometheus.export` | Allowed |
+| `JSONL_EXPORT` | `policy.federation.notification.jsonl.export` | Allowed |
+| `RETENTION_MANAGE` | `policy.federation.notification.retention.manage` | Allowed |
+| `ROLLUP_BUILD` | `policy.federation.notification.rollup.build` | Allowed |
+
+### Change Events (Phase 53 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.federation.notification.alert_delivery.target_created` | Alert delivery target created |
+| `policy.federation.notification.alert_delivery.target_updated` | Alert delivery target updated |
+| `policy.federation.notification.alert_delivery.target_disabled` | Alert delivery target disabled |
+| `policy.federation.notification.alert_delivery.attempt_recorded` | Delivery attempt recorded |
+| `policy.federation.notification.alert_delivery.dlq_created` | Delivery added to dead-letter queue |
+| `policy.federation.notification.prometheus.exported` | Prometheus metrics exported |
+| `policy.federation.notification.jsonl.exported` | JSONL export completed |
+| `policy.federation.notification.retention.cleanup_ran` | Retention cleanup executed |
+| `policy.federation.notification.rollup.built` | Metrics rollup built |
+
+### Federation History Events (Phase 53 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `notification.alert_delivery.target_created` | Alert delivery target created |
+| `notification.alert_delivery.target_updated` | Alert delivery target updated |
+| `notification.alert_delivery.target_disabled` | Alert delivery target disabled |
+| `notification.alert_delivery.attempt_recorded` | Delivery attempt recorded |
+| `notification.alert_delivery.dlq_created` | Delivery added to dead-letter queue |
+| `notification.prometheus.metrics_exported` | Prometheus metrics exported |
+| `notification.jsonl.exported` | JSONL export completed |
+| `notification.retention.cleanup_ran` | Retention cleanup executed |
+| `notification.rollup.built` | Metrics rollup built |
+
+### Config
+
+| Config Class | Description |
+|-------------|-------------|
+| `RolloutFederationNotificationAlertDeliveryConfig` | Alert delivery service toggle (`enabled`), target store config |
+| `RolloutFederationNotificationPrometheusExportConfig` | Prometheus export toggle |
+| `RolloutFederationNotificationJsonlExportConfig` | JSONL export toggle |
+| `RolloutFederationNotificationRetentionConfig` | Retention toggle, per-type retention days, archive path |
+| `RolloutFederationNotificationRollupConfig` | Rollup toggle, default granularity |
+
+### Design Decisions
+
+1. **Webhook adapter dry-run only** — The `WebhookAlertDeliveryAdapter` does not perform real HTTP calls in this phase. It records the attempt with status `dry_run` for safety. Real webhook delivery is a future enhancement requiring explicit opt-in and signature verification.
+
+2. **Best-effort delivery recording** — All delivery attempt recording uses try/except with logger.debug. A failure to record a delivery attempt never breaks the alert dispatch flow.
+
+3. **Sensitive data redaction at export time** — Prometheus and JSONL exports apply `_SENSITIVE_KEYS` redaction to `error_message` and `metadata` fields before serialization. No keys, signatures, or sensitive headers appear in any export format.
+
+4. **Archive-before-purge for retention** — Expired records are moved to an archive (separate SQLite file) before deletion from the primary store. This preserves audit trail compliance while managing storage growth.
+
+5. **Rollup upsert semantics** — Building a rollup for an existing time bucket replaces the prior data rather than creating duplicates. Re-running rollup with corrected data produces consistent results.
+
+6. **SQLite default for stores** — Alert delivery, rollup, and retention stores default to SQLite for persistence. InMemory implementations are available for testing.
+
+### Current Limitations
+
+1. **Webhook delivery is dry-run only** — Real HTTP delivery to external endpoints is not implemented. The webhook adapter records simulated attempts only.
+
+2. **No alert delivery retry scheduling** — Failed deliveries are recorded but not automatically retried. Retry logic exists in the model (`AlertDeliveryRetryPolicy`) but is not yet wired into the dispatch loop.
+
+3. **Rollup query performance** — Rollup queries join aggregated data with raw delivery events. Large event volumes may experience slower rollup builds; partitioning by date range is recommended.
+
+4. **Retention archive management** — Archive files accumulate over time and are not automatically purged. Operators should monitor archive directory size.
+
+5. **Prometheus export is pull-only** — Metrics are available via CLI and console export. There is no push-based integration with Prometheus scraping or external monitoring platforms.
+
+6. **JSONL export requires post-processing for SIEM** — JSONL format is suitable for log aggregation pipelines but requires external tooling (Splunk, Elastic, etc.) for alerting and dashboarding.
