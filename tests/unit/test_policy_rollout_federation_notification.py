@@ -65,8 +65,8 @@ class TestFederationNotificationStatus:
     """Tests for the FederationNotificationStatus enum."""
 
     def test_all_5_statuses_exist(self) -> None:
-        expected = ["pending", "sent", "failed", "cancelled", "skipped", "dead_lettered"]
-        assert len(FederationNotificationStatus) == 6
+        expected = ["pending", "sent", "failed", "cancelled", "skipped", "dead_lettered", "suppressed", "template_failed", "signature_failed"]
+        assert len(FederationNotificationStatus) == 9
         for value in expected:
             assert value in [e.value for e in FederationNotificationStatus]
 
@@ -467,7 +467,7 @@ class TestFederationNotificationStatusDeadLettered:
     """Tests for the DEAD_LETTERED addition to FederationNotificationStatus."""
 
     def test_notification_status_has_dead_lettered(self) -> None:
-        assert len(FederationNotificationStatus) == 6
+        assert len(FederationNotificationStatus) == 9
         assert FederationNotificationStatus.DEAD_LETTERED.value == "dead_lettered"
         assert "dead_lettered" in [e.value for e in FederationNotificationStatus]
 

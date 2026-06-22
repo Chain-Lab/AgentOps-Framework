@@ -31,6 +31,9 @@ class FederationNotificationStatus(StrEnum):
     CANCELLED = "cancelled"
     SKIPPED = "skipped"
     DEAD_LETTERED = "dead_lettered"
+    SUPPRESSED = "suppressed"
+    TEMPLATE_FAILED = "template_failed"
+    SIGNATURE_FAILED = "signature_failed"
 
 
 class FederationNotificationEventType(StrEnum):
