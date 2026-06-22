@@ -78,6 +78,9 @@ def build_policy_console_router(
     federation_notification_template_service: Any = None,
     federation_notification_preference_store: Any = None,
     federation_notification_preference_service: Any = None,
+    federation_notification_observability_store: Any = None,
+    federation_notification_alert_store: Any = None,
+    federation_notification_sla_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -124,6 +127,9 @@ def build_policy_console_router(
         federation_notification_template_service: Optional federation notification template service (Phase 51).
         federation_notification_preference_store: Optional federation notification preference store (Phase 51).
         federation_notification_preference_service: Optional federation notification preference service (Phase 51).
+        federation_notification_observability_store: Optional notification delivery event store (Phase 52).
+        federation_notification_alert_store: Optional notification alert store (Phase 52).
+        federation_notification_sla_service: Optional notification SLA evaluation service (Phase 52).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -5263,7 +5269,7 @@ def build_policy_console_router(
             "retried_at": entry.retried_at.isoformat() if entry.retried_at and hasattr(entry.retried_at, "isoformat") else "",
             "purged_at": entry.purged_at.isoformat() if entry.purged_at and hasattr(entry.purged_at, "isoformat") else "",
             "payload_json": _json.dumps(entry.payload, indent=2, default=str) if entry.payload else "{}",
-            "metadata_json": _json.dumps(entry.metadata, indent=2, default=str) if entry.metadata else "{}",
+            "metadata_json": _json.dumps(_sanitize_metadata(entry.metadata), indent=2, default=str) if entry.metadata else "{}",
             # Phase 51: Extended replay fields (from metadata since model has no replay fields)
             "replay_available": (entry.metadata or {}).get("replay_available", False),
             "payload_digest": (entry.metadata or {}).get("payload_digest", ""),
@@ -5481,6 +5487,505 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 52 Task 9: Federation notification observability console pages
+    # NOTE: These routes must be registered BEFORE the {notification_id}
+    # catch-all route, otherwise /federation/notifications/observability
+    # would match as notification_id="observability".
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/notifications/observability", response_class=HTMLResponse)
+    async def federation_notification_observability_dashboard(request: Request):
+        """Notification observability overview dashboard."""
+        metrics_list: list[dict] = []
+        alert_summary: dict = {}
+        if federation_notification_observability_store is not None:
+            try:
+                metric = await federation_notification_observability_store.aggregate_metrics(window_minutes=60)
+                metrics_list.append({
+                    "channel": metric.channel or "all",
+                    "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                    "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                    "total": metric.total,
+                    "sent": metric.sent,
+                    "failed": metric.failed,
+                    "suppressed": metric.suppressed,
+                    "dlq": metric.dlq,
+                    "retry_scheduled": metric.retry_scheduled,
+                    "success_rate": f"{metric.success_rate:.1%}",
+                    "success_rate_raw": metric.success_rate,
+                    "failure_rate": f"{metric.failure_rate:.1%}",
+                    "failure_rate_raw": metric.failure_rate,
+                    "dlq_rate": f"{metric.dlq_rate:.1%}",
+                    "avg_latency_ms": metric.avg_latency_ms,
+                    "p95_latency_ms": metric.p95_latency_ms,
+                })
+            except Exception:
+                pass
+        if federation_notification_alert_store is not None:
+            try:
+                open_alerts = await federation_notification_alert_store.list_alerts(status="open", limit=100)
+                alert_summary = {"open": len(open_alerts)}
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_observability.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "metrics": metrics_list,
+                "alert_summary": alert_summary,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/events", response_class=HTMLResponse)
+    async def federation_notification_events(request: Request):
+        """Notification delivery events list page."""
+        event_type = request.query_params.get("event_type", "")
+        channel = request.query_params.get("channel", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        events_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                events = await federation_notification_observability_store.list_events(
+                    event_type=event_type or None,
+                    channel=channel or None,
+                    limit=limit,
+                    offset=offset,
+                )
+                for e in events:
+                    events_list.append({
+                        "event_id": e.event_id,
+                        "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                        "notification_id": e.notification_id or "—",
+                        "approval_id": e.approval_id or "—",
+                        "federation_id": e.federation_id or "—",
+                        "channel": e.channel or "—",
+                        "status": e.status or "—",
+                        "attempt": e.attempt or "—",
+                        "latency_ms": e.latency_ms or "—",
+                        "error_message": e.error_message or "—",
+                        "adapter_name": e.adapter_name or "—",
+                        "created_at": e.created_at.isoformat() if hasattr(e.created_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_events.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "events": events_list,
+                "filters": {"event_type": event_type, "channel": channel},
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/metrics", response_class=HTMLResponse)
+    async def federation_notification_metrics(request: Request):
+        """Notification delivery metrics page."""
+        metrics_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                metric = await federation_notification_observability_store.aggregate_metrics(window_minutes=60)
+                metrics_list.append({
+                    "channel": metric.channel or "all",
+                    "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                    "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                    "total": metric.total,
+                    "sent": metric.sent,
+                    "failed": metric.failed,
+                    "suppressed": metric.suppressed,
+                    "dlq": metric.dlq,
+                    "retry_scheduled": metric.retry_scheduled,
+                    "success_rate": metric.success_rate,
+                    "failure_rate": metric.failure_rate,
+                    "dlq_rate": metric.dlq_rate,
+                    "avg_latency_ms": metric.avg_latency_ms,
+                    "p95_latency_ms": metric.p95_latency_ms,
+                })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_metrics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "metrics": metrics_list,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/health", response_class=HTMLResponse)
+    async def federation_notification_health(request: Request):
+        """Channel health status page."""
+        health_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                channels = ["email", "webhook", "console"]
+                for ch in channels:
+                    try:
+                        metric = await federation_notification_observability_store.aggregate_metrics(
+                            channel=ch, window_minutes=60
+                        )
+                        status = "healthy"
+                        reason = ""
+                        if metric.failure_rate > 0.5:
+                            status = "unhealthy"
+                            reason = f"Failure rate {metric.failure_rate:.1%} exceeds 50%"
+                        elif metric.failure_rate > 0.1 or metric.dlq_rate > 0.05:
+                            status = "degraded"
+                            reason = f"Failure rate {metric.failure_rate:.1%} or DLQ rate {metric.dlq_rate:.1%} elevated"
+                        elif metric.total == 0:
+                            status = "unknown"
+                            reason = "No delivery events in window"
+                        health_list.append({
+                            "channel": ch,
+                            "status": status,
+                            "total": metric.total,
+                            "sent": metric.sent,
+                            "failed": metric.failed,
+                            "dlq": metric.dlq,
+                            "success_rate": f"{metric.success_rate:.1%}",
+                            "failure_rate": f"{metric.failure_rate:.1%}",
+                            "avg_latency_ms": metric.avg_latency_ms,
+                            "reason": reason,
+                            "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                            "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                        })
+                    except Exception:
+                        health_list.append({
+                            "channel": ch,
+                            "status": "unknown",
+                            "total": 0,
+                            "sent": 0,
+                            "failed": 0,
+                            "dlq": 0,
+                            "success_rate": "0.0%",
+                            "failure_rate": "0.0%",
+                            "avg_latency_ms": None,
+                            "reason": "No data available",
+                            "window_start": "",
+                            "window_end": "",
+                        })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_health.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "health": health_list,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/sla", response_class=HTMLResponse)
+    async def federation_notification_sla(request: Request):
+        """SLA violations page."""
+        violations_list: list[dict] = []
+        if federation_notification_sla_service is not None:
+            try:
+                violations = await federation_notification_sla_service.evaluate()
+                for v in violations:
+                    violations_list.append({
+                        "violation_id": v.violation_id,
+                        "federation_id": v.federation_id or "—",
+                        "channel": v.channel or "—",
+                        "metric": v.metric,
+                        "observed_value": v.observed_value,
+                        "threshold": v.threshold,
+                        "severity": v.severity,
+                        "message": v.message,
+                        "created_at": v.created_at.isoformat() if hasattr(v.created_at, "isoformat") else str(v.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_sla.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "violations": violations_list,
+                "store_available": federation_notification_sla_service is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/alerts", response_class=HTMLResponse)
+    async def federation_notification_alerts(request: Request):
+        """Notification alert list page."""
+        status_filter = request.query_params.get("status", "")
+        severity_filter = request.query_params.get("severity", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        alerts_list: list[dict] = []
+        if federation_notification_alert_store is not None:
+            try:
+                alerts = await federation_notification_alert_store.list_alerts(
+                    status=status_filter or None,
+                    severity=severity_filter or None,
+                    limit=limit,
+                    offset=offset,
+                )
+                for a in alerts:
+                    alerts_list.append({
+                        "alert_id": a.alert_id,
+                        "rule_id": a.rule_id,
+                        "name": a.name,
+                        "severity": a.severity,
+                        "metric": a.metric,
+                        "observed_value": a.observed_value,
+                        "threshold": a.threshold,
+                        "federation_id": a.federation_id or "—",
+                        "channel": a.channel or "—",
+                        "message": a.message or "—",
+                        "status": a.status,
+                        "created_at": a.created_at.isoformat() if hasattr(a.created_at, "isoformat") else str(a.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alerts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alerts": alerts_list,
+                "filters": {"status": status_filter, "severity": severity_filter},
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/alerts/{alert_id}", response_class=HTMLResponse)
+    async def federation_notification_alert_detail(request: Request, alert_id: str):
+        """Single notification alert detail page with ack/resolve actions."""
+        alert = None
+        error = None
+        if federation_notification_alert_store is None:
+            error = "Alert store not configured."
+        else:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is None:
+                    error = f"Alert '{alert_id}' not found."
+            except Exception as exc:
+                error = str(exc)
+
+        alert_dict = None
+        if alert is not None:
+            alert_dict = {
+                "alert_id": alert.alert_id,
+                "rule_id": alert.rule_id,
+                "name": alert.name,
+                "severity": alert.severity,
+                "metric": alert.metric,
+                "observed_value": alert.observed_value,
+                "threshold": alert.threshold,
+                "federation_id": alert.federation_id or "—",
+                "channel": alert.channel or "—",
+                "message": alert.message or "—",
+                "status": alert.status,
+                "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                "acknowledged_by": alert.acknowledged_by or "",
+                "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                "resolved_by": alert.resolved_by or "",
+            }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": error,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.post("/federation/notifications/alerts/{alert_id}/acknowledge", response_class=HTMLResponse)
+    async def federation_notification_alert_acknowledge(request: Request, alert_id: str):
+        """Acknowledge a notification alert."""
+        message = None
+        alert_dict = None
+        if federation_notification_alert_store is None:
+            message = "Alert store not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    updated = await federation_notification_alert_store.acknowledge(
+                        alert_id=alert_id,
+                        acknowledged_by=actor_id,
+                    )
+                    if updated is None:
+                        message = f"Alert '{alert_id}' could not be acknowledged (may already be resolved)."
+                    else:
+                        message = f"Alert '{alert_id}' acknowledged."
+                        alert_dict = {
+                            "alert_id": updated.alert_id,
+                            "rule_id": updated.rule_id,
+                            "name": updated.name,
+                            "severity": updated.severity,
+                            "metric": updated.metric,
+                            "observed_value": updated.observed_value,
+                            "threshold": updated.threshold,
+                            "federation_id": updated.federation_id or "—",
+                            "channel": updated.channel or "—",
+                            "message": updated.message or "—",
+                            "status": updated.status,
+                            "created_at": updated.created_at.isoformat() if hasattr(updated.created_at, "isoformat") else str(updated.created_at),
+                            "acknowledged_at": updated.acknowledged_at.isoformat() if updated.acknowledged_at and hasattr(updated.acknowledged_at, "isoformat") else "",
+                            "acknowledged_by": updated.acknowledged_by or "",
+                            "resolved_at": updated.resolved_at.isoformat() if updated.resolved_at and hasattr(updated.resolved_at, "isoformat") else "",
+                            "resolved_by": updated.resolved_by or "",
+                        }
+            except Exception as exc:
+                message = str(exc)
+
+        if alert_dict is None and federation_notification_alert_store is not None:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is not None:
+                    alert_dict = {
+                        "alert_id": alert.alert_id,
+                        "rule_id": alert.rule_id,
+                        "name": alert.name,
+                        "severity": alert.severity,
+                        "metric": alert.metric,
+                        "observed_value": alert.observed_value,
+                        "threshold": alert.threshold,
+                        "federation_id": alert.federation_id or "—",
+                        "channel": alert.channel or "—",
+                        "message": alert.message or "—",
+                        "status": alert.status,
+                        "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                        "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                        "acknowledged_by": alert.acknowledged_by or "",
+                        "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                        "resolved_by": alert.resolved_by or "",
+                    }
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": None,
+                "message": message,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.post("/federation/notifications/alerts/{alert_id}/resolve", response_class=HTMLResponse)
+    async def federation_notification_alert_resolve(request: Request, alert_id: str):
+        """Resolve a notification alert."""
+        message = None
+        alert_dict = None
+        if federation_notification_alert_store is None:
+            message = "Alert store not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    updated = await federation_notification_alert_store.resolve(
+                        alert_id=alert_id,
+                        resolved_by=actor_id,
+                    )
+                    if updated is None:
+                        message = f"Alert '{alert_id}' could not be resolved (may not exist or already resolved)."
+                    else:
+                        message = f"Alert '{alert_id}' resolved."
+                        alert_dict = {
+                            "alert_id": updated.alert_id,
+                            "rule_id": updated.rule_id,
+                            "name": updated.name,
+                            "severity": updated.severity,
+                            "metric": updated.metric,
+                            "observed_value": updated.observed_value,
+                            "threshold": updated.threshold,
+                            "federation_id": updated.federation_id or "—",
+                            "channel": updated.channel or "—",
+                            "message": updated.message or "—",
+                            "status": updated.status,
+                            "created_at": updated.created_at.isoformat() if hasattr(updated.created_at, "isoformat") else str(updated.created_at),
+                            "acknowledged_at": updated.acknowledged_at.isoformat() if updated.acknowledged_at and hasattr(updated.acknowledged_at, "isoformat") else "",
+                            "acknowledged_by": updated.acknowledged_by or "",
+                            "resolved_at": updated.resolved_at.isoformat() if updated.resolved_at and hasattr(updated.resolved_at, "isoformat") else "",
+                            "resolved_by": updated.resolved_by or "",
+                        }
+            except Exception as exc:
+                message = str(exc)
+
+        if alert_dict is None and federation_notification_alert_store is not None:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is not None:
+                    alert_dict = {
+                        "alert_id": alert.alert_id,
+                        "rule_id": alert.rule_id,
+                        "name": alert.name,
+                        "severity": alert.severity,
+                        "metric": alert.metric,
+                        "observed_value": alert.observed_value,
+                        "threshold": alert.threshold,
+                        "federation_id": alert.federation_id or "—",
+                        "channel": alert.channel or "—",
+                        "message": alert.message or "—",
+                        "status": alert.status,
+                        "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                        "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                        "acknowledged_by": alert.acknowledged_by or "",
+                        "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                        "resolved_by": alert.resolved_by or "",
+                    }
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": None,
+                "message": message,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
     @router.get("/federation/notifications/{notification_id}")
     async def federation_notification_detail(notification_id: str, request: Request):
         """Single federation notification detail page."""
@@ -5560,12 +6065,563 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 52 Task 9: Federation notification observability console pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/notifications/observability", response_class=HTMLResponse)
+    async def federation_notification_observability_dashboard(request: Request):
+        """Notification observability overview dashboard."""
+        metrics_list: list[dict] = []
+        health_list: list[dict] = []
+        alert_summary: dict = {}
+        if federation_notification_observability_store is not None:
+            # Aggregate metrics for all channels
+            try:
+                metric = await federation_notification_observability_store.aggregate_metrics(window_minutes=60)
+                metrics_list.append({
+                    "channel": metric.channel or "all",
+                    "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                    "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                    "total": metric.total,
+                    "sent": metric.sent,
+                    "failed": metric.failed,
+                    "suppressed": metric.suppressed,
+                    "dlq": metric.dlq,
+                    "retry_scheduled": metric.retry_scheduled,
+                    "success_rate": f"{metric.success_rate:.1%}",
+                    "success_rate_raw": metric.success_rate,
+                    "failure_rate": f"{metric.failure_rate:.1%}",
+                    "failure_rate_raw": metric.failure_rate,
+                    "dlq_rate": f"{metric.dlq_rate:.1%}",
+                    "avg_latency_ms": metric.avg_latency_ms,
+                    "p95_latency_ms": metric.p95_latency_ms,
+                })
+            except Exception:
+                pass
+            # Recent events
+            try:
+                events = await federation_notification_observability_store.list_events(limit=20)
+                for e in events:
+                    metrics_list[-1]["recent_events"] = metrics_list[-1].get("recent_events", []) + [{
+                        "event_id": e.event_id,
+                        "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                        "channel": e.channel or "—",
+                        "status": e.status or "—",
+                        "created_at": e.created_at.isoformat() if hasattr(e.created_at, "isoformat") else "",
+                    }]
+            except Exception:
+                pass
+        # Alert summary
+        if federation_notification_alert_store is not None:
+            try:
+                open_alerts = await federation_notification_alert_store.list_alerts(status="open", limit=100)
+                alert_summary = {
+                    "open": len(open_alerts),
+                    "total": len(open_alerts),
+                }
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_observability.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "metrics": metrics_list,
+                "health": health_list,
+                "alert_summary": alert_summary,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/events", response_class=HTMLResponse)
+    async def federation_notification_events(request: Request):
+        """Notification delivery events list page."""
+        event_type = request.query_params.get("event_type", "")
+        channel = request.query_params.get("channel", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        events_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                events = await federation_notification_observability_store.list_events(
+                    event_type=event_type or None,
+                    channel=channel or None,
+                    limit=limit,
+                    offset=offset,
+                )
+                for e in events:
+                    events_list.append({
+                        "event_id": e.event_id,
+                        "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+                        "notification_id": e.notification_id or "—",
+                        "approval_id": e.approval_id or "—",
+                        "federation_id": e.federation_id or "—",
+                        "channel": e.channel or "—",
+                        "status": e.status or "—",
+                        "attempt": e.attempt or "—",
+                        "latency_ms": e.latency_ms or "—",
+                        "error_message": e.error_message or "—",
+                        "adapter_name": e.adapter_name or "—",
+                        "created_at": e.created_at.isoformat() if hasattr(e.created_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_events.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "events": events_list,
+                "filters": {"event_type": event_type, "channel": channel},
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/metrics", response_class=HTMLResponse)
+    async def federation_notification_metrics(request: Request):
+        """Notification delivery metrics page."""
+        metrics_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                metric = await federation_notification_observability_store.aggregate_metrics(window_minutes=60)
+                metrics_list.append({
+                    "channel": metric.channel or "all",
+                    "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                    "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                    "total": metric.total,
+                    "sent": metric.sent,
+                    "failed": metric.failed,
+                    "suppressed": metric.suppressed,
+                    "dlq": metric.dlq,
+                    "retry_scheduled": metric.retry_scheduled,
+                    "success_rate": metric.success_rate,
+                    "failure_rate": metric.failure_rate,
+                    "dlq_rate": metric.dlq_rate,
+                    "avg_latency_ms": metric.avg_latency_ms,
+                    "p95_latency_ms": metric.p95_latency_ms,
+                })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_metrics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "metrics": metrics_list,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/health", response_class=HTMLResponse)
+    async def federation_notification_health(request: Request):
+        """Channel health status page."""
+        health_list: list[dict] = []
+        if federation_notification_observability_store is not None:
+            try:
+                from agent_app.governance.policy_rollout_federation_notification_observability import (
+                    NotificationDeliveryEventType,
+                )
+                # Aggregate metrics per channel to derive health
+                channels = ["email", "webhook", "console"]
+                for ch in channels:
+                    try:
+                        metric = await federation_notification_observability_store.aggregate_metrics(
+                            channel=ch, window_minutes=60
+                        )
+                        status = "healthy"
+                        reason = ""
+                        if metric.failure_rate > 0.5:
+                            status = "unhealthy"
+                            reason = f"Failure rate {metric.failure_rate:.1%} exceeds 50%"
+                        elif metric.failure_rate > 0.1 or metric.dlq_rate > 0.05:
+                            status = "degraded"
+                            reason = f"Failure rate {metric.failure_rate:.1%} or DLQ rate {metric.dlq_rate:.1%} elevated"
+                        elif metric.total == 0:
+                            status = "unknown"
+                            reason = "No delivery events in window"
+                        health_list.append({
+                            "channel": ch,
+                            "status": status,
+                            "total": metric.total,
+                            "sent": metric.sent,
+                            "failed": metric.failed,
+                            "dlq": metric.dlq,
+                            "success_rate": f"{metric.success_rate:.1%}",
+                            "failure_rate": f"{metric.failure_rate:.1%}",
+                            "avg_latency_ms": metric.avg_latency_ms,
+                            "reason": reason,
+                            "window_start": metric.window_start.isoformat() if hasattr(metric.window_start, "isoformat") else str(metric.window_start),
+                            "window_end": metric.window_end.isoformat() if hasattr(metric.window_end, "isoformat") else str(metric.window_end),
+                        })
+                    except Exception:
+                        health_list.append({
+                            "channel": ch,
+                            "status": "unknown",
+                            "total": 0,
+                            "sent": 0,
+                            "failed": 0,
+                            "dlq": 0,
+                            "success_rate": "0.0%",
+                            "failure_rate": "0.0%",
+                            "avg_latency_ms": None,
+                            "reason": "No data available",
+                            "window_start": "",
+                            "window_end": "",
+                        })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_health.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "health": health_list,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/sla", response_class=HTMLResponse)
+    async def federation_notification_sla(request: Request):
+        """SLA violations page."""
+        violations_list: list[dict] = []
+        if federation_notification_sla_service is not None:
+            try:
+                violations = await federation_notification_sla_service.evaluate()
+                for v in violations:
+                    violations_list.append({
+                        "violation_id": v.violation_id,
+                        "federation_id": v.federation_id or "—",
+                        "channel": v.channel or "—",
+                        "metric": v.metric,
+                        "observed_value": v.observed_value,
+                        "threshold": v.threshold,
+                        "severity": v.severity,
+                        "message": v.message,
+                        "created_at": v.created_at.isoformat() if hasattr(v.created_at, "isoformat") else str(v.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_sla.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "violations": violations_list,
+                "store_available": federation_notification_sla_service is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/alerts", response_class=HTMLResponse)
+    async def federation_notification_alerts(request: Request):
+        """Notification alert list page."""
+        status_filter = request.query_params.get("status", "")
+        severity_filter = request.query_params.get("severity", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        alerts_list: list[dict] = []
+        if federation_notification_alert_store is not None:
+            try:
+                alerts = await federation_notification_alert_store.list_alerts(
+                    status=status_filter or None,
+                    severity=severity_filter or None,
+                    limit=limit,
+                    offset=offset,
+                )
+                for a in alerts:
+                    alerts_list.append({
+                        "alert_id": a.alert_id,
+                        "rule_id": a.rule_id,
+                        "name": a.name,
+                        "severity": a.severity,
+                        "metric": a.metric,
+                        "observed_value": a.observed_value,
+                        "threshold": a.threshold,
+                        "federation_id": a.federation_id or "—",
+                        "channel": a.channel or "—",
+                        "message": a.message or "—",
+                        "status": a.status,
+                        "created_at": a.created_at.isoformat() if hasattr(a.created_at, "isoformat") else str(a.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alerts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alerts": alerts_list,
+                "filters": {"status": status_filter, "severity": severity_filter},
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/alerts/{alert_id}", response_class=HTMLResponse)
+    async def federation_notification_alert_detail(request: Request, alert_id: str):
+        """Single notification alert detail page with ack/resolve actions."""
+        alert = None
+        error = None
+        if federation_notification_alert_store is None:
+            error = "Alert store not configured."
+        else:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is None:
+                    error = f"Alert '{alert_id}' not found."
+            except Exception as exc:
+                error = str(exc)
+
+        alert_dict = None
+        if alert is not None:
+            alert_dict = {
+                "alert_id": alert.alert_id,
+                "rule_id": alert.rule_id,
+                "name": alert.name,
+                "severity": alert.severity,
+                "metric": alert.metric,
+                "observed_value": alert.observed_value,
+                "threshold": alert.threshold,
+                "federation_id": alert.federation_id or "—",
+                "channel": alert.channel or "—",
+                "message": alert.message or "—",
+                "status": alert.status,
+                "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                "acknowledged_by": alert.acknowledged_by or "",
+                "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                "resolved_by": alert.resolved_by or "",
+            }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": error,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.post("/federation/notifications/alerts/{alert_id}/acknowledge", response_class=HTMLResponse)
+    async def federation_notification_alert_acknowledge(request: Request, alert_id: str):
+        """Acknowledge a notification alert."""
+        message = None
+        alert_dict = None
+        if federation_notification_alert_store is None:
+            message = "Alert store not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    updated = await federation_notification_alert_store.acknowledge(
+                        alert_id=alert_id,
+                        acknowledged_by=actor_id,
+                    )
+                    if updated is None:
+                        message = f"Alert '{alert_id}' could not be acknowledged (may already be resolved)."
+                    else:
+                        message = f"Alert '{alert_id}' acknowledged."
+                        alert_dict = {
+                            "alert_id": updated.alert_id,
+                            "rule_id": updated.rule_id,
+                            "name": updated.name,
+                            "severity": updated.severity,
+                            "metric": updated.metric,
+                            "observed_value": updated.observed_value,
+                            "threshold": updated.threshold,
+                            "federation_id": updated.federation_id or "—",
+                            "channel": updated.channel or "—",
+                            "message": updated.message or "—",
+                            "status": updated.status,
+                            "created_at": updated.created_at.isoformat() if hasattr(updated.created_at, "isoformat") else str(updated.created_at),
+                            "acknowledged_at": updated.acknowledged_at.isoformat() if updated.acknowledged_at and hasattr(updated.acknowledged_at, "isoformat") else "",
+                            "acknowledged_by": updated.acknowledged_by or "",
+                            "resolved_at": updated.resolved_at.isoformat() if updated.resolved_at and hasattr(updated.resolved_at, "isoformat") else "",
+                            "resolved_by": updated.resolved_by or "",
+                        }
+            except Exception as exc:
+                message = str(exc)
+
+        if alert_dict is None and federation_notification_alert_store is not None:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is not None:
+                    alert_dict = {
+                        "alert_id": alert.alert_id,
+                        "rule_id": alert.rule_id,
+                        "name": alert.name,
+                        "severity": alert.severity,
+                        "metric": alert.metric,
+                        "observed_value": alert.observed_value,
+                        "threshold": alert.threshold,
+                        "federation_id": alert.federation_id or "—",
+                        "channel": alert.channel or "—",
+                        "message": alert.message or "—",
+                        "status": alert.status,
+                        "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                        "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                        "acknowledged_by": alert.acknowledged_by or "",
+                        "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                        "resolved_by": alert.resolved_by or "",
+                    }
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": None,
+                "message": message,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    @router.post("/federation/notifications/alerts/{alert_id}/resolve", response_class=HTMLResponse)
+    async def federation_notification_alert_resolve(request: Request, alert_id: str):
+        """Resolve a notification alert."""
+        message = None
+        alert_dict = None
+        if federation_notification_alert_store is None:
+            message = "Alert store not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    message = "actor_id is required."
+                else:
+                    updated = await federation_notification_alert_store.resolve(
+                        alert_id=alert_id,
+                        resolved_by=actor_id,
+                    )
+                    if updated is None:
+                        message = f"Alert '{alert_id}' could not be resolved (may not exist or already resolved)."
+                    else:
+                        message = f"Alert '{alert_id}' resolved."
+                        alert_dict = {
+                            "alert_id": updated.alert_id,
+                            "rule_id": updated.rule_id,
+                            "name": updated.name,
+                            "severity": updated.severity,
+                            "metric": updated.metric,
+                            "observed_value": updated.observed_value,
+                            "threshold": updated.threshold,
+                            "federation_id": updated.federation_id or "—",
+                            "channel": updated.channel or "—",
+                            "message": updated.message or "—",
+                            "status": updated.status,
+                            "created_at": updated.created_at.isoformat() if hasattr(updated.created_at, "isoformat") else str(updated.created_at),
+                            "acknowledged_at": updated.acknowledged_at.isoformat() if updated.acknowledged_at and hasattr(updated.acknowledged_at, "isoformat") else "",
+                            "acknowledged_by": updated.acknowledged_by or "",
+                            "resolved_at": updated.resolved_at.isoformat() if updated.resolved_at and hasattr(updated.resolved_at, "isoformat") else "",
+                            "resolved_by": updated.resolved_by or "",
+                        }
+            except Exception as exc:
+                message = str(exc)
+
+        if alert_dict is None and federation_notification_alert_store is not None:
+            try:
+                alert = await federation_notification_alert_store.get_alert(alert_id)
+                if alert is not None:
+                    alert_dict = {
+                        "alert_id": alert.alert_id,
+                        "rule_id": alert.rule_id,
+                        "name": alert.name,
+                        "severity": alert.severity,
+                        "metric": alert.metric,
+                        "observed_value": alert.observed_value,
+                        "threshold": alert.threshold,
+                        "federation_id": alert.federation_id or "—",
+                        "channel": alert.channel or "—",
+                        "message": alert.message or "—",
+                        "status": alert.status,
+                        "created_at": alert.created_at.isoformat() if hasattr(alert.created_at, "isoformat") else str(alert.created_at),
+                        "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at and hasattr(alert.acknowledged_at, "isoformat") else "",
+                        "acknowledged_by": alert.acknowledged_by or "",
+                        "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at and hasattr(alert.resolved_at, "isoformat") else "",
+                        "resolved_by": alert.resolved_by or "",
+                    }
+            except Exception:
+                pass
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "alert": alert_dict,
+                "error": None,
+                "message": message,
+                "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
     return router
 
 def _get_templates_dir() -> str:
     """Return the templates directory path."""
     import os
     return os.path.join(os.path.dirname(__file__), "templates")
+
+
+def _sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Sanitize metadata for safe display — redacts sensitive values.
+
+    Phase 51: Recursively redacts values under sensitive key names
+    to prevent secrets from appearing in console pages.
+    """
+    if metadata is None:
+        return {}
+    _SENSITIVE_KEYS = {
+        "authorization", "token", "secret", "password", "api_key",
+        "x-signature", "x-signature-key", "x-api-key", "x-secret",
+        "x-auth-token", "x-webhook-secret", "cookie", "set-cookie",
+        "proxy-authorization", "www-authenticate",
+        "signature", "key", "private_key", "access_key",
+    }
+    result: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if key.lower() in _SENSITIVE_KEYS:
+            result[key] = "[REDACTED]"
+        elif isinstance(value, dict):
+            result[key] = _sanitize_metadata(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _sanitize_metadata(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            result[key] = value
+    return result
 
 
 def _sanitize_headers(headers: dict[str, Any] | None) -> dict[str, str]:

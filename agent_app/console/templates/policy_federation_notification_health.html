@@ -1,0 +1,55 @@
+<h1>Notification Channel Health</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification observability store not configured.</p>
+</div>
+{% elif not health %}
+<div class="empty-state">
+  <p>No channel health data available. Health is derived from delivery metrics.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Channel</th>
+      <th>Status</th>
+      <th>Total</th>
+      <th>Sent</th>
+      <th>Failed</th>
+      <th>DLQ</th>
+      <th>Success Rate</th>
+      <th>Failure Rate</th>
+      <th>Avg Latency</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in health %}
+    <tr>
+      <td>{{ h.channel }}</td>
+      <td>
+        {% if h.status == "healthy" %}
+        <span style="color: #2aa198;">{{ h.status }}</span>
+        {% elif h.status == "degraded" %}
+        <span style="color: #b58900;">{{ h.status }}</span>
+        {% elif h.status == "unhealthy" %}
+        <span style="color: #dc322f;">{{ h.status }}</span>
+        {% else %}
+        <span style="color: #839496;">{{ h.status }}</span>
+        {% endif %}
+      </td>
+      <td>{{ h.total }}</td>
+      <td style="color: #2aa198;">{{ h.sent }}</td>
+      <td style="color: #dc322f;">{{ h.failed }}</td>
+      <td>{{ h.dlq }}</td>
+      <td>{{ h.success_rate }}</td>
+      <td>{{ h.failure_rate }}</td>
+      <td>{{ h.avg_latency_ms if h.avg_latency_ms is not none else "—" }} ms</td>
+      <td>{{ h.reason or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

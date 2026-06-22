@@ -1,0 +1,58 @@
+<h1>Notification Alerts</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if filters.status %}
+<p>Filtering by status: <strong>{{ filters.status }}</strong></p>
+{% endif %}
+{% if filters.severity %}
+<p>Filtering by severity: <strong>{{ filters.severity }}</strong></p>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Alert store not configured.</p>
+</div>
+{% elif not alerts %}
+<div class="empty-state">
+  <p>No alerts recorded. Alerts are generated automatically when SLA thresholds are breached.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Alert ID</th>
+      <th>Name</th>
+      <th>Severity</th>
+      <th>Metric</th>
+      <th>Observed</th>
+      <th>Threshold</th>
+      <th>Channel</th>
+      <th>Status</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in alerts %}
+    <tr>
+      <td><a href="{{ base_path }}/federation/notifications/alerts/{{ a.alert_id }}">{{ a.alert_id }}</a></td>
+      <td>{{ a.name }}</td>
+      <td>
+        {% if a.severity == "critical" %}
+        <span style="color: #dc322f;">{{ a.severity }}</span>
+        {% elif a.severity == "warning" %}
+        <span style="color: #b58900;">{{ a.severity }}</span>
+        {% else %}
+        {{ a.severity }}
+        {% endif %}
+      </td>
+      <td>{{ a.metric }}</td>
+      <td>{{ a.observed_value }}</td>
+      <td>{{ a.threshold }}</td>
+      <td>{{ a.channel }}</td>
+      <td>{{ a.status }}</td>
+      <td>{{ a.created_at[:19] if a.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

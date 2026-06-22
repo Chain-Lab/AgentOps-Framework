@@ -1,0 +1,51 @@
+<h1>SLA Violations</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>SLA service not configured.</p>
+</div>
+{% elif not violations %}
+<div class="empty-state">
+  <p>No SLA violations detected. All notification delivery metrics are within policy thresholds.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Violation ID</th>
+      <th>Federation</th>
+      <th>Channel</th>
+      <th>Metric</th>
+      <th>Observed</th>
+      <th>Threshold</th>
+      <th>Severity</th>
+      <th>Message</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for v in violations %}
+    <tr>
+      <td>{{ v.violation_id }}</td>
+      <td>{{ v.federation_id }}</td>
+      <td>{{ v.channel or "all" }}</td>
+      <td>{{ v.metric }}</td>
+      <td>{{ v.observed_value }}</td>
+      <td>{{ v.threshold }}</td>
+      <td>
+        {% if v.severity == "critical" %}
+        <span style="color: #dc322f;">{{ v.severity }}</span>
+        {% elif v.severity == "warning" %}
+        <span style="color: #b58900;">{{ v.severity }}</span>
+        {% else %}
+        {{ v.severity }}
+        {% endif %}
+      </td>
+      <td>{{ v.message or "—" }}</td>
+      <td>{{ v.created_at[:19] if v.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

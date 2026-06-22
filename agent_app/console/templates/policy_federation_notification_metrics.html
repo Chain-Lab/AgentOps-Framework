@@ -1,0 +1,59 @@
+<h1>Notification Delivery Metrics</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification observability store not configured.</p>
+</div>
+{% elif not metrics %}
+<div class="empty-state">
+  <p>No metrics data available. Metrics are aggregated as notifications are delivered.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Channel</th>
+      <th>Window Start</th>
+      <th>Window End</th>
+      <th>Total</th>
+      <th>Sent</th>
+      <th>Failed</th>
+      <th>DLQ</th>
+      <th>Suppressed</th>
+      <th>Retry</th>
+      <th>Success Rate</th>
+      <th>Failure Rate</th>
+      <th>DLQ Rate</th>
+      <th>Avg Latency (ms)</th>
+      <th>P95 Latency (ms)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in metrics %}
+    <tr>
+      <td>{{ m.channel }}</td>
+      <td>{{ m.window_start[:19] if m.window_start else "—" }}</td>
+      <td>{{ m.window_end[:19] if m.window_end else "—" }}</td>
+      <td>{{ m.total }}</td>
+      <td style="color: #2aa198;">{{ m.sent }}</td>
+      <td style="color: #dc322f;">{{ m.failed }}</td>
+      <td>{{ m.dlq }}</td>
+      <td>{{ m.suppressed }}</td>
+      <td>{{ m.retry_scheduled }}</td>
+      <td style="color: {% if m.success_rate >= 0.95 %}#2aa198{% elif m.success_rate >= 0.8 %}#b58900{% else %}#dc322f{% endif %};">
+        {{ "%.1f%%" | format(m.success_rate * 100) }}
+      </td>
+      <td style="color: {% if m.failure_rate <= 0.05 %}#2aa198{% elif m.failure_rate <= 0.2 %}#b58900{% else %}#dc322f{% endif %};">
+        {{ "%.1f%%" | format(m.failure_rate * 100) }}
+      </td>
+      <td style="color: {% if m.dlq_rate <= 0.01 %}#2aa198{% elif m.dlq_rate <= 0.05 %}#b58900{% else %}#dc322f{% endif %};">
+        {{ "%.1f%%" | format(m.dlq_rate * 100) }}
+      </td>
+      <td>{{ m.avg_latency_ms if m.avg_latency_ms is not none else "—" }}</td>
+      <td>{{ m.p95_latency_ms if m.p95_latency_ms is not none else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

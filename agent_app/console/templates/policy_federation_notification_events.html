@@ -1,0 +1,52 @@
+<h1>Notification Delivery Events</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if filters.event_type %}
+<p>Filtering by event type: <strong>{{ filters.event_type }}</strong></p>
+{% endif %}
+{% if filters.channel %}
+<p>Filtering by channel: <strong>{{ filters.channel }}</strong></p>
+{% endif %}
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification observability store not configured.</p>
+</div>
+{% elif not events %}
+<div class="empty-state">
+  <p>No delivery events recorded yet. Events are recorded as notifications are processed.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Event ID</th>
+      <th>Type</th>
+      <th>Notification</th>
+      <th>Approval</th>
+      <th>Channel</th>
+      <th>Status</th>
+      <th>Attempt</th>
+      <th>Latency</th>
+      <th>Adapter</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.event_id }}</td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.notification_id }}</td>
+      <td>{{ e.approval_id }}</td>
+      <td>{{ e.channel }}</td>
+      <td>{{ e.status }}</td>
+      <td>{{ e.attempt }}</td>
+      <td>{{ e.latency_ms }} ms</td>
+      <td>{{ e.adapter_name or "—" }}</td>
+      <td>{{ e.created_at[:19] if e.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
