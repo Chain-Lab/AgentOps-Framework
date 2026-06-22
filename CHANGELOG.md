@@ -2,6 +2,21 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.40.0 — Phase 52: Federation Notification Observability
+
+### Added
+- Federation notification delivery event observability with InMemory and SQLite stores
+- Notification metrics aggregation (success rate, failure rate, DLQ rate, latency, p95)
+- Channel health snapshots with healthy/degraded/unhealthy status
+- Notification SLA policy with per-channel overrides and violation detection
+- Notification alert rules with cooldown, acknowledge, and resolve lifecycle
+- Notification observability CLI commands (events, metrics, health, sla, alerts, report)
+- Notification observability console pages
+- Notification metrics/events/alerts JSON and CSV exports
+
+### Changed
+- PolicyChangeEventType count: 118 → 123
+
 ## v0.39.0 — Phase 51: Federation Notification Templates, Preferences & Webhook Replay
 
 ### Added

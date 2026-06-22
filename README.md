@@ -1264,3 +1264,4 @@ See [docs/observability.md](docs/observability.md) for full documentation.
 - **Phase 49**: Federation Approval Notification & Escalation Workers — notification adapters, outbox store, dispatch service, escalation worker, distributed lock, CLI commands, console pages
 - **Phase 50**: Federation Approval Dead-Letter Queue & Scheduled Worker — DLQ for failed notifications, retry policies with per-channel overrides, persistent scheduled worker for notification dispatch and escalation
 - **Phase 51**: Federation Notification Templates, Preferences & Webhook Replay — configurable templates with safe variable substitution, preference management with opt-in/opt-out, HMAC-SHA256 webhook signing, original-payload DLQ replay
+- **v0.40.0** — Federation notification observability: delivery event tracking, metrics aggregation, channel health, SLA monitoring, alert rules, CLI/console observability commands, and report exports

@@ -4268,3 +4268,387 @@ governance:
 - FederationHistoryEventType: 33 → 36
 - PolicyReleasePermission: 82 → 88
 - FederationNotificationStatus: 6 → 9
+
+---
+
+# Phase 52: Federation Notification Observability
+
+## Overview
+
+**Phase 52** adds observability to the federation notification system introduced in
+Phase 49–51. It provides delivery event tracking, metrics aggregation, channel health
+monitoring, SLA policy enforcement, and alert lifecycle management for federation
+notifications. It provides:
+
+1. **Delivery Event Tracking** — 12 event types covering the full notification lifecycle
+2. **Metrics Aggregation** — Success rate, failure rate, DLQ rate, latency, p95 over configurable windows
+3. **Channel Health Snapshots** — HEALTHY / DEGRADED / UNHEALTHY / UNKNOWN status per channel
+4. **SLA Policy** — Configurable thresholds with per-channel overrides and violation detection
+5. **Alert Rules** — Metric-based alerting with cooldown, acknowledge, and resolve lifecycle
+6. **CLI Commands** — Full observability CLI under `federation notification` subcommand
+7. **Console Pages** — Dashboard, events, metrics, health, SLA, alerts, alert detail
+8. **Report Export** — JSON and CSV export for events, metrics, and alerts
+
+## Delivery Event Lifecycle
+
+### Event Types
+
+12 event types covering the full notification delivery lifecycle:
+
+| Event Type | Description |
+|-----------|-------------|
+| `created` | Notification record created |
+| `queued` | Notification entered the dispatch queue |
+| `rendered` | Template successfully rendered |
+| `suppressed` | Delivery suppressed by preference |
+| `send_attempted` | Dispatch attempted (adapter called) |
+| `sent` | Notification successfully delivered |
+| `failed` | Delivery failed |
+| `retry_scheduled` | Retry scheduled by retry policy |
+| `dlq_created` | Entry moved to dead-letter queue (max retries exceeded) |
+| `dlq_replayed` | DLQ entry replayed via replay-original |
+| `webhook_signature_failed` | Webhook HMAC signature verification failed |
+| `template_failed` | Template rendering failed |
+
+### Event Recording
+
+Events are recorded by `FederationNotificationService._record_delivery_event()`:
+- **Best-effort** — exceptions are caught and logged; a recording failure never breaks the notification flow
+- **Sensitive data redaction** — API keys, tokens, secrets, and signatures are redacted before storage using a 38-key sensitive key set
+- **Store** — `NotificationObservabilityStore` with InMemory and SQLite backends
+- **Default path** — `.agent_app/federation_notification_observability.db`
+
+## Metrics Aggregation
+
+### NotificationMetricWindow
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `window_start` | `datetime` | Start of the aggregation window |
+| `window_end` | `datetime` | End of the aggregation window |
+| `total` | `int` | Total delivery events in window |
+| `sent` | `int` | Events with `event_type == SENT` |
+| `failed` | `int` | Events with `event_type == FAILED` |
+| `suppressed` | `int` | Events with `event_type == SUPPRESSED` |
+| `dlq` | `int` | Events with `event_type == DLQ_CREATED` |
+| `retry_scheduled` | `int` | Events with `event_type == RETRY_SCHEDULED` |
+| `success_rate` | `float` | `sent / total` (0.0 if total == 0) |
+| `failure_rate` | `float` | `failed / total` (0.0 if total == 0) |
+| `dlq_rate` | `float` | `dlq / total` (0.0 if total == 0) |
+| `avg_latency_ms` | `float \| None` | Arithmetic mean of non-null latency values |
+| `p95_latency_ms` | `float \| None` | 95th percentile of non-null latency values |
+
+### Computation Details
+
+- **Window**: Configurable via `window_minutes` (default: 60 minutes). Events are filtered by `created_at` within `[now - window_minutes, now]`.
+- **Filtering**: Both `federation_id` and `channel` are optional filters applied before aggregation.
+- **success_rate**: `sent / total` — measures successful deliveries as a fraction of all events.
+- **failure_rate**: `failed / total` — measures hard failures as a fraction of all events.
+- **dlq_rate**: `dlq / total` — measures dead-lettered notifications as a fraction of all events.
+- **avg_latency_ms**: Arithmetic mean of all non-null `latency_ms` values in the window. Returns `None` if no latency data exists.
+- **p95_latency_ms**: All non-null latencies are sorted; the 95th percentile is computed as `sorted_latencies[ceil(N * 0.95) - 1]`. Returns `None` if fewer than 20 latency samples exist.
+
+## Channel Health
+
+### ChannelHealthStatus
+
+| Status | Description |
+|--------|-------------|
+| `HEALTHY` | Channel is operating normally |
+| `DEGRADED` | Channel is experiencing elevated failure rates |
+| `UNHEALTHY` | Channel is failing significantly |
+| `UNKNOWN` | No delivery events recorded in the window |
+
+### Health Determination Logic
+
+Health is computed from aggregated metrics per channel using the following rules
+(evaluated in order):
+
+1. **UNKNOWN** — If `total == 0` (no events in the window)
+2. **UNHEALTHY** — If `failure_rate > 0.5`
+3. **DEGRADED** — If `failure_rate > 0.1` OR `dlq_rate > 0.05`
+4. **HEALTHY** — If `success_rate >= 0.95` AND `failure_rate <= 0.05` AND `dlq_rate <= 0.01`
+5. **DEGRADED** — All other cases with data (fallback)
+
+### Console Health Page
+
+The health page evaluates all three channels (`email`, `webhook`, `console`) and
+displays a status badge for each. The CLI `health` command uses a simplified
+assessment: HEALTHY if `success_rate >= 0.95`, DEGRADED if `success_rate >= 0.8`,
+UNHEALTHY if `success_rate < 0.8`, UNKNOWN if no data.
+
+## SLA Policy
+
+### NotificationSlaPolicy
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `True` | Enable/disable SLA monitoring |
+| `max_delivery_latency_ms` | `int` | `30000` | Max delivery latency threshold (ms) |
+| `min_success_rate` | `float` | `0.95` | Minimum acceptable success rate (0.0–1.0) |
+| `max_failure_rate` | `float` | `0.05` | Maximum acceptable failure rate (0.0–1.0) |
+| `max_dlq_rate` | `float` | `0.01` | Maximum acceptable DLQ rate (0.0–1.0) |
+| `window_minutes` | `int` | `60` | Evaluation window in minutes |
+| `channels` | `dict[str, NotificationChannelSlaOverride]` | `{}` | Per-channel SLA overrides |
+
+### Per-Channel Override
+
+`NotificationChannelSlaOverride` allows channel-specific thresholds:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_delivery_latency_ms` | `int \| None` | `None` | Channel-specific max latency |
+| `min_success_rate` | `float \| None` | `None` | Channel-specific min success rate |
+| `max_failure_rate` | `float \| None` | `None` | Channel-specific max failure rate |
+| `max_dlq_rate` | `float \| None` | `None` | Channel-specific max DLQ rate |
+| `window_minutes` | `int \| None` | `None` | Channel-specific evaluation window |
+
+Channel overrides are merged with the base policy — unset fields fall back to the
+base policy values.
+
+### Severity Determination
+
+`NotificationSlaService.evaluate()` checks each metric and assigns severity:
+
+| Metric | Critical Threshold | Warning Threshold |
+|--------|-------------------|-------------------|
+| `avg_latency_ms` | Observed > 2x `max_delivery_latency_ms` | Between threshold and 2x |
+| `success_rate` | Observed < 0.5x `min_success_rate` | Between 0.5x and threshold |
+| `failure_rate` | Observed > 2x `max_failure_rate` | Between threshold and 2x |
+| `dlq_rate` | Observed > 2x `max_dlq_rate` | Between threshold and 2x |
+
+### NotificationSlaViolation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `violation_id` | `str` | Unique ID (`nsv_` prefix) |
+| `sla_policy` | `NotificationSlaPolicy` | The policy that was violated |
+| `channel` | `str \| None` | Channel that violated SLA |
+| `metric` | `str` | Metric that violated the threshold |
+| `observed_value` | `float` | Actual observed value |
+| `threshold_value` | `float` | Configured threshold |
+| `severity` | `str` | `warning` or `critical` |
+| `federation_id` | `str \| None` | Federation that triggered the violation |
+| `created_at` | `datetime` | Violation timestamp |
+
+## Alert Rules
+
+### NotificationAlertRule
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rule_id` | `str` | *(required)* | Unique rule ID (must start with `nar_`) |
+| `name` | `str` | *(required)* | Human-readable rule name |
+| `enabled` | `bool` | `True` | Whether the rule is active |
+| `metric` | `str` | *(required)* | Metric to monitor (e.g. `failure_rate`, `success_rate`, `dlq_rate`, `avg_latency_ms`) |
+| `operator` | `Literal[">", ">=", "<", "<=", "=="]` | *(required)* | Comparison operator |
+| `threshold` | `float` | *(required)* | Threshold value |
+| `severity` | `Literal["info", "warning", "critical"]` | `"warning"` | Alert severity |
+| `channel` | `str \| None` | `None` | Filter to specific channel |
+| `federation_id` | `str \| None` | `None` | Filter to specific federation |
+| `window_minutes` | `int` | `60` | Evaluation window |
+| `cooldown_minutes` | `int` | `30` | Minimum minutes between alerts for the same rule |
+
+### Alert Lifecycle
+
+`NotificationAlertEvent` status lifecycle:
+
+| Status | Description |
+|--------|-------------|
+| `open` | Alert fired, awaiting action |
+| `acknowledged` | Operator acknowledged the alert |
+| `resolved` | Alert resolved (root cause addressed) |
+
+### NotificationAlertEvent
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `alert_id` | `str` | Unique ID (`nal_` prefix) |
+| `rule_id` | `str` | Reference to the triggering rule |
+| `rule_name` | `str` | Human-readable rule name |
+| `status` | `str` | `open`, `acknowledged`, or `resolved` |
+| `severity` | `str` | `info`, `warning`, or `critical` |
+| `metric` | `str` | Metric that triggered the alert |
+| `observed_value` | `float` | Actual observed value |
+| `threshold_value` | `float` | Configured threshold |
+| `operator` | `str` | Comparison operator |
+| `channel` | `str \| None` | Channel that triggered the alert |
+| `federation_id` | `str \| None` | Federation that triggered the alert |
+| `acknowledged_at` | `datetime \| None` | When the alert was acknowledged |
+| `acknowledged_by` | `str \| None` | Who acknowledged the alert |
+| `resolved_at` | `datetime \| None` | When the alert was resolved |
+| `resolved_by` | `str \| None` | Who resolved the alert |
+| `created_at` | `datetime` | Alert creation timestamp |
+
+## Config Schema
+
+```yaml
+governance:
+  policy_rollout:
+    federation:
+      notifications:
+        observability:                          # Phase 52
+          enabled: true
+          store:
+            type: sqlite
+            path: .agent_app/federation_notification_observability.db
+          window_minutes: 60
+        sla:                                     # Phase 52
+          enabled: true
+          max_delivery_latency_ms: 30000
+          min_success_rate: 0.95
+          max_failure_rate: 0.05
+          max_dlq_rate: 0.01
+          window_minutes: 60
+          channels:
+            webhook:
+              max_delivery_latency_ms: 10000
+              min_success_rate: 0.98
+        alerts:                                  # Phase 52
+          enabled: true
+          store:
+            type: sqlite
+            path: .agent_app/federation_notification_alerts.db
+          rules:
+            - rule_id: nar_high_failure_rate
+              name: High failure rate
+              enabled: true
+              metric: failure_rate
+              operator: ">"
+              threshold: 0.1
+              severity: warning
+              cooldown_minutes: 30
+            - rule_id: nar_webhook_critical
+              name: Webhook channel critical
+              enabled: true
+              metric: failure_rate
+              operator: ">"
+              threshold: 0.5
+              severity: critical
+              channel: webhook
+              cooldown_minutes: 15
+```
+
+## CLI Commands
+
+```bash
+# List delivery events
+agentapp policy federation notification events list \
+  --config agentapp.yaml \
+  [--federation-id <id>] [--channel <ch>] [--event-type <type>] \
+  [--since <iso>] [--until <iso>] [--limit <n>] [--format table|json]
+
+# Show aggregated metrics
+agentapp policy federation notification metrics \
+  --config agentapp.yaml \
+  [--federation-id <id>] [--channel <ch>] [--window-minutes <n>] \
+  [--format table|json]
+
+# Show channel health status
+agentapp policy federation notification health \
+  --config agentapp.yaml \
+  [--format table|json]
+
+# Check SLA compliance
+agentapp policy federation notification sla check \
+  --config agentapp.yaml \
+  [--federation-id <id>] [--channel <ch>] [--format table|json]
+
+# List alerts
+agentapp policy federation notification alerts list \
+  --config agentapp.yaml \
+  [--status <status>] [--severity <sev>] [--channel <ch>] \
+  [--federation-id <id>] [--limit <n>] [--format table|json]
+
+# Acknowledge an alert
+agentapp policy federation notification alerts ack \
+  --config agentapp.yaml --alert-id <id> --by <who>
+
+# Resolve an alert
+agentapp policy federation notification alerts resolve \
+  --config agentapp.yaml --alert-id <id> --by <who>
+
+# Export report
+agentapp policy federation notification report export \
+  --config agentapp.yaml \
+  --type <events|metrics|alerts> \
+  --format <json|csv> \
+  [--federation-id <id>] [--channel <ch>] [--window-minutes <n>] \
+  [--output <path>]
+```
+
+## Console Pages
+
+| Route | Template | Description |
+|-------|----------|-------------|
+| `GET /federation/notifications/observability` | `policy_federation_notification_observability.html` | Dashboard with aggregated metrics and alert summary |
+| `GET /federation/notifications/events` | `policy_federation_notification_events.html` | Delivery events list with filters (event_type, channel) |
+| `GET /federation/notifications/metrics` | `policy_federation_notification_metrics.html` | Delivery metrics detail page |
+| `GET /federation/notifications/health` | `policy_federation_notification_health.html` | Channel health status for email, webhook, console |
+| `GET /federation/notifications/sla` | `policy_federation_notification_sla.html` | SLA violations list |
+| `GET /federation/notifications/alerts` | `policy_federation_notification_alerts.html` | Alert list with filters (status, severity) |
+| `GET /federation/notifications/alerts/{alert_id}` | `policy_federation_notification_alert_detail.html` | Single alert detail with ack/resolve actions |
+
+All pages are read-only except for alert acknowledge and resolve actions.
+
+## Report Export
+
+### Formats
+
+| Data Type | JSON | CSV |
+|-----------|------|-----|
+| Delivery Events | `export_notification_events_json()` | `export_notification_events_csv()` |
+| Metrics | `export_notification_metrics_json()` | `export_notification_metrics_csv()` |
+| Alerts | `export_notification_alerts_json()` | `export_notification_alerts_csv()` |
+
+### Sensitive Data Handling
+
+All exports redact sensitive values (API keys, tokens, secrets, signatures, passwords,
+cookies) using a 38-key sensitive key set applied to `error_message` and `metadata`
+fields before serialization.
+
+## RBAC Permissions
+
+Phase 52 notification observability relies on existing general permissions:
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `OBSERVABILITY_VIEW` | `policy.observability.view` | Allowed |
+| `OBSERVABILITY_EXPORT` | `policy.observability.export` | Allowed |
+| `FEDERATION_NOTIFICATION_LIST` | `policy.federation.notification.list` | Allowed |
+
+## Change Events (Phase 52 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.federation.notification.sla.violation_detected` | SLA violation detected |
+| `policy.federation.notification.alert.created` | Alert rule fired |
+| `policy.federation.notification.alert.acknowledged` | Alert acknowledged |
+| `policy.federation.notification.alert.resolved` | Alert resolved |
+| `policy.federation.notification.report.exported` | Report exported |
+
+## Design Decisions
+
+1. **Best-effort event recording** — `_record_delivery_event()` catches all exceptions; a failure to record observability data never breaks the notification dispatch flow. This prioritizes notification delivery over observability completeness.
+
+2. **Sensitive data redaction at the model level** — The `NotificationDeliveryEvent` model uses a `@model_validator` to redact `error_message` and `metadata` fields before storage. A shared `_SENSITIVE_KEYS` set (38 key patterns) handles common secret names.
+
+3. **Metrics computed at query time** — Aggregates are computed on demand from raw delivery events rather than pre-computed. This ensures accuracy and avoids stale metric data, at the cost of query performance for large event volumes.
+
+4. **SLA severity is proportional** — Violation severity is `critical` when the observed value exceeds 2x the threshold (or is below 0.5x for rates), and `warning` otherwise. This provides graduated alerting rather than binary pass/fail.
+
+5. **Alert cooldown prevents noise** — Each alert rule has a `cooldown_minutes` parameter. After an alert fires, the same rule will not fire again for that federation+channel combination until the cooldown expires.
+
+6. **SQLite default for stores** — Both the observability store and alert store default to SQLite for persistence across CLI subprocess invocations. InMemory stores are available for testing.
+
+## Current Limitations
+
+1. **No external Prometheus/Grafana integration** — Metrics are available via CLI, console, and export only. There is no push-based metrics export to external monitoring systems.
+
+2. **No external alert delivery mechanism** — Alerts are recorded in the store and visible in the console/CLI. There is no email, Slack, or PagerDuty integration for alert notifications.
+
+3. **SQLite not suitable as large-scale time-series database** — The SQLite observability store works for moderate notification volumes. High-throughput systems (thousands of notifications per minute) will need a dedicated time-series database or external observability platform.
+
+4. **Health/SLA computed from framework-recorded events only** — Metrics reflect only events recorded by the Agent App framework. Gaps in event recording (e.g., network failures before the framework records `send_attempted`) may result in under-counting.
+
+5. **Production monitoring still requires external tools** — Phase 52 provides framework-internal observability for debugging and operational awareness. Production-grade monitoring, alerting, and dashboards require integration with external observability platforms (Datadog, New Relic, Grafana, etc.).
