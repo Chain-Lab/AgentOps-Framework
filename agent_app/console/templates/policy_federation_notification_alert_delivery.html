@@ -1,0 +1,39 @@
+<h1>Alert Delivery Targets</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Alert delivery store not configured.</p>
+</div>
+{% elif not targets %}
+<div class="empty-state">
+  <p>No alert delivery targets configured. Add targets via CLI or API.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Target ID</th>
+      <th>Name</th>
+      <th>Channel</th>
+      <th>Enabled</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in targets %}
+    <tr>
+      <td>{{ t.target_id }}</td>
+      <td>{{ t.name }}</td>
+      <td>{{ t.channel_type }}</td>
+      <td>
+        {% if t.enabled %}
+        <span style="color: #2aa198;">Yes</span>
+        {% else %}
+        <span style="color: #dc322f;">No</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

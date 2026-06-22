@@ -1,0 +1,52 @@
+<h1>Alert Delivery Attempts</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p><a href="{{ base_path }}/federation/notifications/alert-delivery">&larr; Back to Targets</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Alert delivery store not configured.</p>
+</div>
+{% elif not attempts %}
+<div class="empty-state">
+  <p>No delivery attempts recorded.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Attempt ID</th>
+      <th>Alert ID</th>
+      <th>Target</th>
+      <th>Channel</th>
+      <th>Status</th>
+      <th>Attempt</th>
+      <th>Error</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in attempts %}
+    <tr>
+      <td>{{ a.attempt_id }}</td>
+      <td>{{ a.alert_id }}</td>
+      <td>{{ a.target_id }}</td>
+      <td>{{ a.channel_type }}</td>
+      <td>
+        {% if a.status == "delivered" %}
+        <span style="color: #2aa198;">{{ a.status }}</span>
+        {% elif a.status == "failed" %}
+        <span style="color: #dc322f;">{{ a.status }}</span>
+        {% elif a.status == "suppressed" %}
+        <span style="color: #b58900;">{{ a.status }}</span>
+        {% else %}
+        {{ a.status }}
+        {% endif %}
+      </td>
+      <td>{{ a.attempt }}</td>
+      <td>{{ a.error_message }}</td>
+      <td>{{ a.created_at[:19] if a.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

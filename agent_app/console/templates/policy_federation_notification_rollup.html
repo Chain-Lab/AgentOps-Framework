@@ -1,0 +1,43 @@
+<h1>Notification Rollup</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not service_available %}
+<div class="empty-state">
+  <p>Rollup service not configured.</p>
+</div>
+{% elif not rollups %}
+<div class="empty-state">
+  <p>No rollup data available. Build rollups via CLI or scheduled worker.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Rollup ID</th>
+      <th>Granularity</th>
+      <th>Channel</th>
+      <th>Federation</th>
+      <th>Bucket Start</th>
+      <th>Total</th>
+      <th>Sent</th>
+      <th>Failed</th>
+      <th>Suppressed</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rollups %}
+    <tr>
+      <td>{{ r.rollup_id }}</td>
+      <td>{{ r.granularity }}</td>
+      <td>{{ r.channel }}</td>
+      <td>{{ r.federation_id }}</td>
+      <td>{{ r.bucket_start[:19] if r.bucket_start else "—" }}</td>
+      <td>{{ r.total }}</td>
+      <td style="color: #2aa198;">{{ r.sent }}</td>
+      <td style="color: #dc322f;">{{ r.failed }}</td>
+      <td>{{ r.suppressed }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

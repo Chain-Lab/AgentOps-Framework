@@ -386,3 +386,133 @@ class TestFederationDLQReplayConsole:
         assert "application/json" in response.text
         # Redacted markers should be present
         assert "[REDACTED]" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Alert delivery, Prometheus, JSONL, Retention, Rollup console
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53AlertDeliveryConsole:
+    """Tests for alert delivery console pages (Phase 53)."""
+
+    def test_alert_delivery_targets_page_renders(self) -> None:
+        """Alert delivery targets page renders when store is available."""
+        from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+            AlertDeliveryChannelType,
+        )
+        from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+            InMemoryAlertDeliveryStore,
+        )
+
+        store = InMemoryAlertDeliveryStore()
+        loop = asyncio.new_event_loop()
+        try:
+            from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+                AlertDeliveryTarget,
+            )
+            target = AlertDeliveryTarget(
+                target_id="ndt_t1",
+                name="Ops Channel",
+                channel_type=AlertDeliveryChannelType.CONSOLE,
+                enabled=True,
+            )
+            loop.run_until_complete(store.create_target(target))
+        finally:
+            loop.close()
+
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_alert_delivery_store=store,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/alert-delivery")
+        assert response.status_code == 200
+        assert "Alert Delivery Targets" in response.text
+        assert "ndt_t1" in response.text
+        assert "Ops Channel" in response.text
+
+    def test_alert_delivery_no_store_shows_unavailable(self) -> None:
+        """Alert delivery page shows 'not configured' when store is None."""
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_alert_delivery_store=None,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/alert-delivery")
+        assert response.status_code == 200
+        assert "not configured" in response.text.lower() or "not available" in response.text.lower()
+
+
+class TestPhase53PrometheusConsole:
+    """Tests for Prometheus export console page (Phase 53)."""
+
+    def test_prometheus_page_renders(self) -> None:
+        """Prometheus export page renders."""
+        from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+            InMemoryNotificationObservabilityStore,
+        )
+
+        store = InMemoryNotificationObservabilityStore()
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_observability_store=store,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/prometheus")
+        assert response.status_code == 200
+        assert "Prometheus" in response.text or "Metrics" in response.text
+
+
+class TestPhase53JsonlConsole:
+    """Tests for JSONL export console page (Phase 53)."""
+
+    def test_jsonl_page_renders(self) -> None:
+        """JSONL export page renders."""
+        app = FastAPI()
+        router = build_policy_console_router(store=None)
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/jsonl")
+        assert response.status_code == 200
+        assert "JSONL" in response.text or "Export" in response.text
+
+
+class TestPhase53RetentionConsole:
+    """Tests for retention console page (Phase 53)."""
+
+    def test_retention_page_renders(self) -> None:
+        """Retention page renders."""
+        app = FastAPI()
+        router = build_policy_console_router(store=None)
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/retention")
+        assert response.status_code == 200
+        assert "Retention" in response.text or "Archive" in response.text
+
+
+class TestPhase53RollupConsole:
+    """Tests for rollup console page (Phase 53)."""
+
+    def test_rollup_page_renders(self) -> None:
+        """Rollup page renders."""
+        app = FastAPI()
+        router = build_policy_console_router(store=None)
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+
+        response = client.get("/policy-console/federation/notifications/rollup")
+        assert response.status_code == 200
+        assert "Rollup" in response.text or "Metrics" in response.text

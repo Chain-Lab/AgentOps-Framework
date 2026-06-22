@@ -1,0 +1,10 @@
+<h1>JSONL Export</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Notification observability store not configured.</p>
+</div>
+{% else %}
+<pre style="background: #f5f5f5; padding: 1em; overflow-x: auto; font-size: 0.85em;">{{ jsonl_text }}</pre>
+{% endif %}

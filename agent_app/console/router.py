@@ -81,6 +81,10 @@ def build_policy_console_router(
     federation_notification_observability_store: Any = None,
     federation_notification_alert_store: Any = None,
     federation_notification_sla_service: Any = None,
+    federation_notification_alert_delivery_service: Any = None,
+    federation_notification_alert_delivery_store: Any = None,
+    federation_notification_retention_service: Any = None,
+    federation_notification_rollup_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -130,6 +134,10 @@ def build_policy_console_router(
         federation_notification_observability_store: Optional notification delivery event store (Phase 52).
         federation_notification_alert_store: Optional notification alert store (Phase 52).
         federation_notification_sla_service: Optional notification SLA evaluation service (Phase 52).
+        federation_notification_alert_delivery_service: Optional alert delivery service (Phase 53).
+        federation_notification_alert_delivery_store: Optional alert delivery target/attempt store (Phase 53).
+        federation_notification_retention_service: Optional notification retention service (Phase 53).
+        federation_notification_rollup_service: Optional notification rollup service (Phase 53).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -5983,6 +5991,186 @@ def build_policy_console_router(
                 "error": None,
                 "message": message,
                 "store_available": federation_notification_alert_store is not None,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 53 Task 11: Alert delivery, Prometheus, JSONL, Retention, Rollup
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/notifications/alert-delivery", response_class=HTMLResponse)
+    async def federation_notification_alert_delivery_targets(request: Request):
+        """Alert delivery targets list."""
+        targets_list: list[dict] = []
+        if federation_notification_alert_delivery_store is not None:
+            try:
+                targets = await federation_notification_alert_delivery_store.list_targets()
+                for t in targets:
+                    targets_list.append({
+                        "target_id": t.target_id,
+                        "name": t.name,
+                        "channel_type": t.channel_type.value if hasattr(t.channel_type, "value") else str(t.channel_type),
+                        "enabled": t.enabled,
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_delivery.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "targets": targets_list,
+                "store_available": federation_notification_alert_delivery_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/alert-delivery/attempts", response_class=HTMLResponse)
+    async def federation_notification_alert_delivery_attempts(request: Request):
+        """Alert delivery attempts history."""
+        attempts_list: list[dict] = []
+        if federation_notification_alert_delivery_store is not None:
+            try:
+                attempts = await federation_notification_alert_delivery_store.list_attempts(limit=200)
+                for a in attempts:
+                    attempts_list.append({
+                        "attempt_id": a.attempt_id,
+                        "alert_id": a.alert_id,
+                        "target_id": a.target_id,
+                        "channel_type": a.channel_type.value if hasattr(a.channel_type, "value") else str(a.channel_type),
+                        "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                        "attempt": a.attempt,
+                        "error_message": a.error_message or "—",
+                        "created_at": a.created_at.isoformat() if hasattr(a.created_at, "isoformat") else str(a.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_attempts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "attempts": attempts_list,
+                "store_available": federation_notification_alert_delivery_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/prometheus", response_class=HTMLResponse)
+    async def federation_notification_prometheus_page(request: Request):
+        """Prometheus metrics export display page."""
+        metrics_text = ""
+        if federation_notification_observability_store is not None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_prometheus import (
+                    export_notification_prometheus_metrics,
+                )
+                window = await federation_notification_observability_store.aggregate_metrics(window_minutes=60)
+                metrics_text = export_notification_prometheus_metrics([window], health=[], alerts=[])
+            except Exception as exc:
+                metrics_text = f"# Error generating metrics: {exc}"
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_prometheus.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "metrics_text": metrics_text,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/jsonl", response_class=HTMLResponse)
+    async def federation_notification_jsonl_page(request: Request):
+        """JSONL export display page."""
+        jsonl_text = ""
+        if federation_notification_observability_store is not None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_jsonl_export import (
+                    export_delivery_events_jsonl,
+                )
+                events = await federation_notification_observability_store.list_events(limit=100)
+                jsonl_text = export_delivery_events_jsonl(events)
+            except Exception as exc:
+                jsonl_text = f"# Error generating JSONL: {exc}"
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_jsonl.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "jsonl_text": jsonl_text,
+                "store_available": federation_notification_observability_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/retention", response_class=HTMLResponse)
+    async def federation_notification_retention_page(request: Request):
+        """Retention status and cleanup page."""
+        retention_info: dict = {
+            "enabled": False,
+            "raw_event_retention_days": 30,
+            "archive_before_purge": True,
+            "archive_format": "jsonl",
+            "archive_dir": ".agent_app/archives/federation_notifications",
+            "last_sweep": None,
+            "configured": False,
+        }
+        if federation_notification_retention_service is not None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_retention import (
+                    RetentionPolicy,
+                )
+                policy = getattr(federation_notification_retention_service, "_policy", None)
+                if policy is not None:
+                    retention_info["enabled"] = policy.enabled
+                    retention_info["raw_event_retention_days"] = policy.raw_event_retention_days
+                    retention_info["archive_before_purge"] = policy.archive_before_purge
+                    retention_info["archive_format"] = policy.archive_format
+                    retention_info["archive_dir"] = policy.archive_dir
+                    retention_info["configured"] = True
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_retention.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "retention": retention_info,
+                "service_available": federation_notification_retention_service is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/rollup", response_class=HTMLResponse)
+    async def federation_notification_rollup_page(request: Request):
+        """Rollup metrics list page."""
+        rollups_list: list[dict] = []
+        if federation_notification_rollup_service is not None:
+            try:
+                rollups = await federation_notification_rollup_service.list_rollups(limit=100)
+                for r in rollups:
+                    rollups_list.append({
+                        "rollup_id": r.rollup_id,
+                        "granularity": r.granularity.value if hasattr(r.granularity, "value") else str(r.granularity),
+                        "channel": r.channel or "all",
+                        "federation_id": r.federation_id or "all",
+                        "bucket_start": r.bucket_start.isoformat() if hasattr(r.bucket_start, "isoformat") else str(r.bucket_start),
+                        "total": r.total,
+                        "sent": r.sent,
+                        "failed": r.failed,
+                        "suppressed": r.suppressed,
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_rollup.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "rollups": rollups_list,
+                "service_available": federation_notification_rollup_service is not None,
             },
         )
 

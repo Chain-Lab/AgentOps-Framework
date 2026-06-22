@@ -1,0 +1,45 @@
+<h1>Notification Retention</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+
+{% if not service_available %}
+<div class="empty-state">
+  <p>Retention service not configured.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Setting</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Enabled</td>
+      <td>
+        {% if retention.enabled %}
+        <span style="color: #2aa198;">Yes</span>
+        {% else %}
+        <span style="color: #dc322f;">No</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <td>Raw Event Retention (days)</td>
+      <td>{{ retention.raw_event_retention_days }}</td>
+    </tr>
+    <tr>
+      <td>Archive Before Purge</td>
+      <td>{{ retention.archive_before_purge }}</td>
+    </tr>
+    <tr>
+      <td>Archive Format</td>
+      <td>{{ retention.archive_format }}</td>
+    </tr>
+    <tr>
+      <td>Archive Directory</td>
+      <td>{{ retention.archive_dir }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}

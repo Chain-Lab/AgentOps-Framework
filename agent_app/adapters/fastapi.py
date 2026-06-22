@@ -833,6 +833,17 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         federation_notification_template_service=getattr(agent_app, "federation_notification_template_service", None),
         federation_notification_preference_store=getattr(agent_app, "federation_notification_preference_store", None),
         federation_notification_preference_service=getattr(agent_app, "federation_notification_preference_service", None),
+        # Phase 52: notification observability, alert, SLA
+        federation_notification_observability_store=getattr(
+            getattr(agent_app, "_federation_notification_service", None), "_observability_store", None
+        ),
+        federation_notification_alert_store=getattr(agent_app, "_federation_notification_alert_store", None),
+        federation_notification_sla_service=getattr(agent_app, "_federation_notification_sla_service", None),
+        # Phase 53: alert delivery, retention, rollup
+        federation_notification_alert_delivery_service=getattr(agent_app, "_federation_notification_alert_delivery_service", None),
+        federation_notification_alert_delivery_store=getattr(agent_app, "_federation_notification_alert_delivery_store", None),
+        federation_notification_retention_service=getattr(agent_app, "_federation_notification_retention_service", None),
+        federation_notification_rollup_service=getattr(agent_app, "_federation_notification_rollup_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])
