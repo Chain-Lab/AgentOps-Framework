@@ -404,3 +404,10 @@ def _redact_after_key(text: str, key: str, sep: str) -> str:
 
     redacted = text[:start_value] + "[REDACTED]" + text[end_value:]
     return redacted
+
+
+class NotificationRollupGranularity(StrEnum):
+    """Granularity for metrics rollup."""
+
+    HOURLY = "hourly"
+    DAILY = "daily"

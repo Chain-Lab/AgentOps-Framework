@@ -117,6 +117,13 @@ class InMemoryNotificationObservabilityStore:
     async def get_event(self, event_id: str) -> NotificationDeliveryEvent | None:
         return self._events.get(event_id)
 
+    async def delete_event(self, event_id: str) -> bool:
+        """Delete an event by ID. Returns True if deleted, False if not found."""
+        if event_id in self._events:
+            del self._events[event_id]
+            return True
+        return False
+
     async def list_events(
         self,
         notification_id: str | None = None,
