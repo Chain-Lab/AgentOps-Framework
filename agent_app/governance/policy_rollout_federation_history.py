@@ -50,6 +50,12 @@ class FederationHistoryEventType(str, Enum):
     NOTIFICATION_TEMPLATE_CHANGED = "federation.notification.template_changed"
     NOTIFICATION_PREFERENCE_CHANGED = "federation.notification.preference_changed"
     WEBHOOK_REPLAY = "federation.webhook.replay"
+    NOTIFICATION_DELIVERY_EVENT_RECORDED = "notification.delivery.event_recorded"
+    NOTIFICATION_SLA_VIOLATION_DETECTED = "notification.sla.violation_detected"
+    NOTIFICATION_ALERT_CREATED = "notification.alert.created"
+    NOTIFICATION_ALERT_ACKNOWLEDGED = "notification.alert.acknowledged"
+    NOTIFICATION_ALERT_RESOLVED = "notification.alert.resolved"
+    NOTIFICATION_OBSERVABILITY_REPORT_EXPORTED = "notification.observability.report_exported"
 
 
 class FederationHistoryEvent(BaseModel):

@@ -130,6 +130,12 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_WEBHOOK_REPLAY_FAILED = "policy.federation.webhook.replay_failed"
     FEDERATION_WEBHOOK_SIGNATURE_VERIFIED = "policy.federation.webhook.signature_verified"
     FEDERATION_WEBHOOK_SIGNATURE_FAILED = "policy.federation.webhook.signature_failed"
+    FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED = "policy.federation.notification.observability.event_recorded"
+    FEDERATION_NOTIFICATION_SLA_VIOLATION_DETECTED = "policy.federation.notification.sla.violation_detected"
+    FEDERATION_NOTIFICATION_ALERT_CREATED = "policy.federation.notification.alert.created"
+    FEDERATION_NOTIFICATION_ALERT_ACKNOWLEDGED = "policy.federation.notification.alert.acknowledged"
+    FEDERATION_NOTIFICATION_ALERT_RESOLVED = "policy.federation.notification.alert.resolved"
+    FEDERATION_NOTIFICATION_REPORT_EXPORTED = "policy.federation.notification.report.exported"
 
 
 class PolicyChangeEvent(BaseModel):

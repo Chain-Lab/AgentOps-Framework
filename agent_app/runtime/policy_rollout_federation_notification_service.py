@@ -12,6 +12,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from agent_app.governance.policy_change_event import PolicyChangeEventType
+from agent_app.governance.policy_rollout_federation_history import (
+    FederationHistoryEventType,
+)
 from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationChannel,
     FederationNotificationDeadLetter,
@@ -140,12 +144,12 @@ class FederationNotificationService:
                 event_type=FederationNotificationEventType.APPROVAL_CREATED.value,
             )
             self._record_change_event(
-                event_type="notification.enqueued",
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_CREATED,
                 payload={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
             self._record_history(
                 federation_id=federation_id,
-                event_type="notification.enqueued",
+                event_type=FederationHistoryEventType.NOTIFICATION_CREATED,
                 details={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
         return messages
@@ -196,12 +200,12 @@ class FederationNotificationService:
                 event_type=FederationNotificationEventType.APPROVAL_APPROVED.value,
             )
             self._record_change_event(
-                event_type="notification.enqueued",
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_CREATED,
                 payload={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
             self._record_history(
                 federation_id=federation_id,
-                event_type="notification.enqueued",
+                event_type=FederationHistoryEventType.NOTIFICATION_CREATED,
                 details={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
         return messages
@@ -252,12 +256,12 @@ class FederationNotificationService:
                 event_type=FederationNotificationEventType.APPROVAL_REJECTED.value,
             )
             self._record_change_event(
-                event_type="notification.enqueued",
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_CREATED,
                 payload={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
             self._record_history(
                 federation_id=federation_id,
-                event_type="notification.enqueued",
+                event_type=FederationHistoryEventType.NOTIFICATION_CREATED,
                 details={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
         return messages
@@ -312,12 +316,12 @@ class FederationNotificationService:
                 event_type=FederationNotificationEventType.APPROVAL_ESCALATED.value,
             )
             self._record_change_event(
-                event_type="notification.enqueued",
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_CREATED,
                 payload={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
             self._record_history(
                 federation_id=federation_id,
-                event_type="notification.enqueued",
+                event_type=FederationHistoryEventType.NOTIFICATION_CREATED,
                 details={"notification_id": msg.notification_id, "approval_id": approval_id},
             )
         return messages
@@ -338,6 +342,120 @@ class FederationNotificationService:
             if override is not None:
                 return override
         return self._retry_policy
+
+    # ------------------------------------------------------------------
+    # Observability event recording (Phase 52 Task 10)
+    # ------------------------------------------------------------------
+
+    def _record_observability_event(
+        self,
+        *,
+        event_type: PolicyChangeEventType,
+        history_event_type: FederationHistoryEventType,
+        federation_id: str | None,
+        notification_id: str | None,
+        detail: str,
+    ) -> None:
+        """Record both a policy change event and a federation history event for
+        a key observability milestone. Best-effort — never breaks the caller."""
+        payload: dict[str, Any] = {
+            "notification_id": notification_id,
+            "detail": detail,
+        }
+        self._record_change_event(
+            event_type=event_type,
+            payload=payload,
+        )
+        self._record_history(
+            federation_id=federation_id,
+            event_type=history_event_type,
+            details=payload,
+        )
+
+    def record_sla_violation(
+        self,
+        *,
+        federation_id: str | None,
+        notification_id: str | None,
+        channel: str | None,
+        metric: str,
+        observed_value: float,
+        threshold: float,
+        severity: str,
+    ) -> None:
+        """Record an SLA violation as a change event and history event."""
+        self._record_observability_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_SLA_VIOLATION_DETECTED,
+            history_event_type=FederationHistoryEventType.NOTIFICATION_SLA_VIOLATION_DETECTED,
+            federation_id=federation_id,
+            notification_id=notification_id,
+            detail=f"sla_violation:{metric}:{severity}",
+        )
+
+    def record_alert_created(
+        self,
+        *,
+        federation_id: str | None,
+        alert_id: str,
+        rule_id: str,
+        severity: str,
+    ) -> None:
+        """Record an alert creation as a change event and history event."""
+        self._record_observability_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_CREATED,
+            history_event_type=FederationHistoryEventType.NOTIFICATION_ALERT_CREATED,
+            federation_id=federation_id,
+            notification_id=None,
+            detail=f"alert_created:{alert_id}:{rule_id}:{severity}",
+        )
+
+    def record_alert_acknowledged(
+        self,
+        *,
+        federation_id: str | None,
+        alert_id: str,
+        acknowledged_by: str | None = None,
+    ) -> None:
+        """Record an alert acknowledgment as a change event and history event."""
+        self._record_observability_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_ACKNOWLEDGED,
+            history_event_type=FederationHistoryEventType.NOTIFICATION_ALERT_ACKNOWLEDGED,
+            federation_id=federation_id,
+            notification_id=None,
+            detail=f"alert_acknowledged:{alert_id}",
+        )
+
+    def record_alert_resolved(
+        self,
+        *,
+        federation_id: str | None,
+        alert_id: str,
+        resolved_by: str | None = None,
+    ) -> None:
+        """Record an alert resolution as a change event and history event."""
+        self._record_observability_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_RESOLVED,
+            history_event_type=FederationHistoryEventType.NOTIFICATION_ALERT_RESOLVED,
+            federation_id=federation_id,
+            notification_id=None,
+            detail=f"alert_resolved:{alert_id}",
+        )
+
+    def record_report_exported(
+        self,
+        *,
+        federation_id: str | None,
+        report_type: str,
+        format: str,
+    ) -> None:
+        """Record a report export as a change event and history event."""
+        self._record_observability_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_REPORT_EXPORTED,
+            history_event_type=FederationHistoryEventType.NOTIFICATION_OBSERVABILITY_REPORT_EXPORTED,
+            federation_id=federation_id,
+            notification_id=None,
+            detail=f"report_exported:{report_type}:{format}",
+        )
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -411,6 +529,13 @@ class FederationNotificationService:
                         federation_id=message.federation_id,
                         channel=message.channel.value,
                         preference_decision="opt_out",
+                    )
+                    self._record_observability_event(
+                        event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                        history_event_type=FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                        federation_id=message.federation_id,
+                        notification_id=message.notification_id,
+                        detail="delivery_suppressed",
                     )
                     self._record_audit(
                         event="notification.suppressed",
@@ -613,6 +738,13 @@ class FederationNotificationService:
                     channel=message.channel.value,
                     adapter_name=adapter_name if isinstance(adapter_name := getattr(adapter, "name", None), str) else None,
                 )
+                self._record_observability_event(
+                    event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                    history_event_type=FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                    federation_id=message.federation_id,
+                    notification_id=message.notification_id,
+                    detail="delivery_succeeded",
+                )
                 total_sent += 1
             elif delivery.status == FederationNotificationStatus.FAILED:
                 error_msg = delivery.error or "Unknown delivery failure"
@@ -654,6 +786,13 @@ class FederationNotificationService:
                     await self._store.mark_failed(
                         message.notification_id,
                         error=error_msg,
+                    )
+                    self._record_observability_event(
+                        event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                        history_event_type=FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED,
+                        federation_id=message.federation_id,
+                        notification_id=message.notification_id,
+                        detail="delivery_failed_max_retries",
                     )
                 total_failed += 1
                 errors.append(error_msg)
@@ -814,7 +953,7 @@ class FederationNotificationService:
             event_type=entry.metadata.get("event_type", ""),
         )
         self._record_change_event(
-            event_type="federation.notification.replay_original",
+            event_type=PolicyChangeEventType.FEDERATION_WEBHOOK_REPLAY_REQUESTED,
             payload={
                 "dlq_id": dlq_id,
                 "notification_id": entry.notification_id,
@@ -906,7 +1045,7 @@ class FederationNotificationService:
     def _record_change_event(
         self,
         *,
-        event_type: str,
+        event_type: PolicyChangeEventType,
         payload: dict[str, Any],
     ) -> None:
         """Best-effort change event recording — never break the caller on failure."""
@@ -924,7 +1063,7 @@ class FederationNotificationService:
         self,
         *,
         federation_id: str | None,
-        event_type: str,
+        event_type: FederationHistoryEventType,
         details: dict[str, Any],
     ) -> None:
         """Best-effort federation history recording — never break the caller on failure."""
@@ -1025,7 +1164,7 @@ class FederationNotificationService:
             channel=message.channel.value,
         )
         self._record_change_event(
-            event_type="federation.notification.dlq_created",
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_DLQ_CREATED,
             payload={
                 "dlq_id": dlq_item.dlq_id,
                 "notification_id": message.notification_id,
@@ -1035,7 +1174,7 @@ class FederationNotificationService:
         )
         self._record_history(
             federation_id=message.federation_id,
-            event_type="notification_dlq_created",
+            event_type=FederationHistoryEventType.NOTIFICATION_DLQ_CREATED,
             details={
                 "dlq_id": dlq_item.dlq_id,
                 "notification_id": message.notification_id,
