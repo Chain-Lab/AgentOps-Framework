@@ -1249,3 +1249,350 @@ class TestNotificationReportExport:
             rc = _run_async(_cmd_policy_federation_notification_report_export(args))
 
         assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Alert delivery CLI
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53AlertDeliveryCLI:
+    def test_alert_deliver_dry_run(self, capsys):
+        """alerts deliver --alert-id --dry-run calls service."""
+        from agent_app.cli import _cmd_policy_federation_notification_alert_deliver
+        from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_service import (
+            NotificationAlertDeliveryService,
+        )
+
+        app = MagicMock()
+        app._federation_notification_alert_delivery_config = MagicMock()
+        app._federation_notification_alert_delivery_config.enabled = True
+        app._federation_notification_alert_delivery_config.store.type = "memory"
+        app._federation_notification_alert_delivery_config.store.path = None
+        app._federation_notification_alert_delivery_config.retry.max_attempts = 3
+        app._federation_notification_observability_store = MagicMock()
+        app._federation_notification_observability_store.list_events = AsyncMock(return_value=[])
+
+        captured_results = []
+
+        async def mock_deliver(self, alert_id, dry_run=False):
+            from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+                AlertDeliveryAttempt,
+                AlertDeliveryStatus,
+                AlertDeliveryChannelType,
+            )
+            from datetime import datetime, timezone
+            attempt = AlertDeliveryAttempt(
+                attempt_id="nda_1",
+                alert_id=alert_id,
+                target_id="ndt_1",
+                channel_type=AlertDeliveryChannelType.CONSOLE,
+                status=AlertDeliveryStatus.SUPPRESSED if dry_run else AlertDeliveryStatus.DELIVERED,
+                created_at=datetime.now(timezone.utc),
+            )
+            captured_results.append(attempt)
+            return [attempt]
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch.object(NotificationAlertDeliveryService, "deliver_alert", mock_deliver):
+            args = argparse.Namespace(
+                config="agentapp.yaml",
+                alert_id="nae_1",
+                dry_run=True,
+            )
+            rc = _run_async(_cmd_policy_federation_notification_alert_deliver(args))
+
+        assert rc == 0
+        assert len(captured_results) == 1
+        assert captured_results[0].status.value == "suppressed"
+
+    def test_alert_deliver_missing_config_exits_nonzero(self, capsys):
+        """alerts deliver with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_alert_deliver
+
+        app = MagicMock()
+        app._federation_notification_alert_delivery_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            alert_id="nae_1",
+            dry_run=False,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_alert_deliver(args))
+
+        assert rc != 0
+
+    def test_alert_delivery_targets_list(self, capsys):
+        """alerts delivery targets list prints targets."""
+        from agent_app.cli import _cmd_policy_federation_notification_alert_delivery_targets_list
+        from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+            InMemoryAlertDeliveryStore,
+        )
+        from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+            AlertDeliveryTarget,
+            AlertDeliveryChannelType,
+        )
+
+        store = InMemoryAlertDeliveryStore()
+        target = AlertDeliveryTarget(
+            target_id="ndt_1",
+            name="Ops",
+            channel_type=AlertDeliveryChannelType.CONSOLE,
+            enabled=True,
+        )
+        _run_async(store.create_target(target))
+
+        app = MagicMock()
+        app._federation_notification_alert_delivery_config = MagicMock()
+        app._federation_notification_alert_delivery_config.enabled = True
+        app._federation_notification_alert_delivery_config.store.type = "memory"
+        app._federation_notification_alert_delivery_config.store.path = None
+
+        args = argparse.Namespace(config="agentapp.yaml")
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store.create_alert_delivery_store", return_value=store):
+            rc = _run_async(_cmd_policy_federation_notification_alert_delivery_targets_list(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "ndt_1" in captured.out
+        assert "Ops" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Prometheus CLI
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53PrometheusCLI:
+    def test_prometheus_export(self, capsys):
+        """prometheus export prints metrics."""
+        from agent_app.cli import _cmd_policy_federation_notification_prometheus_export
+        from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+            InMemoryNotificationObservabilityStore,
+        )
+
+        store = InMemoryNotificationObservabilityStore()
+        from agent_app.governance.policy_rollout_federation_notification_observability import (
+            NotificationDeliveryEvent,
+            NotificationDeliveryEventType,
+        )
+        from datetime import datetime, timezone
+        event = NotificationDeliveryEvent(
+            event_id="nde_1",
+            event_type=NotificationDeliveryEventType.SENT,
+            channel="webhook",
+            created_at=datetime.now(timezone.utc),
+        )
+        _run_async(store.record_event(event))
+
+        app = MagicMock()
+        app._federation_notification_observability_config = MagicMock()
+        app._federation_notification_observability_config.enabled = True
+        app._federation_notification_observability_config.store.type = "memory"
+        app._federation_notification_observability_config.store.path = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=store):
+            rc = _run_async(_cmd_policy_federation_notification_prometheus_export(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "# HELP" in captured.out or "# TYPE" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: JSONL CLI
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53JsonlCLI:
+    def test_jsonl_export_events(self, capsys):
+        """jsonl export --type events prints JSONL."""
+        from agent_app.cli import _cmd_policy_federation_notification_jsonl_export
+        from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+            InMemoryNotificationObservabilityStore,
+        )
+
+        store = InMemoryNotificationObservabilityStore()
+        from agent_app.governance.policy_rollout_federation_notification_observability import (
+            NotificationDeliveryEvent,
+            NotificationDeliveryEventType,
+        )
+        from datetime import datetime, timezone
+        event = NotificationDeliveryEvent(
+            event_id="nde_1",
+            event_type=NotificationDeliveryEventType.SENT,
+            channel="webhook",
+            created_at=datetime.now(timezone.utc),
+        )
+        _run_async(store.record_event(event))
+
+        app = MagicMock()
+        app._federation_notification_observability_config = MagicMock()
+        app._federation_notification_observability_config.enabled = True
+        app._federation_notification_observability_config.store.type = "memory"
+        app._federation_notification_observability_config.store.path = None
+        app._federation_notification_alert_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            type="events",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            output=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=store):
+            rc = _run_async(_cmd_policy_federation_notification_jsonl_export(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "nde_1" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Retention CLI
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53RetentionCLI:
+    def test_retention_cleanup_dry_run(self, capsys):
+        """retention cleanup --dry-run runs without deleting."""
+        from agent_app.cli import _cmd_policy_federation_notification_retention_cleanup
+
+        app = MagicMock()
+        retention_cfg = MagicMock()
+        retention_cfg.enabled = True
+        retention_cfg.raw_event_retention_days = 30
+        retention_cfg.archive_before_purge = True
+        retention_cfg.archive_format = "jsonl"
+        retention_cfg.archive_dir = ".agent_app/archives/federation_notifications"
+        app._federation_notification_retention_config = retention_cfg
+        obs_store = MagicMock()
+        obs_store.list_events = AsyncMock(return_value=[])
+        app._federation_notification_observability_store = obs_store
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            dry_run=True,
+            yes=True,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_retention_cleanup(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Dry run: True" in captured.out
+
+    def test_retention_cleanup_not_configured_exits_nonzero(self):
+        """retention cleanup with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_retention_cleanup
+
+        app = MagicMock()
+        app._federation_notification_retention_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            dry_run=True,
+            yes=True,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_retention_cleanup(args))
+
+        assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Rollup CLI
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53RollupCLI:
+    def test_rollup_build(self, capsys):
+        """rollup build --granularity hourly builds rollups."""
+        from agent_app.cli import _cmd_policy_federation_notification_rollup_build
+        from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+            InMemoryNotificationObservabilityStore,
+        )
+        from agent_app.runtime.policy_rollout_federation_notification_rollup import (
+            InMemoryNotificationRollupStore,
+        )
+
+        obs_store = InMemoryNotificationObservabilityStore()
+        rollup_store = InMemoryNotificationRollupStore()
+        from agent_app.governance.policy_rollout_federation_notification_observability import (
+            NotificationDeliveryEvent,
+            NotificationDeliveryEventType,
+        )
+        from datetime import datetime, timezone
+        event = NotificationDeliveryEvent(
+            event_id="nde_1",
+            event_type=NotificationDeliveryEventType.SENT,
+            channel="webhook",
+            created_at=datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0),
+            latency_ms=100,
+        )
+        _run_async(obs_store.record_event(event))
+
+        app = MagicMock()
+        app._federation_notification_rollup_config = MagicMock()
+        app._federation_notification_rollup_config.enabled = True
+        app._federation_notification_rollup_config.store.type = "memory"
+        app._federation_notification_rollup_config.store.path = None
+        app._federation_notification_observability_store = obs_store
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            granularity="hourly",
+            since=None,
+            until=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_rollup.create_notification_rollup_store", return_value=rollup_store):
+            rc = _run_async(_cmd_policy_federation_notification_rollup_build(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Built" in captured.out
+
+    def test_rollup_list(self, capsys):
+        """rollup list prints rollup entries."""
+        from agent_app.cli import _cmd_policy_federation_notification_rollup_list
+
+        store = MagicMock()
+        store.list_rollups = AsyncMock(return_value=[])
+
+        app = MagicMock()
+        app._federation_notification_rollup_config = MagicMock()
+        app._federation_notification_rollup_config.enabled = True
+        app._federation_notification_rollup_config.store.type = "memory"
+        app._federation_notification_rollup_config.store.path = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            granularity=None,
+            channel=None,
+            limit=100,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_rollup.create_notification_rollup_store", return_value=store):
+            rc = _run_async(_cmd_policy_federation_notification_rollup_list(args))
+
+        assert rc == 0
