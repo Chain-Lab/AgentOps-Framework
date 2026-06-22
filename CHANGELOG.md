@@ -2,6 +2,38 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.39.0 — Phase 51: Federation Notification Templates, Preferences & Webhook Replay
+
+### Added
+- Federation notification template models and safe renderer
+- Template store with InMemory and SQLite backends
+- Template selection priority (federation+event+channel > event+channel > channel > global > builtin)
+- Notification preference models with opt-in/opt-out/inherit
+- Preference store and service with priority resolution
+- Mandatory notification event types (override opt-out)
+- Preference explanation with specificity and reason codes
+- Webhook HMAC-SHA256 signature service with key rotation
+- Webhook nonce store for replay protection
+- Webhook request snapshot model for audit
+- Original-payload replay from DLQ (distinct from retry)
+- Template CLI commands (list/show/create/update/disable/render)
+- Preference CLI commands (list/set/show/delete/explain)
+- Webhook replay CLI command (dlq replay-original --dry-run)
+- Webhook verify CLI command
+- Template and preference console pages
+- Extended DLQ detail with replay info
+- Template and preference JSON/CSV export
+- 6 new RBAC permissions
+- 12 new policy change event types
+- 3 new federation history event types
+- 3 new notification statuses (SUPPRESSED, TEMPLATE_FAILED, SIGNATURE_FAILED)
+
+### Changed
+- PolicyChangeEventType count: 106 → 118
+- FederationHistoryEventType count: 33 → 36
+- PolicyReleasePermission count: 82 → 88
+- FederationNotificationStatus count: 6 → 9
+
 ## v0.38.0 — Phase 50: Federation Approval Dead-Letter Queue & Scheduled Worker
 
 ### Added

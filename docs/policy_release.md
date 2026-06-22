@@ -4194,3 +4194,77 @@ governance:
 - FederationHistoryEventType: 30 → 33 (3 new DLQ and worker history event types)
 - PolicyReleasePermission: 79 → 82 (3 new FEDERATION_DLQ_* and FEDERATION_WORKER_* permissions)
 - FederationNotificationStatus: 5 → 6 (DEAD_LETTERED added)
+
+## Phase 51: Federation Notification Templates, Preferences & Webhook Replay
+
+### Overview
+Phase 51 adds configurable notification templates with safe variable substitution, notification preference management with opt-in/opt-out, webhook request snapshots with HMAC-SHA256 signing, and original-payload replay from DLQ.
+
+### Template Selection Priority
+1. Federation + event_type + channel explicit template
+2. Event_type + channel template
+3. Channel default template
+4. Global default template
+5. Built-in fallback template
+
+### Preference Resolution Priority
+1. Approval + event_type + channel
+2. Federation + event_type + channel
+3. Event_type + channel
+4. Channel only
+5. Subject global preference
+6. System default (deliver)
+
+### Webhook Signing
+- HMAC-SHA256 with `{timestamp}.{nonce}.{body}` signing input
+- Headers: X-AgentApp-Signature, X-AgentApp-Signature-Timestamp, X-AgentApp-Signature-Nonce, X-AgentApp-Signature-Version, X-AgentApp-Delivery-ID
+- Key rotation with active_key_id + verification keys
+- Timestamp tolerance configurable (default 300s)
+- Nonce store prevents replay attacks
+
+### retry vs replay-original
+- **retry**: Re-enters full notification cycle, re-applies preferences and retry policy, uses original rendered snapshot by default
+- **replay-original**: Uses original body bytes unchanged, generates new signature/timestamp/nonce, creates replay audit trail, requires FEDERATION_WEBHOOK_REPLAY permission
+
+### CLI Commands
+- `agentapp policy federation notification template list/show/create/update/disable/render`
+- `agentapp policy federation notification preference list/set/show/delete/explain`
+- `agentapp policy federation notification dlq replay-original --dlq-id ... [--dry-run]`
+- `agentapp policy federation webhook verify --body-file ... --signature ... --timestamp ... --nonce ...`
+
+### Console Pages
+- /policy-console/federation/notifications/templates
+- /policy-console/federation/notifications/templates/{template_id}
+- /policy-console/federation/notifications/preferences
+- /policy-console/federation/notifications/preferences/explain
+
+### Configuration
+```yaml
+governance:
+  policy_rollout:
+    federation:
+      notifications:
+        templates:
+          enabled: true
+          strict_variables: true
+          store_backend: sqlite
+        preferences:
+          enabled: true
+          default_delivery: true
+          failure_mode: open
+          mandatory_event_types: []
+        webhook_signing:
+          enabled: true
+          active_key_id: default
+          keys:
+            default: ${WEBHOOK_SIGNING_KEY}
+        webhook_replay:
+          enabled: true
+          max_replays_per_entry: 10
+```
+
+### Event Counts
+- PolicyChangeEventType: 106 → 118
+- FederationHistoryEventType: 33 → 36
+- PolicyReleasePermission: 82 → 88
+- FederationNotificationStatus: 6 → 9

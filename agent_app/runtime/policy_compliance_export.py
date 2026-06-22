@@ -376,3 +376,177 @@ def export_federation_dlq_summary_csv(
             item.updated_at.isoformat(),
         ])
     return output.getvalue()
+
+
+def export_federation_notification_templates_json(items: list[Any]) -> str:
+    """Export notification templates as JSON.
+
+    Fields: template_id, name, event_type, channel, format, enabled,
+    version, created_at, updated_at.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    rows = []
+    for item in items:
+        rows.append({
+            "template_id": item.template_id,
+            "name": item.name,
+            "event_type": item.event_type.value if hasattr(item.event_type, "value") else str(item.event_type),
+            "channel": item.channel.value if hasattr(item.channel, "value") else str(item.channel),
+            "format": item.format.value if hasattr(item.format, "value") else str(item.format),
+            "enabled": item.enabled,
+            "version": item.version,
+            "created_at": item.created_at.isoformat(),
+            "updated_at": item.updated_at.isoformat(),
+        })
+    return json.dumps(rows, indent=2)
+
+
+def export_federation_notification_templates_csv(items: list[Any]) -> str:
+    """Export notification templates as CSV.
+
+    Fields: template_id, name, event_type, channel, format, enabled,
+    version, created_at, updated_at.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    import csv
+    import io
+
+    headers = [
+        "template_id",
+        "name",
+        "event_type",
+        "channel",
+        "format",
+        "enabled",
+        "version",
+        "created_at",
+        "updated_at",
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for item in items:
+        writer.writerow([
+            item.template_id,
+            item.name,
+            item.event_type.value if hasattr(item.event_type, "value") else str(item.event_type),
+            item.channel.value if hasattr(item.channel, "value") else str(item.channel),
+            item.format.value if hasattr(item.format, "value") else str(item.format),
+            item.enabled,
+            item.version,
+            item.created_at.isoformat(),
+            item.updated_at.isoformat(),
+        ])
+    return output.getvalue()
+
+
+def export_federation_notification_preferences_json(items: list[Any]) -> str:
+    """Export notification preferences as JSON.
+
+    Fields: preference_id, subject_type, subject_id, channel, event_type,
+    decision, created_at.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    rows = []
+    for item in items:
+        rows.append({
+            "preference_id": item.preference_id,
+            "subject_type": item.subject_type.value if hasattr(item.subject_type, "value") else str(item.subject_type),
+            "subject_id": item.subject_id,
+            "channel": item.channel.value if hasattr(item.channel, "value") else str(item.channel),
+            "event_type": item.event_type.value if hasattr(item.event_type, "value") else str(item.event_type),
+            "decision": item.decision.value if hasattr(item.decision, "value") else str(item.decision),
+            "created_at": item.created_at.isoformat(),
+        })
+    return json.dumps(rows, indent=2)
+
+
+def export_federation_notification_preferences_csv(items: list[Any]) -> str:
+    """Export notification preferences as CSV.
+
+    Fields: preference_id, subject_type, subject_id, channel, event_type,
+    decision, created_at.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    import csv
+    import io
+
+    headers = [
+        "preference_id",
+        "subject_type",
+        "subject_id",
+        "channel",
+        "event_type",
+        "decision",
+        "created_at",
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for item in items:
+        writer.writerow([
+            item.preference_id,
+            item.subject_type.value if hasattr(item.subject_type, "value") else str(item.subject_type),
+            item.subject_id,
+            item.channel.value if hasattr(item.channel, "value") else str(item.channel),
+            item.event_type.value if hasattr(item.event_type, "value") else str(item.event_type),
+            item.decision.value if hasattr(item.decision, "value") else str(item.decision),
+            item.created_at.isoformat(),
+        ])
+    return output.getvalue()
+
+
+def export_federation_webhook_replays_json(items: list[Any]) -> str:
+    """Export webhook replay results as JSON. Only includes digest, NOT full body.
+
+    Fields: replay_id, dlq_id, notification_id, success, replay_count,
+    last_replay_at, payload_digest.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    rows = []
+    for item in items:
+        rows.append({
+            "replay_id": item.replay_id,
+            "dlq_id": item.dlq_id,
+            "notification_id": item.notification_id,
+            "success": item.success,
+            "replay_count": item.replay_count,
+            "last_replay_at": item.last_replay_at.isoformat() if item.last_replay_at else "",
+            "payload_digest": item.payload_digest if hasattr(item, "payload_digest") and item.payload_digest else "",
+        })
+    return json.dumps(rows, indent=2)
+
+
+def export_federation_webhook_replays_csv(items: list[Any]) -> str:
+    """Export webhook replay results as CSV. Only includes digest, NOT full body.
+
+    Fields: replay_id, dlq_id, notification_id, success, replay_count,
+    last_replay_at, payload_digest.
+    Never exports signature keys, auth headers, or full webhook bodies.
+    """
+    import csv
+    import io
+
+    headers = [
+        "replay_id",
+        "dlq_id",
+        "notification_id",
+        "success",
+        "replay_count",
+        "last_replay_at",
+        "payload_digest",
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for item in items:
+        writer.writerow([
+            item.replay_id,
+            item.dlq_id,
+            item.notification_id,
+            item.success,
+            item.replay_count,
+            item.last_replay_at.isoformat() if item.last_replay_at else "",
+            item.payload_digest if hasattr(item, "payload_digest") and item.payload_digest else "",
+        ])
+    return output.getvalue()

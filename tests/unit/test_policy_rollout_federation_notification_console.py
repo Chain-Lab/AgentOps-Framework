@@ -110,7 +110,13 @@ def _dlq_entry_with_replay(
     dlq_id: str = "fdlq_replay_1",
     headers: dict | None = None,
 ) -> FederationNotificationDeadLetter:
-    entry = FederationNotificationDeadLetter(
+    _headers = headers or {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret-token-12345",
+        "X-Signature": "hmac-sha256=deadbeef",
+        "X-Request-Id": "req_123",
+    }
+    return FederationNotificationDeadLetter(
         dlq_id=dlq_id,
         notification_id="fn_replay_1",
         channel="webhook",
@@ -119,24 +125,20 @@ def _dlq_entry_with_replay(
         failure_count=3,
         last_error="Connection refused",
         payload={"subject": "Replay test", "body": "Test body"},
-        metadata={"source": "test"},
+        metadata={
+            "source": "test",
+            # Phase 51 replay info stored in metadata
+            "replay_available": True,
+            "payload_digest": "sha256:abc123def456",
+            "template_id": "fnt_replay_1",
+            "template_version": 2,
+            "replay_count": 1,
+            "last_replay_result": "failed",
+            "headers": _headers,
+        },
         created_at=_now(),
         updated_at=_now(),
     )
-    # Attach Phase 51 replay attributes dynamically
-    entry.replay_available = True
-    entry.payload_digest = "sha256:abc123def456"
-    entry.template_id = "fnt_replay_1"
-    entry.template_version = 2
-    entry.replay_count = 1
-    entry.last_replay_result = "failed"
-    entry.headers = headers or {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer secret-token-12345",
-        "X-Signature": "hmac-sha256=deadbeef",
-        "X-Request-Id": "req_123",
-    }
-    return entry
 
 
 def _client_with_templates():

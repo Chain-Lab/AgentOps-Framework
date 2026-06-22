@@ -35,6 +35,20 @@ from agent_app.runtime.policy_rollout_federation_store import (
 )
 
 
+def _count_by(items: list[Any], attr: str) -> dict[str, int]:
+    """Count items by the value of an attribute.
+
+    Handles enum values (uses .value), None (maps to 'none'),
+    and other values (uses str()).
+    """
+    counts: dict[str, int] = {}
+    for item in items:
+        val = getattr(item, attr, None)
+        key = val.value if hasattr(val, "value") else str(val) if val is not None else "none"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 class FederationObservabilityService:
     """Federation observability service — timeline reconstruction and analytics.
 
@@ -54,6 +68,8 @@ class FederationObservabilityService:
         approval_store: Any | None = None,
         dlq_store: Any | None = None,
         scheduled_worker: Any | None = None,
+        template_store: Any | None = None,
+        preference_store: Any | None = None,
     ) -> None:
         self._history_store = history_store
         self._federation_plan_store = federation_plan_store
@@ -64,6 +80,8 @@ class FederationObservabilityService:
         self._approval_store = approval_store
         self._dlq_store = dlq_store
         self._scheduled_worker = scheduled_worker
+        self._template_store = template_store
+        self._preference_store = preference_store
 
     # ------------------------------------------------------------------
     # Timeline
@@ -483,6 +501,16 @@ class FederationObservabilityService:
         if worker_summary.get("status") != "not_configured":
             report.metadata["worker_summary"] = worker_summary
 
+        # Template summary
+        template_summary = await self.get_template_summary()
+        if template_summary.get("total", 0) > 0:
+            report.metadata["template_summary"] = template_summary
+
+        # Preference summary
+        preference_summary = await self.get_preference_summary()
+        if preference_summary.get("total", 0) > 0:
+            report.metadata["preference_summary"] = preference_summary
+
         return report
 
     # ------------------------------------------------------------------
@@ -606,3 +634,40 @@ class FederationObservabilityService:
             }
         except Exception:  # noqa: BLE001
             return {"status": "error", "tick_count": 0}
+
+    # ------------------------------------------------------------------
+    # Template summary
+    # ------------------------------------------------------------------
+
+    async def get_template_summary(self) -> dict[str, Any]:
+        """Get summary of notification templates."""
+        if self._template_store is None:
+            return {"total": 0, "enabled": 0, "by_channel": {}, "by_format": {}}
+        try:
+            all_templates = await self._template_store.list(limit=10000)
+            return {
+                "total": len(all_templates),
+                "enabled": sum(1 for t in all_templates if t.enabled),
+                "by_channel": _count_by(all_templates, "channel"),
+                "by_format": _count_by(all_templates, "format"),
+            }
+        except Exception:  # noqa: BLE001
+            return {"total": 0, "enabled": 0, "by_channel": {}, "by_format": {}}
+
+    # ------------------------------------------------------------------
+    # Preference summary
+    # ------------------------------------------------------------------
+
+    async def get_preference_summary(self) -> dict[str, Any]:
+        """Get summary of notification preferences."""
+        if self._preference_store is None:
+            return {"total": 0, "by_decision": {}, "by_channel": {}}
+        try:
+            all_prefs = await self._preference_store.list_preferences(limit=10000)
+            return {
+                "total": len(all_prefs),
+                "by_decision": _count_by(all_prefs, "decision"),
+                "by_channel": _count_by(all_prefs, "channel"),
+            }
+        except Exception:  # noqa: BLE001
+            return {"total": 0, "by_decision": {}, "by_channel": {}}

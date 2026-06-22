@@ -5264,14 +5264,14 @@ def build_policy_console_router(
             "purged_at": entry.purged_at.isoformat() if entry.purged_at and hasattr(entry.purged_at, "isoformat") else "",
             "payload_json": _json.dumps(entry.payload, indent=2, default=str) if entry.payload else "{}",
             "metadata_json": _json.dumps(entry.metadata, indent=2, default=str) if entry.metadata else "{}",
-            # Phase 51: Extended replay fields
-            "replay_available": getattr(entry, "replay_available", False),
-            "payload_digest": getattr(entry, "payload_digest", None) or "",
-            "template_id": getattr(entry, "template_id", None) or "",
-            "template_version": getattr(entry, "template_version", None) or "",
-            "replay_count": getattr(entry, "replay_count", 0),
-            "last_replay_result": getattr(entry, "last_replay_result", None) or "",
-            "sensitized_headers": _sanitize_headers(getattr(entry, "headers", None)),
+            # Phase 51: Extended replay fields (from metadata since model has no replay fields)
+            "replay_available": (entry.metadata or {}).get("replay_available", False),
+            "payload_digest": (entry.metadata or {}).get("payload_digest", ""),
+            "template_id": (entry.metadata or {}).get("template_id", ""),
+            "template_version": (entry.metadata or {}).get("template_version", ""),
+            "replay_count": (entry.metadata or {}).get("replay_count", 0),
+            "last_replay_result": (entry.metadata or {}).get("last_replay_result", ""),
+            "sensitized_headers": _sanitize_headers((entry.metadata or {}).get("headers")),
         }
         return templates.TemplateResponse(
             request,
@@ -5284,87 +5284,11 @@ def build_policy_console_router(
             },
         )
 
-    @router.get("/federation/notifications/{notification_id}")
-    async def federation_notification_detail(notification_id: str, request: Request):
-        """Single federation notification detail page."""
-        if federation_notification_store is None:
-            return HTMLResponse("<h2>Federation notification store not configured</h2>")
-        notification = await federation_notification_store.get(notification_id)
-        if notification is None:
-            return HTMLResponse(f"<h2>Notification '{notification_id}' not found</h2>", status_code=404)
-        return templates.TemplateResponse(
-            request,
-            "policy_federation_notification_detail.html",
-            {
-                "title": title,
-                "base_path": base_path,
-                "notification": notification,
-            },
-        )
-
-    @router.get("/federation/approvals/{approval_id}/notifications")
-    async def federation_approval_notifications(approval_id: str, request: Request):
-        """Notifications for a specific federation approval."""
-        if federation_notification_store is None:
-            return HTMLResponse("<h2>Federation notification store not configured</h2>")
-        notifications = await federation_notification_store.list_by_approval(approval_id=approval_id)
-        return templates.TemplateResponse(
-            request,
-            "policy_federation_notification_list.html",
-            {
-                "title": title,
-                "base_path": base_path,
-                "notifications": notifications,
-                "approval_id": approval_id,
-            },
-        )
-
-    @router.get("/federation/escalations")
-    async def federation_escalation_dashboard(request: Request):
-        """Federation escalation dashboard page."""
-        return templates.TemplateResponse(
-            request,
-            "policy_federation_escalation.html",
-            {
-                "title": title,
-                "base_path": base_path,
-                "worker": federation_escalation_worker,
-            },
-        )
-
-    # -----------------------------------------------------------------------
-    # Phase 50 Task 7: Worker status console page
-    # -----------------------------------------------------------------------
-
-    @router.get("/federation/workers", response_class=HTMLResponse)
-    async def federation_worker_status(request: Request):
-        """Worker status page."""
-        worker_state = None
-        if federation_scheduled_worker is not None:
-            state = await federation_scheduled_worker.status()
-            worker_state = {
-                "worker_id": state.worker_id,
-                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
-                "interval_seconds": state.interval_seconds,
-                "tick_count": state.tick_count,
-                "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at and hasattr(state.last_tick_at, "isoformat") else "",
-                "last_error": state.last_error or "",
-                "started_at": state.started_at.isoformat() if state.started_at and hasattr(state.started_at, "isoformat") else "",
-                "stopped_at": state.stopped_at.isoformat() if state.stopped_at and hasattr(state.stopped_at, "isoformat") else "",
-            }
-        return templates.TemplateResponse(
-            request,
-            "policy_federation_worker_status.html",
-            {
-                "title": title,
-                "base_path": base_path,
-                "worker": worker_state,
-                "store_available": federation_scheduled_worker is not None,
-            },
-        )
-
     # -----------------------------------------------------------------------
     # Phase 51 Task 9: Template, preference, and replay console pages
+    # NOTE: These routes must be registered BEFORE the {notification_id}
+    # catch-all route, otherwise /federation/notifications/templates would
+    # match {notification_id} = "templates".
     # -----------------------------------------------------------------------
 
     @router.get("/federation/notifications/templates", response_class=HTMLResponse)
@@ -5467,8 +5391,6 @@ def build_policy_console_router(
             },
         )
 
-    # NOTE: /federation/notifications/preferences/explain must be defined BEFORE
-    # /federation/notifications/preferences/{preference_id} to avoid route conflicts.
     @router.get("/federation/notifications/preferences/explain", response_class=HTMLResponse)
     async def federation_preference_explain(request: Request):
         """Preference explanation page."""
@@ -5556,6 +5478,85 @@ def build_policy_console_router(
                 "preferences": preferences_list,
                 "filters": {"subject_type": subject_type, "subject_id": subject_id, "channel": channel},
                 "store_available": federation_notification_preference_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/{notification_id}")
+    async def federation_notification_detail(notification_id: str, request: Request):
+        """Single federation notification detail page."""
+        if federation_notification_store is None:
+            return HTMLResponse("<h2>Federation notification store not configured</h2>")
+        notification = await federation_notification_store.get(notification_id)
+        if notification is None:
+            return HTMLResponse(f"<h2>Notification '{notification_id}' not found</h2>", status_code=404)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notification": notification,
+            },
+        )
+
+    @router.get("/federation/approvals/{approval_id}/notifications")
+    async def federation_approval_notifications(approval_id: str, request: Request):
+        """Notifications for a specific federation approval."""
+        if federation_notification_store is None:
+            return HTMLResponse("<h2>Federation notification store not configured</h2>")
+        notifications = await federation_notification_store.list_by_approval(approval_id=approval_id)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "notifications": notifications,
+                "approval_id": approval_id,
+            },
+        )
+
+    @router.get("/federation/escalations")
+    async def federation_escalation_dashboard(request: Request):
+        """Federation escalation dashboard page."""
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_escalation.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "worker": federation_escalation_worker,
+            },
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 50 Task 7: Worker status console page
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/workers", response_class=HTMLResponse)
+    async def federation_worker_status(request: Request):
+        """Worker status page."""
+        worker_state = None
+        if federation_scheduled_worker is not None:
+            state = await federation_scheduled_worker.status()
+            worker_state = {
+                "worker_id": state.worker_id,
+                "status": state.status.value if hasattr(state.status, "value") else str(state.status),
+                "interval_seconds": state.interval_seconds,
+                "tick_count": state.tick_count,
+                "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at and hasattr(state.last_tick_at, "isoformat") else "",
+                "last_error": state.last_error or "",
+                "started_at": state.started_at.isoformat() if state.started_at and hasattr(state.started_at, "isoformat") else "",
+                "stopped_at": state.stopped_at.isoformat() if state.stopped_at and hasattr(state.stopped_at, "isoformat") else "",
+            }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_worker_status.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "worker": worker_state,
+                "store_available": federation_scheduled_worker is not None,
             },
         )
 
