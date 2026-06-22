@@ -76,8 +76,8 @@ class TestChangeEvents:
         assert PolicyChangeEventType.EXPIRATION_PERMISSION_DENIED == "policy.expiration.permission_denied"
 
     def test_event_type_count(self) -> None:
-        """Total event types should be 118 (106 previous + 12 Phase 51)."""
-        assert len(PolicyChangeEventType) == 118
+        """Total event types should be 133 (124 previous + 9 Phase 53)."""
+        assert len(PolicyChangeEventType) == 133
 
 
 # ---------------------------------------------------------------------------
@@ -596,3 +596,166 @@ class TestPhase52LoaderWiring:
         )
         app = build_app(config_path)
         assert not hasattr(app, "_federation_notification_observability_config")
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Loader wiring
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53LoaderWiring:
+    def test_phase53_configs_attached_to_app(self, tmp_path) -> None:
+        config_path = tmp_path / "agentapp.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """\
+                governance:
+                  policy_release:
+                    bundles:
+                      type: memory
+                    gates:
+                      type: memory
+                    rollout_federation:
+                      enabled: true
+                      notifications:
+                        enabled: true
+                """
+            )
+        )
+        app = build_app(config_path)
+        assert hasattr(app, "_federation_notification_alert_delivery_config")
+        assert hasattr(app, "_federation_notification_retention_config")
+        assert hasattr(app, "_federation_notification_rollup_config")
+        assert app._federation_notification_alert_delivery_config.enabled is False
+        assert app._federation_notification_retention_config.enabled is True
+        assert app._federation_notification_rollup_config.enabled is False
+
+    def test_custom_phase53_configs_attached_to_app(self, tmp_path) -> None:
+        config_path = tmp_path / "agentapp.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """\
+                governance:
+                  policy_release:
+                    bundles:
+                      type: memory
+                    gates:
+                      type: memory
+                    rollout_federation:
+                      enabled: true
+                      notifications:
+                        enabled: true
+                        alert_delivery:
+                          enabled: true
+                          retry:
+                            max_attempts: 5
+                        retention:
+                          enabled: false
+                          raw_event_retention_days: 60
+                        rollup:
+                          enabled: true
+                """
+            )
+        )
+        app = build_app(config_path)
+        assert app._federation_notification_alert_delivery_config.enabled is True
+        assert app._federation_notification_alert_delivery_config.retry.max_attempts == 5
+        assert app._federation_notification_retention_config.enabled is False
+        assert app._federation_notification_retention_config.raw_event_retention_days == 60
+        assert app._federation_notification_rollup_config.enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Alert delivery config
+# ---------------------------------------------------------------------------
+
+from agent_app.config.schema import (
+    RolloutFederationNotificationAlertDeliveryConfig,
+    RolloutFederationNotificationAlertDeliveryRetryPolicyConfig,
+    RolloutFederationNotificationAlertDeliveryTargetConfig,
+    RolloutFederationNotificationRetentionConfig,
+    RolloutFederationNotificationRollupConfig,
+)
+
+
+class TestPhase53AlertDeliveryConfig:
+    def test_alert_delivery_config_defaults(self) -> None:
+        cfg = RolloutFederationNotificationAlertDeliveryConfig()
+        assert cfg.enabled is False
+        assert cfg.retry.max_attempts == 3
+
+    def test_alert_delivery_retry_policy_defaults(self) -> None:
+        cfg = RolloutFederationNotificationAlertDeliveryRetryPolicyConfig()
+        assert cfg.max_attempts == 3
+        assert cfg.base_delay_seconds == 60
+        assert cfg.max_delay_seconds == 600
+
+    def test_alert_delivery_target_defaults(self) -> None:
+        t = RolloutFederationNotificationAlertDeliveryTargetConfig(
+            target_id="t1",
+            name="Ops",
+            channel_type="console",
+        )
+        assert t.enabled is True
+        assert t.severity_filter == []
+        assert t.channel_filter == []
+        assert t.federation_filter == []
+        assert t.endpoint is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Retention config
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53RetentionConfig:
+    def test_retention_config_defaults(self) -> None:
+        cfg = RolloutFederationNotificationRetentionConfig()
+        assert cfg.enabled is True
+        assert cfg.raw_event_retention_days == 30
+
+    def test_retention_config_custom(self) -> None:
+        cfg = RolloutFederationNotificationRetentionConfig(
+            enabled=False,
+            raw_event_retention_days=60,
+        )
+        assert cfg.enabled is False
+        assert cfg.raw_event_retention_days == 60
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Rollup config
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53RollupConfig:
+    def test_rollup_config_defaults(self) -> None:
+        cfg = RolloutFederationNotificationRollupConfig()
+        assert cfg.enabled is False
+
+    def test_rollup_config_custom(self) -> None:
+        cfg = RolloutFederationNotificationRollupConfig(
+            enabled=True,
+        )
+        assert cfg.enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 53: Config integration
+# ---------------------------------------------------------------------------
+
+
+class TestPhase53ConfigIntegration:
+    def test_notification_config_has_phase53_fields(self) -> None:
+        from agent_app.config.schema import RolloutFederationNotificationConfig
+        cfg = RolloutFederationNotificationConfig()
+        assert hasattr(cfg, "alert_delivery")
+        assert hasattr(cfg, "retention")
+        assert hasattr(cfg, "rollup")
+
+    def test_phase53_fields_defaults(self) -> None:
+        from agent_app.config.schema import RolloutFederationNotificationConfig
+        cfg = RolloutFederationNotificationConfig()
+        assert cfg.alert_delivery.enabled is False
+        assert cfg.retention.enabled is True
+        assert cfg.rollup.enabled is False

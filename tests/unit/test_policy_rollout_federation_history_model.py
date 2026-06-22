@@ -74,9 +74,15 @@ class TestFederationHistoryEventType:
             "federation.notification.template_changed",
             "federation.notification.preference_changed",
             "federation.webhook.replay",
+            "notification.delivery.event_recorded",
+            "notification.sla.violation_detected",
+            "notification.alert.created",
+            "notification.alert.acknowledged",
+            "notification.alert.resolved",
+            "notification.observability.report_exported",
         ]
-        # There should be exactly 36 enum members
-        assert len(FederationHistoryEventType) == 36
+        # There should be exactly 51 enum members (42 previous + 9 Phase 53)
+        assert len(FederationHistoryEventType) == 51
         for value in expected:
             assert value in [e.value for e in FederationHistoryEventType]
 
