@@ -2,9 +2,11 @@
 
 Phase 49: Federation Notification Service.
 Phase 50: DLQ Integration + Retry Policy.
+Phase 51: Template rendering, preference checks, webhook signing, replay.
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,10 @@ from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationPolicy,
     FederationNotificationRetryPolicy,
     FederationNotificationStatus,
+)
+from agent_app.governance.policy_rollout_federation_webhook import (
+    FederationWebhookReplayResult,
+    FederationWebhookRequestSnapshot,
 )
 from agent_app.runtime.policy_rollout_federation_notification_adapters import (
     FederationNotificationAdapter,
@@ -50,6 +56,9 @@ class FederationNotificationService:
         dlq_store: FederationNotificationDLQStore | None = None,
         retry_policy: FederationNotificationRetryPolicy | None = None,
         by_channel_retry_policy: dict[str, FederationNotificationRetryPolicy] | None = None,
+        template_service: Any | None = None,  # FederationNotificationTemplateService
+        preference_service: Any | None = None,  # FederationNotificationPreferenceService
+        webhook_signature_service: Any | None = None,  # FederationWebhookSignatureService
     ) -> None:
         self._store = notification_store
         self._adapters = adapters
@@ -60,6 +69,9 @@ class FederationNotificationService:
         self._dlq_store = dlq_store
         self._retry_policy = retry_policy
         self._by_channel_retry_policy = by_channel_retry_policy
+        self._template_service = template_service
+        self._preference_service = preference_service
+        self._webhook_signature_service = webhook_signature_service
 
     # ------------------------------------------------------------------
     # Public enqueue methods
@@ -299,7 +311,14 @@ class FederationNotificationService:
     # ------------------------------------------------------------------
 
     async def dispatch_pending(self, limit: int = 100) -> FederationNotificationDispatchResult:
-        """Dispatch pending notifications — single tick, no infinite loop."""
+        """Dispatch pending notifications — single tick, no infinite loop.
+
+        Phase 51 integration order:
+        1. Preference check — SUPPRESSED if not deliverable
+        2. Template rendering — TEMPLATE_FAILED if rendering fails
+        3. Webhook signing — SIGNATURE_FAILED if signing fails
+        4. Adapter send (existing flow)
+        """
         pending = await self._store.list_pending(limit=limit)
 
         total_dispatched = 0
@@ -325,6 +344,145 @@ class FederationNotificationService:
                 backoff_seconds = self._policy.backoff_seconds
                 send_to_dlq = False  # No DLQ when no retry policy configured
 
+            # --- Phase 51 Step 1: Preference check ---
+            if self._preference_service is not None:
+                try:
+                    should_deliver = await self._preference_service.should_deliver(
+                        subject_type="notification",
+                        subject_id=message.notification_id,
+                        event_type=message.event_type.value,
+                        channel=message.channel.value,
+                        federation_id=message.federation_id,
+                        approval_id=message.approval_id,
+                    )
+                except Exception:  # noqa: BLE001 — never crash on preference check
+                    logger.debug(
+                        "Preference check failed for notification %s",
+                        message.notification_id,
+                        exc_info=True,
+                    )
+                    should_deliver = True  # fail-open
+
+                if not should_deliver:
+                    await self._store.mark_failed(
+                        message.notification_id,
+                        error="Suppressed by preference (opt-out)",
+                    )
+                    # Overwrite status to SUPPRESSED
+                    msg_in_store = await self._store.get(message.notification_id)
+                    if msg_in_store is not None:
+                        msg_in_store.status = FederationNotificationStatus.SUPPRESSED
+                    self._record_audit(
+                        event="notification.suppressed",
+                        notification_id=message.notification_id,
+                        approval_id=message.approval_id,
+                        channel=message.channel.value,
+                        event_type=message.event_type.value,
+                    )
+                    total_skipped += 1
+                    continue
+
+            # --- Phase 51 Step 2: Template rendering ---
+            if self._template_service is not None:
+                try:
+                    from agent_app.governance.policy_rollout_federation_notification_template import (
+                        FederationNotificationTemplateError,
+                    )
+
+                    rendered = await self._template_service.render(
+                        event_type=message.event_type.value,
+                        channel=message.channel.value,
+                        federation_id=message.federation_id,
+                        context=message.payload,
+                    )
+                    if rendered.subject is not None:
+                        message.subject = rendered.subject
+                    message.body = rendered.body
+                except FederationNotificationTemplateError as exc:
+                    await self._store.mark_failed(
+                        message.notification_id,
+                        error=f"Template rendering failed: {exc}",
+                    )
+                    # Overwrite status to TEMPLATE_FAILED
+                    msg_in_store = await self._store.get(message.notification_id)
+                    if msg_in_store is not None:
+                        msg_in_store.status = FederationNotificationStatus.TEMPLATE_FAILED
+                    self._record_audit(
+                        event="notification.template_failed",
+                        notification_id=message.notification_id,
+                        approval_id=message.approval_id,
+                        channel=message.channel.value,
+                        event_type=message.event_type.value,
+                    )
+                    total_failed += 1
+                    errors.append(f"Template rendering failed: {exc}")
+                    continue
+                except Exception as exc:  # noqa: BLE001 — unexpected template error
+                    await self._store.mark_failed(
+                        message.notification_id,
+                        error=f"Template rendering failed: {exc}",
+                    )
+                    msg_in_store = await self._store.get(message.notification_id)
+                    if msg_in_store is not None:
+                        msg_in_store.status = FederationNotificationStatus.TEMPLATE_FAILED
+                    self._record_audit(
+                        event="notification.template_failed",
+                        notification_id=message.notification_id,
+                        approval_id=message.approval_id,
+                        channel=message.channel.value,
+                        event_type=message.event_type.value,
+                    )
+                    total_failed += 1
+                    errors.append(f"Template rendering failed: {exc}")
+                    continue
+
+            # --- Phase 51 Step 3: Webhook signing ---
+            signature_headers: dict[str, str] | None = None
+            if message.channel == FederationNotificationChannel.WEBHOOK and self._webhook_signature_service is not None:
+                try:
+                    body_str = json.dumps(message.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+                    signature_headers = self._webhook_signature_service.sign(body_str)
+                    # Save request snapshot
+                    now = datetime.now(timezone.utc)
+                    snapshot = FederationWebhookRequestSnapshot(
+                        request_id=f"fwr_{uuid.uuid4().hex}",
+                        notification_id=message.notification_id,
+                        url=self._policy.webhook_url or "",
+                        headers=signature_headers,
+                        body=body_str,
+                        nonce=signature_headers.get("X-AgentApp-Signature-Nonce", ""),
+                        timestamp=now,
+                        payload_digest=self._webhook_signature_service.compute_digest(body_str),
+                        created_at=now,
+                    )
+                    # Store snapshot via change event (best-effort)
+                    self._record_change_event(
+                        event_type="federation.notification.webhook_snapshot",
+                        payload={
+                            "request_id": snapshot.request_id,
+                            "notification_id": message.notification_id,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001 — never crash on signing
+                    await self._store.mark_failed(
+                        message.notification_id,
+                        error=f"Webhook signing failed: {exc}",
+                    )
+                    msg_in_store = await self._store.get(message.notification_id)
+                    if msg_in_store is not None:
+                        msg_in_store.status = FederationNotificationStatus.SIGNATURE_FAILED
+                    self._record_audit(
+                        event="notification.signature_failed",
+                        notification_id=message.notification_id,
+                        approval_id=message.approval_id,
+                        channel=message.channel.value,
+                        event_type=message.event_type.value,
+                    )
+                    total_failed += 1
+                    errors.append(f"Webhook signing failed: {exc}")
+                    continue
+
+            # --- Existing adapter dispatch ---
             if adapter is None:
                 no_adapter_error = f"No adapter for channel: {message.channel.value}"
                 # Check if we should send to DLQ
@@ -345,6 +503,10 @@ class FederationNotificationService:
                 total_failed += 1
                 errors.append(no_adapter_error)
                 continue
+
+            # Inject signature headers into message payload for webhook adapter
+            if signature_headers is not None:
+                message.payload["_signature_headers"] = signature_headers
 
             try:
                 delivery = await adapter.send(message)
@@ -393,6 +555,175 @@ class FederationNotificationService:
             total_failed=total_failed,
             total_skipped=total_skipped,
             errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # Replay (Phase 51)
+    # ------------------------------------------------------------------
+
+    async def replay_original(
+        self,
+        dlq_id: str,
+        dlq_store: Any,  # FederationNotificationDLQStore
+        *,
+        dry_run: bool = False,
+        target_url: str | None = None,
+        max_replays: int = 3,
+    ) -> FederationWebhookReplayResult:
+        """Replay a webhook notification from DLQ using original payload.
+
+        Uses the original body (not re-rendered), generates new
+        signature/timestamp/nonce.
+        """
+        # 1. Get DLQ entry
+        entry = await dlq_store.get(dlq_id)
+        if entry is None:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id="",
+                success=False,
+                error=f"DLQ entry '{dlq_id}' not found",
+            )
+
+        # 2. Verify it's a webhook channel entry
+        if entry.channel != FederationNotificationChannel.WEBHOOK.value:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id=entry.notification_id,
+                success=False,
+                error=f"Cannot replay non-webhook channel: {entry.channel}",
+            )
+
+        # 3. Check replay count
+        replay_count = entry.metadata.get("replay_count", 0)
+        if replay_count >= max_replays:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id=entry.notification_id,
+                success=False,
+                replay_count=replay_count,
+                error=f"Max replays exceeded ({replay_count}/{max_replays})",
+            )
+
+        # 4. Dry run — return result without sending
+        if dry_run:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id=entry.notification_id,
+                success=True,
+                replay_count=replay_count,
+            )
+
+        # 5. Build original body and generate new signature
+        try:
+            original_body = json.dumps(entry.payload, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id=entry.notification_id,
+                success=False,
+                replay_count=replay_count,
+                error=f"Failed to serialize original payload: {exc}",
+            )
+
+        signature_headers: dict[str, str] | None = None
+        if self._webhook_signature_service is not None:
+            try:
+                signature_headers = self._webhook_signature_service.sign(original_body)
+            except Exception as exc:  # noqa: BLE001
+                return FederationWebhookReplayResult(
+                    replay_id=f"fwrp_{uuid.uuid4().hex}",
+                    dlq_id=dlq_id,
+                    notification_id=entry.notification_id,
+                    success=False,
+                    replay_count=replay_count,
+                    error=f"Webhook signing failed during replay: {exc}",
+                )
+
+        # 6. Send via webhook adapter
+        url = target_url or self._policy.webhook_url or ""
+        adapter = self._adapters.get(FederationNotificationChannel.WEBHOOK)
+
+        if adapter is None:
+            return FederationWebhookReplayResult(
+                replay_id=f"fwrp_{uuid.uuid4().hex}",
+                dlq_id=dlq_id,
+                notification_id=entry.notification_id,
+                success=False,
+                replay_count=replay_count,
+                error="No webhook adapter configured",
+            )
+
+        # Build a message from the DLQ entry for the adapter
+        replay_message = FederationNotificationMessage(
+            notification_id=entry.notification_id,
+            approval_id=entry.approval_id or "",
+            federation_id=entry.federation_id,
+            event_type=FederationNotificationEventType(
+                entry.metadata.get("event_type", "approval.created"),
+            ),
+            channel=FederationNotificationChannel.WEBHOOK,
+            recipients=[entry.recipient] if entry.recipient else [],
+            subject=entry.metadata.get("subject"),
+            body=original_body,
+            payload={**entry.payload, "_signature_headers": signature_headers} if signature_headers else entry.payload,
+            status=FederationNotificationStatus.PENDING,
+            attempt_count=0,
+            max_attempts=1,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        try:
+            delivery = await adapter.send(replay_message)
+            success = delivery.status == FederationNotificationStatus.SENT
+        except Exception as exc:  # noqa: BLE001
+            success = False
+            delivery_error = str(exc)
+
+        # 7. Record replay audit event
+        now = datetime.now(timezone.utc)
+        new_replay_count = replay_count + 1
+        self._record_audit(
+            event="notification.replay_original",
+            notification_id=entry.notification_id,
+            approval_id=entry.approval_id or "",
+            channel=FederationNotificationChannel.WEBHOOK.value,
+            event_type=entry.metadata.get("event_type", ""),
+        )
+        self._record_change_event(
+            event_type="federation.notification.replay_original",
+            payload={
+                "dlq_id": dlq_id,
+                "notification_id": entry.notification_id,
+                "replay_count": new_replay_count,
+                "success": success,
+            },
+        )
+
+        # 8. Update DLQ entry replay metadata
+        entry.metadata["replay_count"] = new_replay_count
+        entry.metadata["last_replay_at"] = now.isoformat()
+        entry.updated_at = now
+        if success:
+            try:
+                await dlq_store.mark_retried(dlq_id)
+            except Exception:  # noqa: BLE001 — best effort
+                logger.debug("Failed to mark DLQ entry %s as retried", dlq_id, exc_info=True)
+
+        # 9. Return result
+        return FederationWebhookReplayResult(
+            replay_id=f"fwrp_{uuid.uuid4().hex}",
+            dlq_id=dlq_id,
+            notification_id=entry.notification_id,
+            success=success,
+            replay_count=new_replay_count,
+            last_replay_at=now,
+            error=None if success else (delivery.error if hasattr(delivery, "error") and delivery.error else delivery_error),
         )
 
     # ------------------------------------------------------------------

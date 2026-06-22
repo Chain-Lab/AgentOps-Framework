@@ -2,6 +2,7 @@
 
 Phase 49 Task 4.
 Phase 50 Task 3: DLQ Integration + Retry Policy tests.
+Phase 51 Task 6: Template rendering, preference checks, webhook signing integration.
 """
 from __future__ import annotations
 
@@ -70,6 +71,9 @@ def _make_service(
     dlq_store: Any | None = None,
     retry_policy: FederationNotificationRetryPolicy | None = None,
     by_channel_retry_policy: dict[str, FederationNotificationRetryPolicy] | None = None,
+    template_service: Any | None = None,
+    preference_service: Any | None = None,
+    webhook_signature_service: Any | None = None,
 ) -> FederationNotificationService:
     policy = policy or _make_policy()
     store = store or InMemoryFederationNotificationStore()
@@ -85,6 +89,9 @@ def _make_service(
         dlq_store=dlq_store,
         retry_policy=retry_policy,
         by_channel_retry_policy=by_channel_retry_policy,
+        template_service=template_service,
+        preference_service=preference_service,
+        webhook_signature_service=webhook_signature_service,
     )
 
 
@@ -988,3 +995,590 @@ class TestFederationNotificationServiceDLQ:
         dlq_items = await dlq_store.list()
         assert len(dlq_items) == 1
         assert dlq_items[0].reason == FederationNotificationDLQReason.ADAPTER_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Phase 51: Template rendering, preference checks, webhook signing
+# ---------------------------------------------------------------------------
+
+
+class TestFederationNotificationServicePhase51:
+    """Tests for Phase 51 integration: templates, preferences, webhook signing."""
+
+    # --- Preference checks ---
+
+    @pytest.mark.asyncio
+    async def test_preference_opt_out_suppresses_notification(self) -> None:
+        """should_deliver=False marks notification as SUPPRESSED."""
+        store = InMemoryFederationNotificationStore()
+        pref_service = MagicMock()
+        pref_service.should_deliver = AsyncMock(return_value=False)
+
+        svc = _make_service(
+            store=store,
+            preference_service=pref_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_1",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_skipped == 1
+        # Message should be SUPPRESSED in store
+        msg = await store.get((await store.list_by_approval("ap_p51_1"))[0].notification_id)
+        assert msg.status == FederationNotificationStatus.SUPPRESSED
+
+    @pytest.mark.asyncio
+    async def test_preference_opt_in_allows_delivery(self) -> None:
+        """should_deliver=True allows normal delivery flow."""
+        store = InMemoryFederationNotificationStore()
+        pref_service = MagicMock()
+        pref_service.should_deliver = AsyncMock(return_value=True)
+
+        svc = _make_service(
+            store=store,
+            preference_service=pref_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_2",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+
+    @pytest.mark.asyncio
+    async def test_no_preference_service_default_delivers(self) -> None:
+        """Missing preference_service delivers normally (backward compatible)."""
+        store = InMemoryFederationNotificationStore()
+        svc = _make_service(store=store, preference_service=None)
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_3",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+
+    # --- Template rendering ---
+
+    @pytest.mark.asyncio
+    async def test_template_rendering_applies_content(self) -> None:
+        """Rendered subject/body replaces original message content."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            FederationNotificationRenderedContent,
+            FederationNotificationTemplateFormat,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        template_service = MagicMock()
+        now = datetime.now(timezone.utc)
+        rendered = FederationNotificationRenderedContent(
+            template_id="fnt_test",
+            template_version=1,
+            subject="Rendered Subject",
+            body="Rendered body content",
+            format=FederationNotificationTemplateFormat.TEXT,
+            context_keys=["approval_id"],
+            rendered_at=now,
+        )
+        template_service.render = AsyncMock(return_value=rendered)
+
+        svc = _make_service(
+            store=store,
+            template_service=template_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_4",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+        # Verify the adapter received the rendered content
+        adapter = svc._adapters[FederationNotificationChannel.CONSOLE]
+        sent_msg = adapter.sent[0]
+        assert sent_msg.subject == "Rendered Subject"
+        assert sent_msg.body == "Rendered body content"
+
+    @pytest.mark.asyncio
+    async def test_template_rendering_failure_marks_template_failed(self) -> None:
+        """TemplateMissingVariableError marks notification as TEMPLATE_FAILED."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            TemplateMissingVariableError,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        template_service = MagicMock()
+        template_service.render = AsyncMock(
+            side_effect=TemplateMissingVariableError("Missing: approval.id"),
+        )
+
+        svc = _make_service(
+            store=store,
+            template_service=template_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_5",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+        msg = await store.get((await store.list_by_approval("ap_p51_5"))[0].notification_id)
+        assert msg.status == FederationNotificationStatus.TEMPLATE_FAILED
+
+    @pytest.mark.asyncio
+    async def test_template_disabled_marks_template_failed(self) -> None:
+        """TemplateDisabledError marks notification as TEMPLATE_FAILED."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            TemplateDisabledError,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        template_service = MagicMock()
+        template_service.render = AsyncMock(
+            side_effect=TemplateDisabledError("Template is disabled"),
+        )
+
+        svc = _make_service(
+            store=store,
+            template_service=template_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_6",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+        msg = await store.get((await store.list_by_approval("ap_p51_6"))[0].notification_id)
+        assert msg.status == FederationNotificationStatus.TEMPLATE_FAILED
+
+    @pytest.mark.asyncio
+    async def test_no_template_service_default_body(self) -> None:
+        """Missing template_service uses existing body (backward compatible)."""
+        store = InMemoryFederationNotificationStore()
+        svc = _make_service(store=store, template_service=None)
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_7",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+
+    # --- Webhook signing ---
+
+    @pytest.mark.asyncio
+    async def test_webhook_signing_adds_headers(self) -> None:
+        """Webhook channel messages get signature headers in payload."""
+        from agent_app.runtime.policy_rollout_federation_webhook_signature import (
+            FederationWebhookSignatureService,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        sig_service = FederationWebhookSignatureService()
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_8",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+        # Verify signature headers in payload
+        sent_msg = fake_webhook_adapter.sent[0]
+        assert "_signature_headers" in sent_msg.payload
+        headers = sent_msg.payload["_signature_headers"]
+        assert "X-AgentApp-Signature" in headers
+        assert headers["X-AgentApp-Signature"].startswith("v1=")
+
+    @pytest.mark.asyncio
+    async def test_webhook_signing_failure_marks_signature_failed(self) -> None:
+        """Signing error marks notification as SIGNATURE_FAILED."""
+        store = InMemoryFederationNotificationStore()
+        sig_service = MagicMock()
+        sig_service.sign = MagicMock(side_effect=ValueError("Key not found"))
+        sig_service.compute_digest = MagicMock(return_value="abc123")
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_9",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        assert result.total_failed == 1
+        msg = await store.get((await store.list_by_approval("ap_p51_9"))[0].notification_id)
+        assert msg.status == FederationNotificationStatus.SIGNATURE_FAILED
+
+    # --- SUPPRESSED and TEMPLATE_FAILED not retried/DLQed ---
+
+    @pytest.mark.asyncio
+    async def test_suppressed_does_not_enter_dlq(self) -> None:
+        """SUPPRESSED notifications are not retried or DLQed."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        pref_service = MagicMock()
+        pref_service.should_deliver = AsyncMock(return_value=False)
+
+        svc = _make_service(
+            store=store,
+            dlq_store=dlq_store,
+            preference_service=pref_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_10",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+    @pytest.mark.asyncio
+    async def test_template_failed_not_retried(self) -> None:
+        """TEMPLATE_FAILED notifications are not retried."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            TemplateMissingVariableError,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        template_service = MagicMock()
+        template_service.render = AsyncMock(
+            side_effect=TemplateMissingVariableError("Missing var"),
+        )
+
+        svc = _make_service(
+            store=store,
+            dlq_store=dlq_store,
+            template_service=template_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_11",
+            action="deploy",
+            requested_by="alice",
+        )
+        result = await svc.dispatch_pending()
+        # Should be total_failed=1, not retried
+        assert result.total_failed == 1
+        # No DLQ entry — TEMPLATE_FAILED is not retried
+        dlq_items = await dlq_store.list()
+        assert len(dlq_items) == 0
+
+    # --- replay_original ---
+
+    @pytest.mark.asyncio
+    async def test_replay_original_uses_original_body(self) -> None:
+        """Replay sends the original body, not re-rendered."""
+        from agent_app.runtime.policy_rollout_federation_webhook_signature import (
+            FederationWebhookSignatureService,
+        )
+
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        original_payload = {"approval_id": "ap_replay", "action": "deploy"}
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay1",
+            notification_id="fn_replay1",
+            approval_id="ap_replay",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload=original_payload,
+            metadata={"event_type": "approval.created", "subject": "Test"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        sig_service = FederationWebhookSignatureService()
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+        )
+
+        result = await svc.replay_original("fdlq_replay1", dlq_store)
+        assert result.success is True
+        # The sent body should contain the original payload
+        sent_msg = fake_webhook_adapter.sent[0]
+        assert "ap_replay" in sent_msg.body
+
+    @pytest.mark.asyncio
+    async def test_replay_original_generates_new_signature(self) -> None:
+        """Replay generates a new timestamp/nonce/signature."""
+        from agent_app.runtime.policy_rollout_federation_webhook_signature import (
+            FederationWebhookSignatureService,
+        )
+
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay2",
+            notification_id="fn_replay2",
+            approval_id="ap_replay2",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"key": "value"},
+            metadata={"event_type": "approval.created"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        sig_service = FederationWebhookSignatureService()
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+        )
+
+        result = await svc.replay_original("fdlq_replay2", dlq_store)
+        assert result.success is True
+        # Signature headers should be present in payload
+        sent_msg = fake_webhook_adapter.sent[0]
+        assert "_signature_headers" in sent_msg.payload
+        headers = sent_msg.payload["_signature_headers"]
+        assert "X-AgentApp-Signature" in headers
+        assert "X-AgentApp-Signature-Timestamp" in headers
+        assert "X-AgentApp-Signature-Nonce" in headers
+
+    @pytest.mark.asyncio
+    async def test_replay_original_dry_run(self) -> None:
+        """Dry run returns success without actually sending."""
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay3",
+            notification_id="fn_replay3",
+            approval_id="ap_replay3",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"key": "value"},
+            metadata={"event_type": "approval.created"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+        )
+
+        result = await svc.replay_original("fdlq_replay3", dlq_store, dry_run=True)
+        assert result.success is True
+        # No message should have been sent
+        assert len(fake_webhook_adapter.sent) == 0
+
+    @pytest.mark.asyncio
+    async def test_replay_original_non_webhook_rejected(self) -> None:
+        """Replay of non-webhook DLQ entry returns error."""
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay4",
+            notification_id="fn_replay4",
+            approval_id="ap_replay4",
+            channel="console",  # Not webhook
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"key": "value"},
+            metadata={"event_type": "approval.created"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        svc = _make_service()
+        result = await svc.replay_original("fdlq_replay4", dlq_store)
+        assert result.success is False
+        assert "non-webhook" in result.error
+
+    @pytest.mark.asyncio
+    async def test_replay_original_max_replays_exceeded(self) -> None:
+        """Replay fails when max replays are exceeded."""
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay5",
+            notification_id="fn_replay5",
+            approval_id="ap_replay5",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"key": "value"},
+            metadata={"event_type": "approval.created", "replay_count": 3},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+        )
+
+        result = await svc.replay_original("fdlq_replay5", dlq_store, max_replays=3)
+        assert result.success is False
+        assert "Max replays exceeded" in result.error
+
+    # --- Audit events ---
+
+    @pytest.mark.asyncio
+    async def test_preference_audit_event_recorded(self) -> None:
+        """Suppressed notification records an audit event."""
+        store = InMemoryFederationNotificationStore()
+        audit_logger = MagicMock()
+        pref_service = MagicMock()
+        pref_service.should_deliver = AsyncMock(return_value=False)
+
+        svc = _make_service(
+            store=store,
+            audit_logger=audit_logger,
+            preference_service=pref_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_17",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        # Find the suppressed audit event
+        suppressed_calls = [
+            c for c in audit_logger.log.call_args_list
+            if c.kwargs.get("event") == "notification.suppressed"
+        ]
+        assert len(suppressed_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_template_failure_audit_event_recorded(self) -> None:
+        """Template failed notification records an audit event."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            TemplateMissingVariableError,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        audit_logger = MagicMock()
+        template_service = MagicMock()
+        template_service.render = AsyncMock(
+            side_effect=TemplateMissingVariableError("Missing var"),
+        )
+
+        svc = _make_service(
+            store=store,
+            audit_logger=audit_logger,
+            template_service=template_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_18",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        # Find the template_failed audit event
+        tf_calls = [
+            c for c in audit_logger.log.call_args_list
+            if c.kwargs.get("event") == "notification.template_failed"
+        ]
+        assert len(tf_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_signing_failure_audit_event_recorded(self) -> None:
+        """Signing failed notification records an audit event."""
+        store = InMemoryFederationNotificationStore()
+        audit_logger = MagicMock()
+        sig_service = MagicMock()
+        sig_service.sign = MagicMock(side_effect=ValueError("Key not found"))
+        sig_service.compute_digest = MagicMock(return_value="abc123")
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            audit_logger=audit_logger,
+            webhook_signature_service=sig_service,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_p51_19",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        # Find the signature_failed audit event
+        sf_calls = [
+            c for c in audit_logger.log.call_args_list
+            if c.kwargs.get("event") == "notification.signature_failed"
+        ]
+        assert len(sf_calls) == 1
+
+    # --- Replay ID format ---
+
+    @pytest.mark.asyncio
+    async def test_replay_original_replay_id_format(self) -> None:
+        """Replay result has fwrp_ prefix on replay_id."""
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_replay6",
+            notification_id="fn_replay6",
+            approval_id="ap_replay6",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"key": "value"},
+            metadata={"event_type": "approval.created"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+        )
+
+        result = await svc.replay_original("fdlq_replay6", dlq_store)
+        assert result.replay_id.startswith("fwrp_")
