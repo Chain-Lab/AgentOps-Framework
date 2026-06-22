@@ -3,6 +3,7 @@
 Phase 49 Task 4.
 Phase 50 Task 3: DLQ Integration + Retry Policy tests.
 Phase 51 Task 6: Template rendering, preference checks, webhook signing integration.
+Phase 52 Task 6: Notification service integration with observability.
 """
 from __future__ import annotations
 
@@ -25,11 +26,17 @@ from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationRetryPolicy,
     FederationNotificationStatus,
 )
+from agent_app.governance.policy_rollout_federation_notification_observability import (
+    NotificationDeliveryEventType as ObservabilityEventType,
+)
 from agent_app.runtime.policy_rollout_federation_notification_adapters import (
     FakeFederationNotificationAdapter,
 )
 from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
     InMemoryFederationNotificationDLQStore,
+)
+from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+    InMemoryNotificationObservabilityStore,
 )
 from agent_app.runtime.policy_rollout_federation_notification_service import (
     FederationNotificationService,
@@ -74,6 +81,7 @@ def _make_service(
     template_service: Any | None = None,
     preference_service: Any | None = None,
     webhook_signature_service: Any | None = None,
+    observability_store: Any | None = None,
 ) -> FederationNotificationService:
     policy = policy or _make_policy()
     store = store or InMemoryFederationNotificationStore()
@@ -92,6 +100,7 @@ def _make_service(
         template_service=template_service,
         preference_service=preference_service,
         webhook_signature_service=webhook_signature_service,
+        observability_store=observability_store,
     )
 
 
@@ -1582,3 +1591,391 @@ class TestFederationNotificationServicePhase51:
 
         result = await svc.replay_original("fdlq_replay6", dlq_store)
         assert result.replay_id.startswith("fwrp_")
+
+
+# ---------------------------------------------------------------------------
+# Phase 52 Task 6: Notification service integration with observability
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityIntegration:
+    """Tests for observability event recording in FederationNotificationService."""
+
+    def _make_obs_store(self) -> InMemoryNotificationObservabilityStore:
+        return InMemoryNotificationObservabilityStore()
+
+    @pytest.mark.asyncio
+    async def test_created_event_recorded_on_enqueue(self) -> None:
+        """CREATED event recorded when notification is created in store."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        svc = _make_service(store=store, observability_store=obs_store)
+
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_1",
+            action="deploy",
+            requested_by="alice",
+        )
+
+        events = await obs_store.list_events()
+        assert len(events) == 1
+        assert events[0].event_type == ObservabilityEventType.CREATED
+        assert events[0].notification_id is not None
+        assert events[0].notification_id.startswith("fn_")
+        assert events[0].channel == "console"
+
+    @pytest.mark.asyncio
+    async def test_rendered_event_recorded_after_template_render(self) -> None:
+        """RENDERED event recorded after successful template rendering."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            FederationNotificationRenderedContent,
+            FederationNotificationTemplateFormat,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        template_service = MagicMock()
+        now = datetime.now(timezone.utc)
+        rendered = FederationNotificationRenderedContent(
+            template_id="fnt_test",
+            template_version=1,
+            subject="Rendered Subject",
+            body="Rendered body",
+            format=FederationNotificationTemplateFormat.TEXT,
+            context_keys=["approval_id"],
+            rendered_at=now,
+        )
+        template_service.render = AsyncMock(return_value=rendered)
+
+        svc = _make_service(
+            store=store,
+            template_service=template_service,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_2",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        rendered_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.RENDERED]
+        assert len(rendered_events) == 1
+        assert rendered_events[0].template_id == "fnt_test"
+
+    @pytest.mark.asyncio
+    async def test_suppressed_event_recorded_when_preference_blocks(self) -> None:
+        """SUPPRESSED event recorded when preference service blocks delivery."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        pref_service = MagicMock()
+        pref_service.should_deliver = AsyncMock(return_value=False)
+
+        svc = _make_service(
+            store=store,
+            preference_service=pref_service,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_3",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        suppressed_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.SUPPRESSED]
+        assert len(suppressed_events) == 1
+        assert suppressed_events[0].preference_decision == "opt_out"
+
+    @pytest.mark.asyncio
+    async def test_send_attempted_recorded_before_dispatch(self) -> None:
+        """SEND_ATTEMPTED event recorded before adapter dispatch."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: adapter},
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_4",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        attempt_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.SEND_ATTEMPTED]
+        assert len(attempt_events) == 1
+        assert attempt_events[0].adapter_name == "fake"
+        assert attempt_events[0].attempt == 1
+
+    @pytest.mark.asyncio
+    async def test_sent_event_recorded_on_success(self) -> None:
+        """SENT event recorded after successful adapter dispatch."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: adapter},
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_5",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        sent_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.SENT]
+        assert len(sent_events) == 1
+        assert sent_events[0].adapter_name == "fake"
+
+    @pytest.mark.asyncio
+    async def test_failed_event_recorded_on_delivery_failure(self) -> None:
+        """FAILED event recorded when adapter delivery fails."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+
+        failing_adapter = MagicMock()
+        failing_adapter.send = AsyncMock(return_value=FederationNotificationDelivery(
+            notification_id="fn_placeholder",
+            channel=FederationNotificationChannel.CONSOLE,
+            status=FederationNotificationStatus.FAILED,
+            error="Connection refused",
+        ))
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_6",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        failed_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.FAILED]
+        assert len(failed_events) == 1
+        assert failed_events[0].error_message == "Connection refused"
+        assert failed_events[0].attempt == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_scheduled_recorded(self) -> None:
+        """RETRY_SCHEDULED event recorded when retry is scheduled."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=3, backoff_seconds=10)
+
+        failing_adapter = MagicMock()
+        failing_adapter.send = AsyncMock(return_value=FederationNotificationDelivery(
+            notification_id="fn_placeholder",
+            channel=FederationNotificationChannel.CONSOLE,
+            status=FederationNotificationStatus.FAILED,
+            error="Simulated failure",
+        ))
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            retry_policy=retry_policy,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_7",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        retry_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.RETRY_SCHEDULED]
+        assert len(retry_events) == 1
+        assert retry_events[0].attempt == 1  # attempt_count(0) + 1
+
+    @pytest.mark.asyncio
+    async def test_dlq_created_recorded(self) -> None:
+        """DLQ_CREATED event recorded when DLQ entry is created."""
+        store = InMemoryFederationNotificationStore()
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        obs_store = self._make_obs_store()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            dlq_store=dlq_store,
+            retry_policy=retry_policy,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_8",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        dlq_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.DLQ_CREATED]
+        assert len(dlq_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_dlq_replayed_recorded_on_successful_replay(self) -> None:
+        """DLQ_REPLAYED event recorded after successful DLQ replay."""
+        from agent_app.runtime.policy_rollout_federation_webhook_signature import (
+            FederationWebhookSignatureService,
+        )
+
+        dlq_store = InMemoryFederationNotificationDLQStore()
+        obs_store = self._make_obs_store()
+        now = datetime.now(timezone.utc)
+        dlq_entry = FederationNotificationDeadLetter(
+            dlq_id="fdlq_obs_replay",
+            notification_id="fn_obs_replay",
+            approval_id="ap_obs_9",
+            channel="webhook",
+            reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+            status=FederationNotificationDLQStatus.PENDING,
+            failure_count=3,
+            last_error="Timeout",
+            payload={"approval_id": "ap_obs_9", "action": "deploy"},
+            metadata={"event_type": "approval.created", "subject": "Test"},
+            created_at=now,
+            updated_at=now,
+        )
+        await dlq_store.create(dlq_entry)
+
+        sig_service = FederationWebhookSignatureService()
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+        svc = _make_service(
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+            observability_store=obs_store,
+        )
+
+        result = await svc.replay_original("fdlq_obs_replay", dlq_store)
+        assert result.success is True
+
+        replayed_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.DLQ_REPLAYED]
+        assert len(replayed_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_template_failed_event_recorded_on_render_failure(self) -> None:
+        """TEMPLATE_FAILED event recorded when template rendering fails."""
+        from agent_app.governance.policy_rollout_federation_notification_template import (
+            TemplateMissingVariableError,
+        )
+
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        template_service = MagicMock()
+        template_service.render = AsyncMock(
+            side_effect=TemplateMissingVariableError("Missing: approval.id"),
+        )
+
+        svc = _make_service(
+            store=store,
+            template_service=template_service,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_10",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        tf_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.TEMPLATE_FAILED]
+        assert len(tf_events) == 1
+        assert "Missing" in tf_events[0].error_message
+
+    @pytest.mark.asyncio
+    async def test_webhook_signature_failed_event_recorded(self) -> None:
+        """WEBHOOK_SIGNATURE_FAILED event recorded when signing fails."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+        sig_service = MagicMock()
+        sig_service.sign = MagicMock(side_effect=ValueError("Webhook signing failed"))
+
+        fake_webhook_adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            policy=_make_policy(channels=[FederationNotificationChannel.WEBHOOK]),
+            adapters={FederationNotificationChannel.WEBHOOK: fake_webhook_adapter},
+            webhook_signature_service=sig_service,
+            observability_store=obs_store,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_11",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        sig_failed_events = [e for e in await obs_store.list_events() if e.event_type == ObservabilityEventType.WEBHOOK_SIGNATURE_FAILED]
+        assert len(sig_failed_events) == 1
+        assert "signing failed" in sig_failed_events[0].error_message
+
+    @pytest.mark.asyncio
+    async def test_event_recording_failure_does_not_break_flow(self) -> None:
+        """Observability store failure does not break the notification flow."""
+
+        class BrokenObsStore:
+            async def record_event(self, event):
+                raise RuntimeError("Observability store broken")
+
+        store = InMemoryFederationNotificationStore()
+        broken_obs_store = BrokenObsStore()
+
+        svc = _make_service(
+            store=store,
+            observability_store=broken_obs_store,
+        )
+        # Should not raise despite broken observability store
+        messages = await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_12",
+            action="deploy",
+            requested_by="alice",
+        )
+        assert len(messages) == 1
+
+        result = await svc.dispatch_pending()
+        assert result.total_sent == 1
+
+    @pytest.mark.asyncio
+    async def test_no_events_recorded_when_observability_store_is_none(self) -> None:
+        """No events recorded when observability_store is None (default)."""
+        store = InMemoryFederationNotificationStore()
+        obs_store = self._make_obs_store()
+
+        # Service with observability store
+        svc_with_obs = _make_service(store=store, observability_store=obs_store)
+        await svc_with_obs.enqueue_for_approval_created(
+            approval_id="ap_obs_13",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc_with_obs.dispatch_pending()
+        events_with_obs = await obs_store.list_events()
+        assert len(events_with_obs) > 0
+
+        # Reset store and create service without observability store
+        store2 = InMemoryFederationNotificationStore()
+        svc_without_obs = _make_service(store=store2, observability_store=None)
+        await svc_without_obs.enqueue_for_approval_created(
+            approval_id="ap_obs_14",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc_without_obs.dispatch_pending()
+        # The shared obs_store should not have events from svc_without_obs
+        events_without_obs = [e for e in await obs_store.list_events() if e.notification_id is not None and "fn_" in e.notification_id]
+        # All events should be from the first service (fn_ prefix from first)
+        # Second service used None, so no new events added to obs_store
+        assert len(events_without_obs) == len(events_with_obs)

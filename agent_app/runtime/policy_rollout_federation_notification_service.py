@@ -25,6 +25,10 @@ from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationRetryPolicy,
     FederationNotificationStatus,
 )
+from agent_app.governance.policy_rollout_federation_notification_observability import (
+    NotificationDeliveryEvent,
+    NotificationDeliveryEventType,
+)
 from agent_app.governance.policy_rollout_federation_webhook import (
     FederationWebhookReplayResult,
     FederationWebhookRequestSnapshot,
@@ -34,6 +38,9 @@ from agent_app.runtime.policy_rollout_federation_notification_adapters import (
 )
 from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
     FederationNotificationDLQStore,
+)
+from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+    NotificationObservabilityStore,
 )
 from agent_app.runtime.policy_rollout_federation_notification_store import (
     FederationNotificationStore,
@@ -59,6 +66,7 @@ class FederationNotificationService:
         template_service: Any | None = None,  # FederationNotificationTemplateService
         preference_service: Any | None = None,  # FederationNotificationPreferenceService
         webhook_signature_service: Any | None = None,  # FederationWebhookSignatureService
+        observability_store: NotificationObservabilityStore | None = None,
     ) -> None:
         self._store = notification_store
         self._adapters = adapters
@@ -72,6 +80,7 @@ class FederationNotificationService:
         self._template_service = template_service
         self._preference_service = preference_service
         self._webhook_signature_service = webhook_signature_service
+        self._observability_store = observability_store
 
     # ------------------------------------------------------------------
     # Public enqueue methods
@@ -117,6 +126,12 @@ class FederationNotificationService:
             )
             created = await self._store.create(msg)
             messages.append(created)
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.CREATED,
+                notification_id=msg.notification_id,
+                federation_id=federation_id,
+                channel=channel.value,
+            )
             self._record_audit(
                 event="notification.enqueued",
                 notification_id=msg.notification_id,
@@ -167,6 +182,12 @@ class FederationNotificationService:
             )
             created = await self._store.create(msg)
             messages.append(created)
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.CREATED,
+                notification_id=msg.notification_id,
+                federation_id=federation_id,
+                channel=channel.value,
+            )
             self._record_audit(
                 event="notification.enqueued",
                 notification_id=msg.notification_id,
@@ -217,6 +238,12 @@ class FederationNotificationService:
             )
             created = await self._store.create(msg)
             messages.append(created)
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.CREATED,
+                notification_id=msg.notification_id,
+                federation_id=federation_id,
+                channel=channel.value,
+            )
             self._record_audit(
                 event="notification.enqueued",
                 notification_id=msg.notification_id,
@@ -271,6 +298,12 @@ class FederationNotificationService:
             )
             created = await self._store.create(msg)
             messages.append(created)
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.CREATED,
+                notification_id=msg.notification_id,
+                federation_id=federation_id,
+                channel=channel.value,
+            )
             self._record_audit(
                 event="notification.enqueued",
                 notification_id=msg.notification_id,
@@ -372,6 +405,13 @@ class FederationNotificationService:
                     msg_in_store = await self._store.get(message.notification_id)
                     if msg_in_store is not None:
                         msg_in_store.status = FederationNotificationStatus.SUPPRESSED
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.SUPPRESSED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        preference_decision="opt_out",
+                    )
                     self._record_audit(
                         event="notification.suppressed",
                         notification_id=message.notification_id,
@@ -398,6 +438,13 @@ class FederationNotificationService:
                     if rendered.subject is not None:
                         message.subject = rendered.subject
                     message.body = rendered.body
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.RENDERED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        template_id=rendered.template_id,
+                    )
                 except FederationNotificationTemplateError as exc:
                     await self._store.mark_failed(
                         message.notification_id,
@@ -407,6 +454,13 @@ class FederationNotificationService:
                     msg_in_store = await self._store.get(message.notification_id)
                     if msg_in_store is not None:
                         msg_in_store.status = FederationNotificationStatus.TEMPLATE_FAILED
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.TEMPLATE_FAILED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        error_message=str(exc),
+                    )
                     self._record_audit(
                         event="notification.template_failed",
                         notification_id=message.notification_id,
@@ -425,6 +479,13 @@ class FederationNotificationService:
                     msg_in_store = await self._store.get(message.notification_id)
                     if msg_in_store is not None:
                         msg_in_store.status = FederationNotificationStatus.TEMPLATE_FAILED
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.TEMPLATE_FAILED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        error_message=str(exc),
+                    )
                     self._record_audit(
                         event="notification.template_failed",
                         notification_id=message.notification_id,
@@ -471,6 +532,13 @@ class FederationNotificationService:
                     msg_in_store = await self._store.get(message.notification_id)
                     if msg_in_store is not None:
                         msg_in_store.status = FederationNotificationStatus.SIGNATURE_FAILED
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.WEBHOOK_SIGNATURE_FAILED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        error_message=str(exc),
+                    )
                     self._record_audit(
                         event="notification.signature_failed",
                         notification_id=message.notification_id,
@@ -500,6 +568,16 @@ class FederationNotificationService:
                     message.notification_id,
                     error=no_adapter_error,
                 )
+                await self._record_delivery_event(
+                    event_type=NotificationDeliveryEventType.FAILED,
+                    notification_id=message.notification_id,
+                    federation_id=message.federation_id,
+                    channel=message.channel.value,
+                    adapter_name=None,
+                    attempt=message.attempt_count + 1,
+                    error_message=no_adapter_error,
+                    error_code="no_adapter",
+                )
                 total_failed += 1
                 errors.append(no_adapter_error)
                 continue
@@ -508,6 +586,14 @@ class FederationNotificationService:
             if signature_headers is not None:
                 message.payload["_signature_headers"] = signature_headers
 
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.SEND_ATTEMPTED,
+                notification_id=message.notification_id,
+                federation_id=message.federation_id,
+                channel=message.channel.value,
+                adapter_name=adapter_name if isinstance(adapter_name := getattr(adapter, "name", None), str) else None,
+                attempt=message.attempt_count + 1,
+            )
             try:
                 delivery = await adapter.send(message)
             except Exception as exc:  # noqa: BLE001 — never crash on adapter failure
@@ -520,10 +606,28 @@ class FederationNotificationService:
 
             if delivery.status == FederationNotificationStatus.SENT:
                 await self._store.mark_sent(message.notification_id)
+                await self._record_delivery_event(
+                    event_type=NotificationDeliveryEventType.SENT,
+                    notification_id=message.notification_id,
+                    federation_id=message.federation_id,
+                    channel=message.channel.value,
+                    adapter_name=adapter_name if isinstance(adapter_name := getattr(adapter, "name", None), str) else None,
+                )
                 total_sent += 1
             elif delivery.status == FederationNotificationStatus.FAILED:
                 error_msg = delivery.error or "Unknown delivery failure"
-                if message.attempt_count + 1 < max_attempts:
+                attempt_num = message.attempt_count + 1
+                await self._record_delivery_event(
+                    event_type=NotificationDeliveryEventType.FAILED,
+                    notification_id=message.notification_id,
+                    federation_id=message.federation_id,
+                    channel=message.channel.value,
+                    adapter_name=adapter_name if isinstance(adapter_name := getattr(adapter, "name", None), str) else None,
+                    attempt=attempt_num,
+                    error_message=error_msg,
+                    error_code="delivery_failure",
+                )
+                if attempt_num < max_attempts:
                     next_attempt = datetime.now(timezone.utc) + timedelta(
                         seconds=backoff_seconds,
                     )
@@ -531,6 +635,13 @@ class FederationNotificationService:
                         message.notification_id,
                         error=error_msg,
                         next_attempt_at=next_attempt,
+                    )
+                    await self._record_delivery_event(
+                        event_type=NotificationDeliveryEventType.RETRY_SCHEDULED,
+                        notification_id=message.notification_id,
+                        federation_id=message.federation_id,
+                        channel=message.channel.value,
+                        attempt=attempt_num,
                     )
                 else:
                     # Max retries exceeded — check DLQ eligibility
@@ -688,6 +799,13 @@ class FederationNotificationService:
         # 7. Record replay audit event
         now = datetime.now(timezone.utc)
         new_replay_count = replay_count + 1
+        if success:
+            await self._record_delivery_event(
+                event_type=NotificationDeliveryEventType.DLQ_REPLAYED,
+                notification_id=entry.notification_id,
+                federation_id=entry.federation_id,
+                channel=FederationNotificationChannel.WEBHOOK.value,
+            )
         self._record_audit(
             event="notification.replay_original",
             notification_id=entry.notification_id,
@@ -821,6 +939,50 @@ class FederationNotificationService:
         except Exception:  # noqa: BLE001 — best-effort
             logger.debug("History recording failed for federation %s", federation_id, exc_info=True)
 
+    async def _record_delivery_event(
+        self,
+        *,
+        event_type: NotificationDeliveryEventType,
+        notification_id: str,
+        federation_id: str | None = None,
+        channel: str | None = None,
+        approval_id: str | None = None,
+        status: str | None = None,
+        attempt: int | None = None,
+        latency_ms: int | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        adapter_name: str | None = None,
+        template_id: str | None = None,
+        preference_decision: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Best-effort observability event recording — never break the caller on failure."""
+        if self._observability_store is None:
+            return
+        try:
+            event = NotificationDeliveryEvent(
+                event_id=f"nde_{uuid.uuid4().hex}",
+                notification_id=notification_id,
+                approval_id=approval_id,
+                federation_id=federation_id,
+                channel=channel,
+                event_type=event_type,
+                status=status,
+                attempt=attempt,
+                latency_ms=latency_ms,
+                error_code=error_code,
+                error_message=error_message,
+                adapter_name=adapter_name,
+                template_id=template_id,
+                preference_decision=preference_decision,
+                metadata=metadata or {},
+                created_at=datetime.now(timezone.utc),
+            )
+            await self._observability_store.record_event(event)
+        except Exception:  # noqa: BLE001 — best-effort, never break notification flow
+            logger.debug("Failed to record delivery event: %s", exc_info=True)
+
     async def _create_dlq_entry(
         self,
         *,
@@ -856,6 +1018,12 @@ class FederationNotificationService:
             logger.debug("DLQ creation failed for notification %s", message.notification_id, exc_info=True)
             return
 
+        await self._record_delivery_event(
+            event_type=NotificationDeliveryEventType.DLQ_CREATED,
+            notification_id=message.notification_id,
+            federation_id=message.federation_id,
+            channel=message.channel.value,
+        )
         self._record_change_event(
             event_type="federation.notification.dlq_created",
             payload={
