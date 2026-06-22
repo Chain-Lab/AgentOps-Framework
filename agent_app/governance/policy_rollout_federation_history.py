@@ -47,6 +47,9 @@ class FederationHistoryEventType(str, Enum):
     NOTIFICATION_DLQ_CREATED = "federation.notification.dlq_created"
     NOTIFICATION_DLQ_RETRIED = "federation.notification.dlq_retried"
     SCHEDULED_WORKER_TICK = "federation.scheduled.worker_ticked"
+    NOTIFICATION_TEMPLATE_CHANGED = "federation.notification.template_changed"
+    NOTIFICATION_PREFERENCE_CHANGED = "federation.notification.preference_changed"
+    WEBHOOK_REPLAY = "federation.webhook.replay"
 
 
 class FederationHistoryEvent(BaseModel):

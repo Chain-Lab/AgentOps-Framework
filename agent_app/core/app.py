@@ -312,6 +312,30 @@ class AgentApp:
     def federation_scheduled_worker(self) -> Any:
         return getattr(self, "_federation_scheduled_worker", None)
 
+    @property
+    def federation_notification_template_store(self) -> Any:
+        return getattr(self, "_federation_notification_template_store", None)
+
+    @property
+    def federation_notification_template_service(self) -> Any:
+        return getattr(self, "_federation_notification_template_service", None)
+
+    @property
+    def federation_notification_preference_store(self) -> Any:
+        return getattr(self, "_federation_notification_preference_store", None)
+
+    @property
+    def federation_notification_preference_service(self) -> Any:
+        return getattr(self, "_federation_notification_preference_service", None)
+
+    @property
+    def federation_webhook_signature_service(self) -> Any:
+        return getattr(self, "_federation_webhook_signature_service", None)
+
+    @property
+    def federation_webhook_nonce_store(self) -> Any:
+        return getattr(self, "_federation_webhook_nonce_store", None)
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

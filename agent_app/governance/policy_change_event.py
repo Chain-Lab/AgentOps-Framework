@@ -118,6 +118,18 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_WORKER_STARTED = "policy.federation.worker.started"
     FEDERATION_WORKER_STOPPED = "policy.federation.worker.stopped"
     FEDERATION_WORKER_TICK_FAILED = "policy.federation.worker.tick_failed"
+    FEDERATION_NOTIFICATION_TEMPLATE_CREATED = "policy.federation.notification.template_created"
+    FEDERATION_NOTIFICATION_TEMPLATE_UPDATED = "policy.federation.notification.template_updated"
+    FEDERATION_NOTIFICATION_TEMPLATE_DISABLED = "policy.federation.notification.template_disabled"
+    FEDERATION_NOTIFICATION_PREFERENCE_SET = "policy.federation.notification.preference_set"
+    FEDERATION_NOTIFICATION_PREFERENCE_DELETED = "policy.federation.notification.preference_deleted"
+    FEDERATION_NOTIFICATION_SUPPRESSED = "policy.federation.notification.suppressed"
+    FEDERATION_NOTIFICATION_TEMPLATE_FAILED = "policy.federation.notification.template_failed"
+    FEDERATION_WEBHOOK_REPLAY_REQUESTED = "policy.federation.webhook.replay_requested"
+    FEDERATION_WEBHOOK_REPLAY_SUCCEEDED = "policy.federation.webhook.replay_succeeded"
+    FEDERATION_WEBHOOK_REPLAY_FAILED = "policy.federation.webhook.replay_failed"
+    FEDERATION_WEBHOOK_SIGNATURE_VERIFIED = "policy.federation.webhook.signature_verified"
+    FEDERATION_WEBHOOK_SIGNATURE_FAILED = "policy.federation.webhook.signature_failed"
 
 
 class PolicyChangeEvent(BaseModel):

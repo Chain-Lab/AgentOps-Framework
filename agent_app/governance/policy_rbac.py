@@ -139,6 +139,12 @@ class PolicyReleasePermission(StrEnum):
     FEDERATION_DLQ_LIST = "policy.federation.dlq.list"
     FEDERATION_DLQ_MANAGE = "policy.federation.dlq.manage"
     FEDERATION_WORKER_MANAGE = "policy.federation.worker.manage"
+    FEDERATION_NOTIFICATION_TEMPLATE_LIST = "policy.federation.notification.template.list"
+    FEDERATION_NOTIFICATION_TEMPLATE_MANAGE = "policy.federation.notification.template.manage"
+    FEDERATION_NOTIFICATION_PREFERENCE_VIEW = "policy.federation.notification.preference.view"
+    FEDERATION_NOTIFICATION_PREFERENCE_MANAGE = "policy.federation.notification.preference.manage"
+    FEDERATION_WEBHOOK_REPLAY = "policy.federation.webhook.replay"
+    FEDERATION_WEBHOOK_VERIFY = "policy.federation.webhook.verify"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -169,6 +175,8 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.FEDERATION_APPROVAL_LIST,
     PolicyReleasePermission.FEDERATION_NOTIFICATION_LIST,
     PolicyReleasePermission.FEDERATION_DLQ_LIST,
+    PolicyReleasePermission.FEDERATION_NOTIFICATION_TEMPLATE_LIST,
+    PolicyReleasePermission.FEDERATION_NOTIFICATION_PREFERENCE_VIEW,
 }
 
 

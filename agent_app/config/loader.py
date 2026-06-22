@@ -1230,6 +1230,87 @@ def build_app(
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 
+        # -- Phase 51: Federation notification templates, preferences, webhook signing --
+        try:
+            if fed_cfg is not None and hasattr(fed_cfg, "notifications") and fed_cfg.notifications is not None and fed_cfg.notifications.enabled:
+                notif_cfg = fed_cfg.notifications
+
+                # Template store and service
+                tmpl_cfg = getattr(notif_cfg, "templates", None)
+                if tmpl_cfg is not None and tmpl_cfg.enabled:
+                    from agent_app.runtime.policy_rollout_federation_notification_template_store import create_federation_notification_template_store
+                    from agent_app.runtime.policy_rollout_federation_notification_template_service import FederationNotificationTemplateService
+
+                    tmpl_store = create_federation_notification_template_store(
+                        store_type=tmpl_cfg.store_backend,
+                        db_path=tmpl_cfg.store_path,
+                    )
+                    tmpl_service = FederationNotificationTemplateService(
+                        store=tmpl_store,
+                        strict_variables=tmpl_cfg.strict_variables,
+                        default_template_id=tmpl_cfg.default_template_id,
+                    )
+                    app._federation_notification_template_store = tmpl_store
+                    app._federation_notification_template_service = tmpl_service
+
+                    # Attach template service to notification service if it exists
+                    ns = getattr(app, "_federation_notification_service", None)
+                    if ns is not None:
+                        ns._template_service = tmpl_service
+
+                # Preference store and service
+                pref_cfg = getattr(notif_cfg, "preferences", None)
+                if pref_cfg is not None and pref_cfg.enabled:
+                    from agent_app.runtime.policy_rollout_federation_notification_preference_store import create_federation_notification_preference_store
+                    from agent_app.runtime.policy_rollout_federation_notification_preference_service import FederationNotificationPreferenceService
+
+                    pref_store = create_federation_notification_preference_store(
+                        store_type=pref_cfg.store_backend,
+                        db_path=pref_cfg.store_path,
+                    )
+                    pref_service = FederationNotificationPreferenceService(
+                        store=pref_store,
+                        default_delivery=pref_cfg.default_delivery,
+                        failure_mode=pref_cfg.failure_mode,
+                        mandatory_event_types=pref_cfg.mandatory_event_types,
+                    )
+                    app._federation_notification_preference_store = pref_store
+                    app._federation_notification_preference_service = pref_service
+
+                    # Attach preference service to notification service if it exists
+                    ns = getattr(app, "_federation_notification_service", None)
+                    if ns is not None:
+                        ns._preference_service = pref_service
+
+                # Webhook signature service and nonce store
+                signing_cfg = getattr(notif_cfg, "webhook_signing", None)
+                if signing_cfg is not None and signing_cfg.enabled:
+                    from agent_app.runtime.policy_rollout_federation_notification_webhook_signature import FederationWebhookSignatureService
+                    from agent_app.runtime.policy_rollout_federation_notification_nonce_store import create_federation_webhook_nonce_store
+
+                    nonce_store = create_federation_webhook_nonce_store(
+                        store_type=signing_cfg.nonce_store_backend,
+                        db_path=signing_cfg.nonce_store_path,
+                    )
+                    signature_service = FederationWebhookSignatureService(
+                        algorithm=signing_cfg.algorithm,
+                        signature_version=signing_cfg.signature_version,
+                        active_key_id=signing_cfg.active_key_id,
+                        keys=signing_cfg.keys,
+                        timestamp_tolerance_seconds=signing_cfg.timestamp_tolerance_seconds,
+                        nonce_store=nonce_store,
+                        nonce_ttl_seconds=signing_cfg.nonce_ttl_seconds,
+                    )
+                    app._federation_webhook_signature_service = signature_service
+                    app._federation_webhook_nonce_store = nonce_store
+
+                    # Attach signature service to notification service if it exists
+                    ns = getattr(app, "_federation_notification_service", None)
+                    if ns is not None:
+                        ns._signature_service = signature_service
+        except Exception:  # noqa: BLE001 — graceful failure
+            pass
+
     app._release_config = release_config
     return app
 

@@ -65,8 +65,8 @@ class TestChangeEvents:
         assert PolicyChangeEventType.EXPIRATION_PERMISSION_DENIED == "policy.expiration.permission_denied"
 
     def test_event_type_count(self) -> None:
-        """Total event types should be 106 (100 previous + 6 Phase 50 DLQ/worker)."""
-        assert len(PolicyChangeEventType) == 106
+        """Total event types should be 118 (106 previous + 12 Phase 51)."""
+        assert len(PolicyChangeEventType) == 118
 
 
 # ---------------------------------------------------------------------------

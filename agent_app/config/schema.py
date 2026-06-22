@@ -622,6 +622,45 @@ class RolloutFederationChannelRetryConfig(BaseModel):
     send_to_dlq: bool = Field(default=True, description="Send to DLQ for this channel")
 
 
+class RolloutFederationTemplateConfig(BaseModel):
+    """Configuration for federation notification templates (Phase 51)."""
+    enabled: bool = Field(default=False, description="Enable template rendering")
+    strict_variables: bool = Field(default=True, description="Strict mode for missing variables")
+    default_template_id: str | None = Field(default=None, description="Default template ID")
+    store_backend: str = Field(default="memory", description="Template store backend: memory | sqlite")
+    store_path: str = Field(default=".agent_app/federation_notification_templates.db", description="Template store SQLite path")
+
+
+class RolloutFederationPreferenceConfig(BaseModel):
+    """Configuration for federation notification preferences (Phase 51)."""
+    enabled: bool = Field(default=False, description="Enable preference management")
+    default_delivery: bool = Field(default=True, description="Default delivery when no preference found")
+    failure_mode: str = Field(default="open", description="Failure mode: open | closed")
+    mandatory_event_types: list[str] = Field(default_factory=list, description="Event types that cannot be opted out")
+    store_backend: str = Field(default="memory", description="Preference store backend: memory | sqlite")
+    store_path: str = Field(default=".agent_app/federation_notification_preferences.db", description="Preference store SQLite path")
+
+
+class RolloutFederationWebhookSigningConfig(BaseModel):
+    """Configuration for webhook signing (Phase 51)."""
+    enabled: bool = Field(default=False, description="Enable webhook request signing")
+    algorithm: str = Field(default="hmac-sha256", description="Signing algorithm")
+    signature_version: str = Field(default="v1", description="Signature version")
+    active_key_id: str = Field(default="default", description="Active signing key ID")
+    keys: dict[str, str] = Field(default_factory=dict, description="Signing keys by ID")
+    timestamp_tolerance_seconds: int = Field(default=300, description="Timestamp tolerance in seconds")
+    nonce_ttl_seconds: int = Field(default=600, description="Nonce TTL in seconds")
+    nonce_store_backend: str = Field(default="memory", description="Nonce store backend: memory | sqlite")
+    nonce_store_path: str = Field(default=".agent_app/federation_webhook_nonces.db", description="Nonce store SQLite path")
+
+
+class RolloutFederationWebhookReplayConfig(BaseModel):
+    """Configuration for webhook replay (Phase 51)."""
+    enabled: bool = Field(default=False, description="Enable webhook original-payload replay")
+    max_replays_per_entry: int = Field(default=10, description="Maximum replays per DLQ entry")
+    allow_target_override: bool = Field(default=False, description="Allow replay to different URL")
+
+
 class RolloutFederationNotificationConfig(BaseModel):
     """Configuration for federation notification (Phase 49)."""
     enabled: bool = Field(default=False, description="Enable federation notification")
@@ -640,6 +679,10 @@ class RolloutFederationNotificationConfig(BaseModel):
     dlq: RolloutFederationDLQConfig = Field(default_factory=RolloutFederationDLQConfig, description="DLQ config (Phase 50)")
     retry: RolloutFederationRetryPolicyConfig = Field(default_factory=RolloutFederationRetryPolicyConfig, description="Retry policy config (Phase 50)")
     by_channel_retry: dict[str, RolloutFederationChannelRetryConfig] = Field(default_factory=dict, description="Per-channel retry policy overrides (Phase 50)")
+    templates: RolloutFederationTemplateConfig = Field(default_factory=RolloutFederationTemplateConfig, description="Template config (Phase 51)")
+    preferences: RolloutFederationPreferenceConfig = Field(default_factory=RolloutFederationPreferenceConfig, description="Preference config (Phase 51)")
+    webhook_signing: RolloutFederationWebhookSigningConfig = Field(default_factory=RolloutFederationWebhookSigningConfig, description="Webhook signing config (Phase 51)")
+    webhook_replay: RolloutFederationWebhookReplayConfig = Field(default_factory=RolloutFederationWebhookReplayConfig, description="Webhook replay config (Phase 51)")
 
 
 class RolloutFederationWorkerConfig(BaseModel):
