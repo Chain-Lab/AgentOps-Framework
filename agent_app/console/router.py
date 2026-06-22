@@ -74,6 +74,10 @@ def build_policy_console_router(
     federation_escalation_worker: Any = None,
     federation_dlq_store: Any = None,
     federation_scheduled_worker: Any = None,
+    federation_notification_template_store: Any = None,
+    federation_notification_template_service: Any = None,
+    federation_notification_preference_store: Any = None,
+    federation_notification_preference_service: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -116,6 +120,10 @@ def build_policy_console_router(
         federation_escalation_worker: Optional federation escalation worker (Phase 49).
         federation_dlq_store: Optional federation notification DLQ store (Phase 50).
         federation_scheduled_worker: Optional federation scheduled worker (Phase 50).
+        federation_notification_template_store: Optional federation notification template store (Phase 51).
+        federation_notification_template_service: Optional federation notification template service (Phase 51).
+        federation_notification_preference_store: Optional federation notification preference store (Phase 51).
+        federation_notification_preference_service: Optional federation notification preference service (Phase 51).
 
     Returns:
         An APIRouter ready to be included in the FastAPI app.
@@ -5256,6 +5264,14 @@ def build_policy_console_router(
             "purged_at": entry.purged_at.isoformat() if entry.purged_at and hasattr(entry.purged_at, "isoformat") else "",
             "payload_json": _json.dumps(entry.payload, indent=2, default=str) if entry.payload else "{}",
             "metadata_json": _json.dumps(entry.metadata, indent=2, default=str) if entry.metadata else "{}",
+            # Phase 51: Extended replay fields
+            "replay_available": getattr(entry, "replay_available", False),
+            "payload_digest": getattr(entry, "payload_digest", None) or "",
+            "template_id": getattr(entry, "template_id", None) or "",
+            "template_version": getattr(entry, "template_version", None) or "",
+            "replay_count": getattr(entry, "replay_count", 0),
+            "last_replay_result": getattr(entry, "last_replay_result", None) or "",
+            "sensitized_headers": _sanitize_headers(getattr(entry, "headers", None)),
         }
         return templates.TemplateResponse(
             request,
@@ -5347,12 +5363,231 @@ def build_policy_console_router(
             },
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 51 Task 9: Template, preference, and replay console pages
+    # -----------------------------------------------------------------------
+
+    @router.get("/federation/notifications/templates", response_class=HTMLResponse)
+    async def federation_template_list(request: Request):
+        """Notification templates list page."""
+        event_type = request.query_params.get("event_type", "")
+        channel = request.query_params.get("channel", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+
+        templates_list: list[dict] = []
+        if federation_notification_template_store is not None:
+            results = await federation_notification_template_store.list(
+                event_type=event_type or None,
+                channel=channel or None,
+                limit=limit,
+                offset=offset,
+            )
+            for t in results:
+                templates_list.append({
+                    "template_id": t.template_id,
+                    "name": t.name,
+                    "event_type": t.event_type or "&mdash;",
+                    "channel": t.channel or "&mdash;",
+                    "format": t.format.value if hasattr(t.format, "value") else str(t.format),
+                    "enabled": t.enabled,
+                    "version": t.version,
+                })
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_template_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "templates": templates_list,
+                "filters": {"event_type": event_type, "channel": channel},
+                "store_available": federation_notification_template_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/templates/{template_id}", response_class=HTMLResponse)
+    async def federation_template_detail(request: Request, template_id: str):
+        """Single notification template detail page."""
+        if federation_notification_template_store is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_notification_template_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": False,
+                    "template": None,
+                    "error": "Template store not configured.",
+                },
+            )
+        template = await federation_notification_template_store.get(template_id)
+        if template is None:
+            return templates.TemplateResponse(
+                request,
+                "policy_federation_notification_template_detail.html",
+                {
+                    "title": title,
+                    "base_path": base_path,
+                    "store_available": True,
+                    "template": None,
+                    "error": f"Template '{template_id}' not found.",
+                },
+            )
+        template_dict = {
+            "template_id": template.template_id,
+            "name": template.name,
+            "description": template.description,
+            "event_type": template.event_type or "&mdash;",
+            "channel": template.channel or "&mdash;",
+            "federation_id": template.federation_id or "&mdash;",
+            "subject_template": template.subject_template or "",
+            "body_template": template.body_template,
+            "format": template.format.value if hasattr(template.format, "value") else str(template.format),
+            "enabled": template.enabled,
+            "version": template.version,
+            "metadata": template.metadata or {},
+            "created_at": template.created_at.isoformat() if hasattr(template.created_at, "isoformat") else str(template.created_at),
+            "updated_at": template.updated_at.isoformat() if hasattr(template.updated_at, "isoformat") else str(template.updated_at),
+        }
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_template_detail.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": True,
+                "template": template_dict,
+                "error": None,
+            },
+        )
+
+    # NOTE: /federation/notifications/preferences/explain must be defined BEFORE
+    # /federation/notifications/preferences/{preference_id} to avoid route conflicts.
+    @router.get("/federation/notifications/preferences/explain", response_class=HTMLResponse)
+    async def federation_preference_explain(request: Request):
+        """Preference explanation page."""
+        subject_type = request.query_params.get("subject_type", "user")
+        subject_id = request.query_params.get("subject_id", "")
+        channel = request.query_params.get("channel", "")
+        event_type = request.query_params.get("event_type", "")
+        federation_id = request.query_params.get("federation_id", "")
+
+        explanation_dict = None
+        if federation_notification_preference_service is not None and subject_id:
+            try:
+                explanation = await federation_notification_preference_service.explain_preference(
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                    event_type=event_type or "approval.created",
+                    channel=channel or "email",
+                    federation_id=federation_id or None,
+                )
+                explanation_dict = {
+                    "decision": explanation.decision.value if hasattr(explanation.decision, "value") else str(explanation.decision),
+                    "matched_preference_id": explanation.matched_preference_id or "&mdash;",
+                    "specificity": explanation.specificity,
+                    "is_mandatory": explanation.is_mandatory,
+                    "system_default": explanation.system_default,
+                    "reason": explanation.reason or "",
+                    "reason_code": explanation.reason_code or "",
+                }
+            except Exception:  # noqa: BLE001
+                explanation_dict = None
+
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_preference_explain.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "explanation": explanation_dict,
+                "filters": {
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "channel": channel,
+                    "event_type": event_type,
+                    "federation_id": federation_id,
+                },
+                "store_available": federation_notification_preference_service is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/preferences", response_class=HTMLResponse)
+    async def federation_preference_list(request: Request):
+        """Notification preferences list page."""
+        subject_type = request.query_params.get("subject_type", "")
+        subject_id = request.query_params.get("subject_id", "")
+        channel = request.query_params.get("channel", "")
+        try:
+            limit = int(request.query_params.get("limit", page_size))
+        except ValueError:
+            limit = page_size
+
+        preferences_list: list[dict] = []
+        if federation_notification_preference_store is not None:
+            results = await federation_notification_preference_store.list_preferences(
+                subject_type=subject_type or None,
+                subject_id=subject_id or None,
+                channel=channel or None,
+                limit=limit,
+            )
+            for p in results:
+                preferences_list.append({
+                    "preference_id": p.preference_id,
+                    "subject_type": p.subject_type.value if hasattr(p.subject_type, "value") else str(p.subject_type),
+                    "subject_id": p.subject_id,
+                    "channel": p.channel or "&mdash;",
+                    "event_type": p.event_type or "&mdash;",
+                    "decision": p.decision.value if hasattr(p.decision, "value") else str(p.decision),
+                    "reason": p.reason or "&mdash;",
+                })
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_preference_list.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "preferences": preferences_list,
+                "filters": {"subject_type": subject_type, "subject_id": subject_id, "channel": channel},
+                "store_available": federation_notification_preference_store is not None,
+            },
+        )
+
     return router
 
 def _get_templates_dir() -> str:
     """Return the templates directory path."""
     import os
     return os.path.join(os.path.dirname(__file__), "templates")
+
+
+def _sanitize_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+    """Sanitize HTTP headers for safe display — redacts auth/signature keys.
+
+    Phase 51: Ensures sensitive headers like Authorization, X-Signature, etc.
+    are never displayed in the console.  Signature keys must NEVER appear.
+    """
+    if headers is None:
+        return {}
+    _REDACT_KEYS = {
+        "authorization", "x-signature", "x-signature-key", "x-hub-signature",
+        "x-hub-signature-256", "x-webhook-signature", "x-webhook-secret",
+        "cookie", "set-cookie", "proxy-authorization", "www-authenticate",
+        "x-api-key", "x-secret", "x-auth-token",
+    }
+    sanitized: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in _REDACT_KEYS:
+            sanitized[key] = "[REDACTED]"
+        else:
+            sanitized[key] = str(value)
+    return sanitized
 
 
 def _promotion_to_row(req: Any) -> dict:

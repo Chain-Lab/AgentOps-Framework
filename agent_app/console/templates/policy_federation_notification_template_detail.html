@@ -1,0 +1,45 @@
+{% if template %}
+<h2>Template: {{ template.name }}</h2>
+
+<p>
+  <a href="{{ base_path }}/federation/notifications/templates">&larr; Back to Templates</a>
+</p>
+
+<table>
+  <tr><th>Template ID</th><td>{{ template.template_id }}</td></tr>
+  <tr><th>Name</th><td>{{ template.name }}</td></tr>
+  <tr><th>Description</th><td>{{ template.description or "&mdash;" }}</td></tr>
+  <tr><th>Event Type</th><td>{{ template.event_type }}</td></tr>
+  <tr><th>Channel</th><td>{{ template.channel }}</td></tr>
+  <tr><th>Federation ID</th><td>{{ template.federation_id }}</td></tr>
+  <tr><th>Format</th><td>{{ template.format }}</td></tr>
+  <tr><th>Enabled</th><td>
+    {% if template.enabled %}
+    <span style="color: #2aa198;">yes</span>
+    {% else %}
+    <span style="color: #dc322f;">no</span>
+    <span style="background: #dc322f; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.85em; margin-left: 4px;">DISABLED</span>
+    {% endif %}
+  </td></tr>
+  <tr><th>Version</th><td>{{ template.version }}</td></tr>
+  <tr><th>Created At</th><td>{{ template.created_at }}</td></tr>
+  <tr><th>Updated At</th><td>{{ template.updated_at }}</td></tr>
+</table>
+
+{% if template.subject_template %}
+<h3>Subject Template</h3>
+<pre><code>{{ template.subject_template }}</code></pre>
+{% endif %}
+
+<h3>Body Template</h3>
+<pre><code>{{ template.body_template }}</code></pre>
+
+{% if template.metadata %}
+<h3>Metadata</h3>
+<pre>{{ template.metadata }}</pre>
+{% endif %}
+
+{% else %}
+<h2>Notification Template</h2>
+<p>{{ error or "Template not found." }}</p>
+{% endif %}

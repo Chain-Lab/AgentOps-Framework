@@ -1,0 +1,54 @@
+<h1>Notification Preferences</h1>
+
+{% if filters.subject_type %}
+<p>Filtering by subject type: <strong>{{ filters.subject_type }}</strong></p>
+{% endif %}
+{% if filters.subject_id %}
+<p>Filtering by subject ID: <strong>{{ filters.subject_id }}</strong></p>
+{% endif %}
+{% if filters.channel %}
+<p>Filtering by channel: <strong>{{ filters.channel }}</strong></p>
+{% endif %}
+
+{% if not store_available %}
+<p class="empty-state">Preference store not configured.</p>
+{% elif not preferences %}
+<div class="empty-state">
+  <p>No notification preferences found.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Preference ID</th>
+      <th>Subject Type</th>
+      <th>Subject ID</th>
+      <th>Channel</th>
+      <th>Event Type</th>
+      <th>Decision</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in preferences %}
+    <tr>
+      <td>{{ p.preference_id }}</td>
+      <td>{{ p.subject_type }}</td>
+      <td>{{ p.subject_id }}</td>
+      <td>{{ p.channel }}</td>
+      <td>{{ p.event_type }}</td>
+      <td>
+        {% if p.decision == "opt_in" %}
+        <span style="color: #2aa198;">{{ p.decision }}</span>
+        {% elif p.decision == "opt_out" %}
+        <span style="color: #dc322f;">{{ p.decision }}</span>
+        {% else %}
+        <span style="color: #b58900;">{{ p.decision }}</span>
+        {% endif %}
+      </td>
+      <td>{{ p.reason }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

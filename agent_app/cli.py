@@ -933,6 +933,116 @@ def main() -> int:
     federation_notification_dlq_export_parser.add_argument("--format", default="json", choices=["json", "csv"], help="Export format (default: json)")
     federation_notification_dlq_export_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_export)
 
+    # Phase 51: federation notification template subcommands
+    federation_notification_template_parser = federation_notification_sub.add_parser("template", help="Federation notification template commands (Phase 51)")
+    federation_notification_template_sub = federation_notification_template_parser.add_subparsers(dest="federation_notification_template_command")
+
+    fed_nt_list_parser = federation_notification_template_sub.add_parser("list", help="List notification templates")
+    fed_nt_list_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_list_parser.add_argument("--event-type", default=None, help="Filter by event type")
+    fed_nt_list_parser.add_argument("--channel", default=None, help="Filter by channel")
+    fed_nt_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    fed_nt_list_parser.set_defaults(func=_cmd_policy_federation_notification_template_list)
+
+    fed_nt_show_parser = federation_notification_template_sub.add_parser("show", help="Show template detail")
+    fed_nt_show_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_show_parser.add_argument("--template-id", required=True, help="Template ID (fnt_...)")
+    fed_nt_show_parser.set_defaults(func=_cmd_policy_federation_notification_template_show)
+
+    fed_nt_create_parser = federation_notification_template_sub.add_parser("create", help="Create a notification template")
+    fed_nt_create_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_create_parser.add_argument("--name", required=True, help="Template name")
+    fed_nt_create_parser.add_argument("--body-file", required=True, help="Path to file containing body template")
+    fed_nt_create_parser.add_argument("--subject", default=None, help="Subject template string")
+    fed_nt_create_parser.add_argument("--event-type", default=None, help="Event type scope")
+    fed_nt_create_parser.add_argument("--channel", default=None, help="Channel scope")
+    fed_nt_create_parser.add_argument("--format", default="text", choices=["text", "html", "json"], help="Template format (default: text)")
+    fed_nt_create_parser.add_argument("--federation-id", default=None, help="Federation scope")
+    fed_nt_create_parser.set_defaults(func=_cmd_policy_federation_notification_template_create)
+
+    fed_nt_update_parser = federation_notification_template_sub.add_parser("update", help="Update a notification template")
+    fed_nt_update_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_update_parser.add_argument("--template-id", required=True, help="Template ID (fnt_...)")
+    fed_nt_update_parser.add_argument("--name", default=None, help="New template name")
+    fed_nt_update_parser.add_argument("--body-file", default=None, help="Path to file containing new body template")
+    fed_nt_update_parser.add_argument("--subject", default=None, help="New subject template string")
+    fed_nt_update_parser.add_argument("--enabled", default=None, type=bool, help="Enable/disable template")
+    fed_nt_update_parser.set_defaults(func=_cmd_policy_federation_notification_template_update)
+
+    fed_nt_disable_parser = federation_notification_template_sub.add_parser("disable", help="Disable a notification template (soft delete)")
+    fed_nt_disable_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_disable_parser.add_argument("--template-id", required=True, help="Template ID (fnt_...)")
+    fed_nt_disable_parser.set_defaults(func=_cmd_policy_federation_notification_template_disable)
+
+    fed_nt_render_parser = federation_notification_template_sub.add_parser("render", help="Preview render a template")
+    fed_nt_render_parser.add_argument("--config", required=True, help="Config file path")
+    fed_nt_render_parser.add_argument("--template-id", required=True, help="Template ID (fnt_...)")
+    fed_nt_render_parser.add_argument("--context-file", required=True, help="Path to JSON file with context variables")
+    fed_nt_render_parser.set_defaults(func=_cmd_policy_federation_notification_template_render)
+
+    # Phase 51: federation notification preference subcommands
+    federation_notification_preference_parser = federation_notification_sub.add_parser("preference", help="Federation notification preference commands (Phase 51)")
+    federation_notification_preference_sub = federation_notification_preference_parser.add_subparsers(dest="federation_notification_preference_command")
+
+    fed_np_list_parser = federation_notification_preference_sub.add_parser("list", help="List notification preferences")
+    fed_np_list_parser.add_argument("--config", required=True, help="Config file path")
+    fed_np_list_parser.add_argument("--subject-type", default=None, help="Filter by subject type")
+    fed_np_list_parser.add_argument("--subject-id", default=None, help="Filter by subject ID")
+    fed_np_list_parser.add_argument("--channel", default=None, help="Filter by channel")
+    fed_np_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    fed_np_list_parser.set_defaults(func=_cmd_policy_federation_notification_preference_list)
+
+    fed_np_set_parser = federation_notification_preference_sub.add_parser("set", help="Set a notification preference")
+    fed_np_set_parser.add_argument("--config", required=True, help="Config file path")
+    fed_np_set_parser.add_argument("--subject-type", required=True, help="Subject type")
+    fed_np_set_parser.add_argument("--subject-id", required=True, help="Subject ID")
+    fed_np_set_parser.add_argument("--channel", default=None, help="Channel scope")
+    fed_np_set_parser.add_argument("--event-type", default=None, help="Event type scope")
+    fed_np_set_parser.add_argument("--decision", required=True, choices=["inherit", "opt_in", "opt_out"], help="Preference decision")
+    fed_np_set_parser.add_argument("--federation-id", default=None, help="Federation scope")
+    fed_np_set_parser.add_argument("--reason", default=None, help="Human-readable reason")
+    fed_np_set_parser.set_defaults(func=_cmd_policy_federation_notification_preference_set)
+
+    fed_np_show_parser = federation_notification_preference_sub.add_parser("show", help="Show preference detail")
+    fed_np_show_parser.add_argument("--config", required=True, help="Config file path")
+    fed_np_show_parser.add_argument("--preference-id", required=True, help="Preference ID (fnp_...)")
+    fed_np_show_parser.set_defaults(func=_cmd_policy_federation_notification_preference_show)
+
+    fed_np_delete_parser = federation_notification_preference_sub.add_parser("delete", help="Delete a notification preference")
+    fed_np_delete_parser.add_argument("--config", required=True, help="Config file path")
+    fed_np_delete_parser.add_argument("--preference-id", required=True, help="Preference ID (fnp_...)")
+    fed_np_delete_parser.set_defaults(func=_cmd_policy_federation_notification_preference_delete)
+
+    fed_np_explain_parser = federation_notification_preference_sub.add_parser("explain", help="Explain effective notification preference")
+    fed_np_explain_parser.add_argument("--config", required=True, help="Config file path")
+    fed_np_explain_parser.add_argument("--subject-type", required=True, help="Subject type")
+    fed_np_explain_parser.add_argument("--subject-id", required=True, help="Subject ID")
+    fed_np_explain_parser.add_argument("--channel", default=None, help="Channel scope")
+    fed_np_explain_parser.add_argument("--event-type", default=None, help="Event type scope")
+    fed_np_explain_parser.add_argument("--federation-id", default=None, help="Federation scope")
+    fed_np_explain_parser.set_defaults(func=_cmd_policy_federation_notification_preference_explain)
+
+    # Phase 51: federation notification DLQ replay-original subcommand
+    fed_dlq_replay_original_parser = federation_notification_dlq_sub.add_parser("replay-original", help="Replay original webhook payload from DLQ (Phase 51)")
+    fed_dlq_replay_original_parser.add_argument("--config", required=True, help="Config file path")
+    fed_dlq_replay_original_parser.add_argument("--dlq-id", required=True, help="DLQ entry ID (fdlq_...)")
+    fed_dlq_replay_original_parser.add_argument("--dry-run", action="store_true", help="Dry run — do not actually send")
+    fed_dlq_replay_original_parser.add_argument("--target-url", default=None, help="Override target URL")
+    fed_dlq_replay_original_parser.add_argument("--key-id", default=None, help="Signing key ID to use")
+    fed_dlq_replay_original_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_replay_original)
+
+    # Phase 51: federation webhook verify subcommand
+    fed_webhook_parser = federation_notification_sub.add_parser("webhook", help="Federation webhook commands (Phase 51)")
+    fed_webhook_sub = fed_webhook_parser.add_subparsers(dest="federation_webhook_command")
+
+    fed_webhook_verify_parser = fed_webhook_sub.add_parser("verify", help="Verify a webhook signature")
+    fed_webhook_verify_parser.add_argument("--config", required=True, help="Config file path")
+    fed_webhook_verify_parser.add_argument("--body-file", required=True, help="Path to file containing the request body")
+    fed_webhook_verify_parser.add_argument("--signature", required=True, help="Signature header value (v1=...)")
+    fed_webhook_verify_parser.add_argument("--timestamp", required=True, help="Signature timestamp (ISO format)")
+    fed_webhook_verify_parser.add_argument("--nonce", required=True, help="Signature nonce")
+    fed_webhook_verify_parser.set_defaults(func=_cmd_policy_federation_webhook_verify)
+
     federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
     federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
     federation_escalate_due_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
@@ -1477,7 +1587,46 @@ def main() -> int:
                     return asyncio.run(_cmd_policy_federation_notification_dlq_purge(args))
                 if args.federation_notification_dlq_command == "export":
                     return asyncio.run(_cmd_policy_federation_notification_dlq_export(args))
+                # Phase 51: DLQ replay-original
+                if args.federation_notification_dlq_command == "replay-original":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_replay_original(args))
                 federation_notification_dlq_parser.print_help()
+                return 1
+            # Phase 51: federation notification template subcommands
+            if args.federation_notification_command == "template":
+                if args.federation_notification_template_command == "list":
+                    return asyncio.run(_cmd_policy_federation_notification_template_list(args))
+                if args.federation_notification_template_command == "show":
+                    return asyncio.run(_cmd_policy_federation_notification_template_show(args))
+                if args.federation_notification_template_command == "create":
+                    return asyncio.run(_cmd_policy_federation_notification_template_create(args))
+                if args.federation_notification_template_command == "update":
+                    return asyncio.run(_cmd_policy_federation_notification_template_update(args))
+                if args.federation_notification_template_command == "disable":
+                    return asyncio.run(_cmd_policy_federation_notification_template_disable(args))
+                if args.federation_notification_template_command == "render":
+                    return asyncio.run(_cmd_policy_federation_notification_template_render(args))
+                federation_notification_template_parser.print_help()
+                return 1
+            # Phase 51: federation notification preference subcommands
+            if args.federation_notification_command == "preference":
+                if args.federation_notification_preference_command == "list":
+                    return asyncio.run(_cmd_policy_federation_notification_preference_list(args))
+                if args.federation_notification_preference_command == "set":
+                    return asyncio.run(_cmd_policy_federation_notification_preference_set(args))
+                if args.federation_notification_preference_command == "show":
+                    return asyncio.run(_cmd_policy_federation_notification_preference_show(args))
+                if args.federation_notification_preference_command == "delete":
+                    return asyncio.run(_cmd_policy_federation_notification_preference_delete(args))
+                if args.federation_notification_preference_command == "explain":
+                    return asyncio.run(_cmd_policy_federation_notification_preference_explain(args))
+                federation_notification_preference_parser.print_help()
+                return 1
+            # Phase 51: federation webhook subcommands
+            if args.federation_notification_command == "webhook":
+                if args.federation_webhook_command == "verify":
+                    return asyncio.run(_cmd_policy_federation_webhook_verify(args))
+                fed_webhook_parser.print_help()
                 return 1
             federation_notification_parser.print_help()
             return 1
@@ -8529,6 +8678,575 @@ async def _cmd_policy_federation_worker_start(args: argparse.Namespace) -> int:
     print(f"Tick Count:       {state.tick_count}")
     print(f"Last Tick At:     {state.last_tick_at.isoformat() if state.last_tick_at else '-'}")
     print(f"Last Error:       {state.last_error or '-'}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 51: Template, Preference, and Webhook CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_template_list(args: argparse.Namespace) -> int:
+    """List federation notification templates."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await store.list(
+            event_type=args.event_type,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing templates: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No templates found.")
+        return 0
+
+    print(f"{'Template ID':<24} {'Name':<20} {'Event Type':<20} {'Channel':<10} {'Format':<6} {'Enabled':<8} {'Version':<8}")
+    print("-" * 96)
+    for t in results:
+        tid = t.template_id[:24]
+        name = t.name[:20]
+        etype = (t.event_type or "-")[:20]
+        ch = (t.channel or "-")[:10]
+        fmt = t.format.value[:6]
+        en = str(t.enabled)[:8]
+        ver = str(t.version)[:8]
+        print(f"{tid:<24} {name:<20} {etype:<20} {ch:<10} {fmt:<6} {en:<8} {ver:<8}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_template_show(args: argparse.Namespace) -> int:
+    """Show federation notification template detail."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        template = await store.get(args.template_id)
+    except Exception as exc:
+        print(f"Error fetching template: {exc}", file=sys.stderr)
+        return 1
+
+    if template is None:
+        print(f"Template '{args.template_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Template ID:      {template.template_id}")
+    print(f"Name:             {template.name}")
+    print(f"Description:      {template.description or '-'}")
+    print(f"Event Type:       {template.event_type or '-'}")
+    print(f"Channel:          {template.channel or '-'}")
+    print(f"Federation ID:    {template.federation_id or '-'}")
+    print(f"Subject Template: {template.subject_template or '-'}")
+    print(f"Body Template:    {template.body_template}")
+    print(f"Format:           {template.format.value}")
+    print(f"Enabled:          {template.enabled}")
+    print(f"Version:          {template.version}")
+    print(f"Created At:       {template.created_at.isoformat()}")
+    print(f"Updated At:       {template.updated_at.isoformat()}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_template_create(args: argparse.Namespace) -> int:
+    """Create a federation notification template."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation_notification_template import (
+        FederationNotificationTemplate,
+        FederationNotificationTemplateFormat,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    # Read body from file
+    try:
+        with open(args.body_file) as f:
+            body_template = f.read()
+    except Exception as exc:
+        print(f"Error reading body file: {exc}", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    template = FederationNotificationTemplate(
+        template_id=f"fnt_{uuid.uuid4().hex}",
+        name=args.name,
+        body_template=body_template,
+        subject_template=args.subject,
+        event_type=args.event_type,
+        channel=args.channel,
+        format=FederationNotificationTemplateFormat(args.format),
+        federation_id=args.federation_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+    try:
+        created = await store.create(template)
+    except Exception as exc:
+        print(f"Error creating template: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Template created: {created.template_id}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_template_update(args: argparse.Namespace) -> int:
+    """Update a federation notification template."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        template = await store.get(args.template_id)
+    except Exception as exc:
+        print(f"Error fetching template: {exc}", file=sys.stderr)
+        return 1
+
+    if template is None:
+        print(f"Template '{args.template_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Apply updates
+    from datetime import datetime, timezone
+    from agent_app.governance.policy_rollout_federation_notification_template import FederationNotificationTemplate
+
+    update_data = template.model_dump()
+    if args.name is not None:
+        update_data["name"] = args.name
+    if args.body_file is not None:
+        try:
+            with open(args.body_file) as f:
+                update_data["body_template"] = f.read()
+        except Exception as exc:
+            print(f"Error reading body file: {exc}", file=sys.stderr)
+            return 1
+    if args.subject is not None:
+        update_data["subject_template"] = args.subject
+    if args.enabled is not None:
+        update_data["enabled"] = args.enabled
+    update_data["version"] = template.version + 1
+    update_data["updated_at"] = datetime.now(timezone.utc)
+
+    updated_template = FederationNotificationTemplate(**update_data)
+
+    try:
+        result = await store.update(updated_template)
+    except Exception as exc:
+        print(f"Error updating template: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Template updated: {result.template_id} (version {result.version})")
+    return 0
+
+
+async def _cmd_policy_federation_notification_template_disable(args: argparse.Namespace) -> int:
+    """Disable a federation notification template (soft delete)."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        await store.delete(args.template_id)
+    except Exception as exc:
+        print(f"Error disabling template: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Template '{args.template_id}' disabled.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_template_render(args: argparse.Namespace) -> int:
+    """Preview render a federation notification template."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    template_service = getattr(app, "federation_notification_template_service", None)
+    if template_service is None:
+        print("Federation notification template service not configured.", file=sys.stderr)
+        return 1
+
+    # Read context from JSON file
+    try:
+        with open(args.context_file) as f:
+            context = json.load(f)
+    except Exception as exc:
+        print(f"Error reading context file: {exc}", file=sys.stderr)
+        return 1
+
+    # Get template to determine event_type and channel
+    store = getattr(app, "federation_notification_template_store", None)
+    if store is None:
+        print("Federation notification template store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        template = await store.get(args.template_id)
+    except Exception as exc:
+        print(f"Error fetching template: {exc}", file=sys.stderr)
+        return 1
+
+    if template is None:
+        print(f"Template '{args.template_id}' not found.", file=sys.stderr)
+        return 1
+
+    try:
+        rendered = await template_service.render(
+            event_type=template.event_type or "generic",
+            channel=template.channel or "email",
+            federation_id=template.federation_id,
+            context=context,
+        )
+    except Exception as exc:
+        print(f"Error rendering template: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Template ID:    {rendered.template_id}")
+    print(f"Version:        {rendered.template_version}")
+    print(f"Subject:        {rendered.subject or '-'}")
+    print(f"Body:           {rendered.body}")
+    print(f"Format:         {rendered.format.value}")
+    print(f"Context Keys:   {', '.join(rendered.context_keys) if rendered.context_keys else '-'}")
+    print(f"Rendered At:    {rendered.rendered_at.isoformat()}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_preference_list(args: argparse.Namespace) -> int:
+    """List federation notification preferences."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_preference_store", None)
+    if store is None:
+        print("Federation notification preference store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        results = await store.list_preferences(
+            subject_type=args.subject_type,
+            subject_id=args.subject_id,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Error listing preferences: {exc}", file=sys.stderr)
+        return 1
+
+    if not results:
+        print("No preferences found.")
+        return 0
+
+    print(f"{'Preference ID':<24} {'Subject Type':<16} {'Subject ID':<20} {'Channel':<10} {'Event Type':<20} {'Decision':<10}")
+    print("-" * 100)
+    for p in results:
+        pid = p.preference_id[:24]
+        st = p.subject_type.value[:16]
+        sid = p.subject_id[:20]
+        ch = (p.channel or "-")[:10]
+        et = (p.event_type or "-")[:20]
+        dec = p.decision.value[:10]
+        print(f"{pid:<24} {st:<16} {sid:<20} {ch:<10} {et:<20} {dec:<10}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_preference_set(args: argparse.Namespace) -> int:
+    """Set a federation notification preference."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation_notification_preference import (
+        FederationNotificationPreference,
+        FederationNotificationPreferenceDecision,
+        FederationNotificationPreferenceSubjectType,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_preference_store", None)
+    if store is None:
+        print("Federation notification preference store not configured.", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    preference = FederationNotificationPreference(
+        preference_id=f"fnp_{uuid.uuid4().hex}",
+        subject_type=FederationNotificationPreferenceSubjectType(args.subject_type),
+        subject_id=args.subject_id,
+        channel=args.channel,
+        event_type=args.event_type,
+        decision=FederationNotificationPreferenceDecision(args.decision),
+        federation_id=args.federation_id,
+        reason=args.reason,
+        created_at=now,
+        updated_at=now,
+    )
+
+    try:
+        created = await store.set_preference(preference)
+    except Exception as exc:
+        print(f"Error setting preference: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Preference set: {created.preference_id} ({created.decision.value})")
+    return 0
+
+
+async def _cmd_policy_federation_notification_preference_show(args: argparse.Namespace) -> int:
+    """Show federation notification preference detail."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_preference_store", None)
+    if store is None:
+        print("Federation notification preference store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        pref = await store.get_preference(args.preference_id)
+    except Exception as exc:
+        print(f"Error fetching preference: {exc}", file=sys.stderr)
+        return 1
+
+    if pref is None:
+        print(f"Preference '{args.preference_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Preference ID:  {pref.preference_id}")
+    print(f"Subject Type:   {pref.subject_type.value}")
+    print(f"Subject ID:     {pref.subject_id}")
+    print(f"Federation ID:  {pref.federation_id or '-'}")
+    print(f"Approval ID:    {pref.approval_id or '-'}")
+    print(f"Event Type:     {pref.event_type or '-'}")
+    print(f"Channel:        {pref.channel or '-'}")
+    print(f"Decision:       {pref.decision.value}")
+    print(f"Reason:         {pref.reason or '-'}")
+    print(f"Created By:     {pref.created_by or '-'}")
+    print(f"Created At:     {pref.created_at.isoformat()}")
+    print(f"Updated At:     {pref.updated_at.isoformat()}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_preference_delete(args: argparse.Namespace) -> int:
+    """Delete a federation notification preference."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "federation_notification_preference_store", None)
+    if store is None:
+        print("Federation notification preference store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        await store.delete_preference(args.preference_id)
+    except Exception as exc:
+        print(f"Error deleting preference: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Preference '{args.preference_id}' deleted.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_preference_explain(args: argparse.Namespace) -> int:
+    """Explain effective notification preference."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    preference_service = getattr(app, "federation_notification_preference_service", None)
+    if preference_service is None:
+        print("Federation notification preference service not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        explanation = await preference_service.explain_preference(
+            subject_type=args.subject_type,
+            subject_id=args.subject_id,
+            event_type=args.event_type or "generic",
+            channel=args.channel or "email",
+            federation_id=args.federation_id,
+        )
+    except Exception as exc:
+        print(f"Error explaining preference: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Decision:        {explanation.decision.value}")
+    print(f"Matched Rule:    {explanation.matched_preference_id or '-'}")
+    print(f"Specificity:     {explanation.specificity}")
+    print(f"Is Mandatory:    {explanation.is_mandatory}")
+    print(f"System Default:  {explanation.system_default}")
+    print(f"Reason:          {explanation.reason or '-'}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_replay_original(args: argparse.Namespace) -> int:
+    """Replay original webhook payload from DLQ."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "federation_notification_service", None)
+    if service is None:
+        print("Federation notification service not configured.", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        result = await service.replay_original(
+            dlq_id=args.dlq_id,
+            dlq_store=dlq_store,
+            dry_run=args.dry_run,
+            target_url=args.target_url,
+        )
+    except Exception as exc:
+        print(f"Error replaying DLQ entry: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Replay ID:       {result.replay_id}")
+    print(f"DLQ ID:          {result.dlq_id}")
+    print(f"Notification ID: {result.notification_id}")
+    print(f"Success:         {result.success}")
+    print(f"Replay Count:    {result.replay_count}")
+    if result.last_replay_at:
+        print(f"Last Replay At:  {result.last_replay_at.isoformat()}")
+    if result.error:
+        print(f"Error:           {result.error}")
+
+    return 0
+
+
+async def _cmd_policy_federation_webhook_verify(args: argparse.Namespace) -> int:
+    """Verify a webhook signature."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    signature_service = getattr(app, "federation_webhook_signature_service", None)
+    if signature_service is None:
+        print("Federation webhook signature service not configured.", file=sys.stderr)
+        return 1
+
+    # Read body from file
+    try:
+        with open(args.body_file) as f:
+            body = f.read()
+    except Exception as exc:
+        print(f"Error reading body file: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        result = signature_service.verify(
+            body=body,
+            signature=args.signature,
+            timestamp_str=args.timestamp,
+            nonce=args.nonce,
+        )
+    except Exception as exc:
+        print(f"Error verifying signature: {exc}", file=sys.stderr)
+        return 1
+
+    # IMPORTANT: Only output matched_key_id, NEVER the key itself
+    print(f"Valid:           {result.valid}")
+    print(f"Reason:          {result.reason or '-'}")
+    print(f"Matched Key ID:  {result.matched_key_id or '-'}")
 
     return 0
 

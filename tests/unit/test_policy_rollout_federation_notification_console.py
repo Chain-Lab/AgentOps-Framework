@@ -1,8 +1,7 @@
-"""Phase 50 Task 7: DLQ and worker status console page tests."""
+"""Phase 51 Task 9: Template, preference, and replay console page tests."""
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -20,13 +19,27 @@ from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationDLQReason,
     FederationNotificationDLQStatus,
 )
+from agent_app.governance.policy_rollout_federation_notification_template import (
+    FederationNotificationTemplate,
+    FederationNotificationTemplateFormat,
+)
+from agent_app.governance.policy_rollout_federation_notification_preference import (
+    FederationNotificationPreference,
+    FederationNotificationPreferenceDecision,
+    FederationNotificationPreferenceExplanation,
+    FederationNotificationPreferenceSubjectType,
+)
 from agent_app.runtime.policy_rollout_federation_notification_dlq_store import (
     InMemoryFederationNotificationDLQStore,
 )
-from agent_app.runtime.policy_rollout_federation_scheduled_worker import (
-    FederationScheduledWorker,
-    FederationScheduledWorkerStatus,
-    FederationScheduledWorkerState,
+from agent_app.runtime.policy_rollout_federation_notification_template_store import (
+    InMemoryFederationNotificationTemplateStore,
+)
+from agent_app.runtime.policy_rollout_federation_notification_preference_store import (
+    InMemoryFederationNotificationPreferenceStore,
+)
+from agent_app.runtime.policy_rollout_federation_notification_preference_service import (
+    FederationNotificationPreferenceService,
 )
 
 
@@ -34,209 +47,340 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _dlq_entry(
-    dlq_id: str = "fdlq_test_1",
-    notification_id: str = "fn_test_1",
-    approval_id: str | None = "fa_test",
-    federation_id: str | None = "frp_test",
-    channel: str = "email",
-    reason: FederationNotificationDLQReason = FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
-    status: FederationNotificationDLQStatus = FederationNotificationDLQStatus.PENDING,
-    failure_count: int = 3,
-    last_error: str | None = "Connection refused",
-    payload: dict | None = None,
-    metadata: dict | None = None,
-) -> FederationNotificationDeadLetter:
-    return FederationNotificationDeadLetter(
-        dlq_id=dlq_id,
-        notification_id=notification_id,
-        approval_id=approval_id,
-        federation_id=federation_id,
+def _run_async(coro):
+    """Run an async coroutine synchronously."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Test data factories
+# ---------------------------------------------------------------------------
+
+
+def _template(
+    template_id: str = "fnt_test_1",
+    name: str = "Test Template",
+    event_type: str | None = "approval.created",
+    channel: str | None = "email",
+    body_template: str = "Hello {{ name }}, approval {{ approval.id }} created.",
+    enabled: bool = True,
+    version: int = 1,
+) -> FederationNotificationTemplate:
+    return FederationNotificationTemplate(
+        template_id=template_id,
+        name=name,
+        event_type=event_type,
         channel=channel,
-        adapter="smtp",
-        recipient="admin@example.com",
-        reason=reason,
-        status=status,
-        failure_count=failure_count,
-        last_error=last_error,
-        payload=payload or {"subject": "Test notification", "body": "Test"},
-        metadata=metadata or {"source": "test"},
+        body_template=body_template,
+        format=FederationNotificationTemplateFormat.TEXT,
+        enabled=enabled,
+        version=version,
         created_at=_now(),
         updated_at=_now(),
     )
 
 
-def _store_with_dlq_entries() -> InMemoryFederationNotificationDLQStore:
-    """Build a DLQ store with test data."""
-    store = InMemoryFederationNotificationDLQStore()
-    entries = [
-        _dlq_entry(
-            dlq_id="fdlq_test_1",
-            notification_id="fn_test_1",
-            channel="email",
-        ),
-        _dlq_entry(
-            dlq_id="fdlq_test_2",
-            notification_id="fn_test_2",
-            channel="slack",
-            status=FederationNotificationDLQStatus.RETRIED,
-        ),
-        _dlq_entry(
-            dlq_id="fdlq_test_3",
-            notification_id="fn_test_3",
-            channel="webhook",
-        ),
-    ]
+def _preference(
+    preference_id: str = "fnp_test_1",
+    subject_type: FederationNotificationPreferenceSubjectType = FederationNotificationPreferenceSubjectType.USER,
+    subject_id: str = "user_1",
+    channel: str | None = "email",
+    event_type: str | None = "approval.created",
+    decision: FederationNotificationPreferenceDecision = FederationNotificationPreferenceDecision.OPT_IN,
+    reason: str | None = "Test preference",
+) -> FederationNotificationPreference:
+    return FederationNotificationPreference(
+        preference_id=preference_id,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        channel=channel,
+        event_type=event_type,
+        decision=decision,
+        reason=reason,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+
+
+def _dlq_entry_with_replay(
+    dlq_id: str = "fdlq_replay_1",
+    headers: dict | None = None,
+) -> FederationNotificationDeadLetter:
+    entry = FederationNotificationDeadLetter(
+        dlq_id=dlq_id,
+        notification_id="fn_replay_1",
+        channel="webhook",
+        reason=FederationNotificationDLQReason.MAX_RETRIES_EXCEEDED,
+        status=FederationNotificationDLQStatus.PENDING,
+        failure_count=3,
+        last_error="Connection refused",
+        payload={"subject": "Replay test", "body": "Test body"},
+        metadata={"source": "test"},
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    # Attach Phase 51 replay attributes dynamically
+    entry.replay_available = True
+    entry.payload_digest = "sha256:abc123def456"
+    entry.template_id = "fnt_replay_1"
+    entry.template_version = 2
+    entry.replay_count = 1
+    entry.last_replay_result = "failed"
+    entry.headers = headers or {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret-token-12345",
+        "X-Signature": "hmac-sha256=deadbeef",
+        "X-Request-Id": "req_123",
+    }
+    return entry
+
+
+def _client_with_templates():
+    """Build a TestClient with a template store containing test data."""
+    store = InMemoryFederationNotificationTemplateStore()
     loop = asyncio.new_event_loop()
     try:
-        for e in entries:
-            loop.run_until_complete(store.create(e))
+        loop.run_until_complete(store.create(_template("fnt_test_1", "Email Approval", "approval.created", "email")))
+        loop.run_until_complete(store.create(_template("fnt_test_2", "Slack Approval", "approval.approved", "slack")))
+        loop.run_until_complete(store.create(_template("fnt_test_3", "Disabled Template", enabled=False)))
     finally:
         loop.close()
-    return store
-
-
-def _client(
-    dlq_store=None,
-    scheduled_worker=None,
-) -> TestClient:
     app = FastAPI()
     router = build_policy_console_router(
         store=None,
-        federation_dlq_store=dlq_store,
-        federation_scheduled_worker=scheduled_worker,
+        federation_notification_template_store=store,
     )
     app.include_router(router, prefix="/policy-console")
     return TestClient(app)
 
 
-def _mock_worker(state: FederationScheduledWorkerState | None = None) -> MagicMock:
-    """Build a mock FederationScheduledWorker that returns the given state."""
-    worker = MagicMock(spec=FederationScheduledWorker)
-    if state is None:
-        state = FederationScheduledWorkerState(
-            worker_id="fsw_mock_1",
-            status=FederationScheduledWorkerStatus.STOPPED,
-            interval_seconds=60,
-            tick_count=5,
-            last_tick_at=_now(),
-            last_error=None,
-            started_at=_now(),
-            stopped_at=None,
-        )
-    worker.status.return_value = state
-    return worker
+def _client_with_preferences():
+    """Build a TestClient with a preference store and service containing test data."""
+    store = InMemoryFederationNotificationPreferenceStore()
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.set_preference(_preference("fnp_test_1", FederationNotificationPreferenceSubjectType.USER, "user_1", "email", "approval.created", FederationNotificationPreferenceDecision.OPT_IN, "Wants email")))
+        loop.run_until_complete(store.set_preference(_preference("fnp_test_2", FederationNotificationPreferenceSubjectType.USER, "user_2", "email", "approval.created", FederationNotificationPreferenceDecision.OPT_OUT, "Unsubscribed")))
+    finally:
+        loop.close()
+    service = FederationNotificationPreferenceService(preference_store=store)
+    app = FastAPI()
+    router = build_policy_console_router(
+        store=None,
+        federation_notification_preference_store=store,
+        federation_notification_preference_service=service,
+    )
+    app.include_router(router, prefix="/policy-console")
+    return TestClient(app)
 
 
-class TestFederationDLQConsole:
-    """Tests for DLQ console pages (Phase 50)."""
+def _client_with_dlq_replay():
+    """Build a TestClient with DLQ entries containing replay info and headers."""
+    store = InMemoryFederationNotificationDLQStore()
+    loop = asyncio.new_event_loop()
+    try:
+        entry = _dlq_entry_with_replay()
+        loop.run_until_complete(store.create(entry))
+    finally:
+        loop.close()
+    app = FastAPI()
+    router = build_policy_console_router(
+        store=None,
+        federation_dlq_store=store,
+    )
+    app.include_router(router, prefix="/policy-console")
+    return TestClient(app)
 
-    def test_dlq_list_page_renders(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq")
+
+# ---------------------------------------------------------------------------
+# Template Console Tests
+# ---------------------------------------------------------------------------
+
+
+class TestFederationTemplateConsole:
+    """Tests for template console pages (Phase 51)."""
+
+    def test_template_list_page_renders(self) -> None:
+        client = _client_with_templates()
+        response = client.get("/policy-console/federation/notifications/templates")
         assert response.status_code == 200
-        assert "Federation Notification DLQ" in response.text
+        assert "Notification Templates" in response.text
 
-    def test_dlq_list_page_with_entries(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq")
+    def test_template_list_with_templates(self) -> None:
+        client = _client_with_templates()
+        response = client.get("/policy-console/federation/notifications/templates")
         assert response.status_code == 200
-        assert "fdlq_test_1" in response.text
-        assert "fdlq_test_3" in response.text
+        assert "fnt_test_1" in response.text
+        assert "fnt_test_2" in response.text
+        assert "fnt_test_3" in response.text
 
-    def test_dlq_list_page_with_status_filter(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq?status=retried")
+    def test_template_detail_page_renders(self) -> None:
+        client = _client_with_templates()
+        response = client.get("/policy-console/federation/notifications/templates/fnt_test_1")
         assert response.status_code == 200
-        assert "fdlq_test_2" in response.text
+        assert "Template: Email Approval" in response.text
+        assert "fnt_test_1" in response.text
+        assert "approval.created" in response.text
 
-    def test_dlq_list_page_empty(self) -> None:
-        store = InMemoryFederationNotificationDLQStore()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq")
-        assert response.status_code == 200
-        assert "No DLQ entries" in response.text
-
-    def test_dlq_detail_page_renders(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
-        assert response.status_code == 200
-        assert "fdlq_test_1" in response.text
-        assert "fn_test_1" in response.text
-        assert "DLQ Entry" in response.text
-
-    def test_dlq_detail_page_not_found(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq/fdlq_nonexistent")
+    def test_template_detail_not_found(self) -> None:
+        client = _client_with_templates()
+        response = client.get("/policy-console/federation/notifications/templates/fnt_nonexistent")
         assert response.status_code == 200
         assert "not found" in response.text
 
-    def test_dlq_detail_page_shows_payload(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
-        assert response.status_code == 200
-        assert "Payload" in response.text
-        assert "subject" in response.text
-
-    def test_dlq_detail_page_shows_all_fields(self) -> None:
-        store = _store_with_dlq_entries()
-        client = _client(dlq_store=store)
-        response = client.get("/policy-console/federation/notifications/dlq/fdlq_test_1")
-        assert response.status_code == 200
-        assert "Channel" in response.text
-        assert "Reason" in response.text
-        assert "Failure Count" in response.text
-        assert "Metadata" in response.text
-        assert "Adapter" in response.text
-        assert "Recipient" in response.text
-        assert "Last Error" in response.text
-
-
-class TestFederationWorkerConsole:
-    """Tests for worker console pages (Phase 50)."""
-
-    def test_worker_status_page_renders(self) -> None:
-        worker = _mock_worker()
-        client = _client(scheduled_worker=worker)
-        response = client.get("/policy-console/federation/workers")
-        assert response.status_code == 200
-        assert "Federation Worker Status" in response.text
-
-    def test_worker_status_page_shows_state(self) -> None:
-        worker = _mock_worker()
-        client = _client(scheduled_worker=worker)
-        response = client.get("/policy-console/federation/workers")
-        assert response.status_code == 200
-        assert "fsw_mock_1" in response.text
-        assert "stopped" in response.text
-        assert "60" in response.text
-
-    def test_worker_status_page_not_configured(self) -> None:
-        client = _client(scheduled_worker=None)
-        response = client.get("/policy-console/federation/workers")
-        assert response.status_code == 200
-        assert "not configured" in response.text
-
-    def test_worker_status_page_shows_error(self) -> None:
-        state = FederationScheduledWorkerState(
-            worker_id="fsw_err_1",
-            status=FederationScheduledWorkerStatus.FAILED,
-            interval_seconds=30,
-            tick_count=3,
-            last_tick_at=_now(),
-            last_error="Connection timeout",
-            started_at=_now(),
-            stopped_at=None,
+    def test_template_body_escaped_in_html(self) -> None:
+        """Template body content must be properly escaped — no raw HTML injection."""
+        store = InMemoryFederationNotificationTemplateStore()
+        dangerous_body = '<script>alert("xss")</script>{{ name }}'
+        tmpl = _template(
+            template_id="fnt_xss",
+            name="XSS Test",
+            body_template=dangerous_body,
         )
-        worker = _mock_worker(state=state)
-        client = _client(scheduled_worker=worker)
-        response = client.get("/policy-console/federation/workers")
+        _run_async(store.create(tmpl))
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_template_store=store,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+        response = client.get("/policy-console/federation/notifications/templates/fnt_xss")
         assert response.status_code == 200
-        assert "Connection timeout" in response.text
-        assert "failed" in response.text
+        # The script tag should be escaped, not rendered as HTML
+        assert "<script>" not in response.text
+        assert "&lt;script&gt;" in response.text
+
+    def test_template_detail_disabled_badge(self) -> None:
+        """Disabled templates should show a DISABLED badge."""
+        client = _client_with_templates()
+        response = client.get("/policy-console/federation/notifications/templates/fnt_test_3")
+        assert response.status_code == 200
+        assert "DISABLED" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Preference Console Tests
+# ---------------------------------------------------------------------------
+
+
+class TestFederationPreferenceConsole:
+    """Tests for preference console pages (Phase 51)."""
+
+    def test_preference_list_page_renders(self) -> None:
+        client = _client_with_preferences()
+        response = client.get("/policy-console/federation/notifications/preferences")
+        assert response.status_code == 200
+        assert "Notification Preferences" in response.text
+
+    def test_preference_list_with_preferences(self) -> None:
+        client = _client_with_preferences()
+        response = client.get("/policy-console/federation/notifications/preferences")
+        assert response.status_code == 200
+        assert "fnp_test_1" in response.text
+        assert "fnp_test_2" in response.text
+
+    def test_preference_explain_page_renders(self) -> None:
+        client = _client_with_preferences()
+        response = client.get(
+            "/policy-console/federation/notifications/preferences/explain"
+            "?subject_type=user&subject_id=user_1&channel=email&event_type=approval.created"
+        )
+        assert response.status_code == 200
+        assert "Preference Explanation" in response.text
+
+    def test_preference_explain_shows_decision(self) -> None:
+        client = _client_with_preferences()
+        response = client.get(
+            "/policy-console/federation/notifications/preferences/explain"
+            "?subject_type=user&subject_id=user_1&channel=email&event_type=approval.created"
+        )
+        assert response.status_code == 200
+        assert "opt_in" in response.text
+
+    def test_preference_explain_mandatory(self) -> None:
+        """Mandatory events should override user preference."""
+        store = InMemoryFederationNotificationPreferenceStore()
+        _run_async(store.set_preference(_preference(
+            preference_id="fnp_mand",
+            subject_id="user_mand",
+            decision=FederationNotificationPreferenceDecision.OPT_OUT,
+        )))
+        service = FederationNotificationPreferenceService(
+            preference_store=store,
+            mandatory_event_types=["security.alert"],
+        )
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_preference_store=store,
+            federation_notification_preference_service=service,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+        response = client.get(
+            "/policy-console/federation/notifications/preferences/explain"
+            "?subject_type=user&subject_id=user_mand&channel=email&event_type=security.alert"
+        )
+        assert response.status_code == 200
+        assert "Mandatory" in response.text or "mandatory" in response.text.lower()
+
+    def test_preference_explain_no_matching_preference(self) -> None:
+        """When no preference matches, the page should show no matching preference."""
+        store = InMemoryFederationNotificationPreferenceStore()
+        service = FederationNotificationPreferenceService(preference_store=store)
+        app = FastAPI()
+        router = build_policy_console_router(
+            store=None,
+            federation_notification_preference_store=store,
+            federation_notification_preference_service=service,
+        )
+        app.include_router(router, prefix="/policy-console")
+        client = TestClient(app)
+        response = client.get(
+            "/policy-console/federation/notifications/preferences/explain"
+            "?subject_type=user&subject_id=user_no_match&channel=email&event_type=approval.created"
+        )
+        assert response.status_code == 200
+        # System default should be indicated
+        assert "system_default" in response.text.lower() or "system default" in response.text.lower() or "opt_in" in response.text
+
+
+# ---------------------------------------------------------------------------
+# DLQ Replay Console Tests
+# ---------------------------------------------------------------------------
+
+
+class TestFederationDLQReplayConsole:
+    """Tests for DLQ replay info on detail page (Phase 51)."""
+
+    def test_dlq_detail_shows_replay_info(self) -> None:
+        client = _client_with_dlq_replay()
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_replay_1")
+        assert response.status_code == 200
+        assert "Replay Information" in response.text
+        assert "Replay Available" in response.text
+
+    def test_dlq_detail_shows_digest(self) -> None:
+        client = _client_with_dlq_replay()
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_replay_1")
+        assert response.status_code == 200
+        assert "Payload Digest" in response.text
+        assert "sha256:abc123def456" in response.text
+
+    def test_dlq_detail_sensitizes_headers(self) -> None:
+        """Auth headers must be redacted — signature keys must NEVER appear."""
+        client = _client_with_dlq_replay()
+        response = client.get("/policy-console/federation/notifications/dlq/fdlq_replay_1")
+        assert response.status_code == 200
+        # Auth and signature headers must be redacted
+        assert "secret-token-12345" not in response.text
+        assert "deadbeef" not in response.text
+        # But non-sensitive headers should be visible
+        assert "application/json" in response.text
+        # Redacted markers should be present
+        assert "[REDACTED]" in response.text

@@ -828,6 +828,11 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         # Phase 50: federation DLQ store and scheduled worker
         federation_dlq_store=getattr(agent_app, "federation_dlq_store", None),
         federation_scheduled_worker=getattr(agent_app, "federation_scheduled_worker", None),
+        # Phase 51: federation notification template and preference stores/services
+        federation_notification_template_store=getattr(agent_app, "federation_notification_template_store", None),
+        federation_notification_template_service=getattr(agent_app, "federation_notification_template_service", None),
+        federation_notification_preference_store=getattr(agent_app, "federation_notification_preference_store", None),
+        federation_notification_preference_service=getattr(agent_app, "federation_notification_preference_service", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

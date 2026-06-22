@@ -1,0 +1,29 @@
+<h1>Preference Explanation</h1>
+
+<p>
+  <a href="{{ base_path }}/federation/notifications/preferences">&larr; Back to Preferences</a>
+</p>
+
+{% if not store_available %}
+<p class="empty-state">Preference service not configured.</p>
+{% elif explanation %}
+<table>
+  <tr><th>Decision</th><td>
+    {% if explanation.decision == "opt_in" %}
+    <span style="color: #2aa198;">{{ explanation.decision }}</span>
+    {% elif explanation.decision == "opt_out" %}
+    <span style="color: #dc322f;">{{ explanation.decision }}</span>
+    {% else %}
+    <span style="color: #b58900;">{{ explanation.decision }}</span>
+    {% endif %}
+  </td></tr>
+  <tr><th>Matched Preference ID</th><td>{{ explanation.matched_preference_id }}</td></tr>
+  <tr><th>Specificity</th><td>{{ explanation.specificity }}</td></tr>
+  <tr><th>Is Mandatory</th><td>{{ explanation.is_mandatory }}</td></tr>
+  <tr><th>System Default</th><td>{{ explanation.system_default }}</td></tr>
+  <tr><th>Reason</th><td>{{ explanation.reason }}</td></tr>
+  <tr><th>Reason Code</th><td>{{ explanation.reason_code }}</td></tr>
+</table>
+{% else %}
+<p>No matching preference found for the given parameters.</p>
+{% endif %}

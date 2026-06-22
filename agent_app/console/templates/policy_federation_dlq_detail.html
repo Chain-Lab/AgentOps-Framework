@@ -34,11 +34,32 @@
   <tr><th>Purged At</th><td>{{ entry.purged_at or "&mdash;" }}</td></tr>
 </table>
 
+<h3>Replay Information</h3>
+<table>
+  <tr><th>Replay Available</th><td>{{ entry.replay_available }}</td></tr>
+  <tr><th>Payload Digest</th><td>{{ entry.payload_digest or "&mdash;" }}</td></tr>
+  <tr><th>Template ID</th><td>{{ entry.template_id or "&mdash;" }}</td></tr>
+  <tr><th>Template Version</th><td>{{ entry.template_version or "&mdash;" }}</td></tr>
+  <tr><th>Replay Count</th><td>{{ entry.replay_count }}</td></tr>
+  <tr><th>Last Replay Result</th><td>{{ entry.last_replay_result or "&mdash;" }}</td></tr>
+</table>
+
+{% if entry.replay_available %}
+<form method="post" action="{{ base_path }}/federation/notifications/dlq/{{ entry.dlq_id }}/replay">
+  <button type="submit">Replay</button>
+</form>
+{% endif %}
+
 <h3>Payload</h3>
 <pre>{{ entry.payload_json }}</pre>
 
 <h3>Metadata</h3>
 <pre>{{ entry.metadata_json }}</pre>
+
+{% if entry.sensitized_headers %}
+<h3>Headers</h3>
+<pre>{{ entry.sensitized_headers }}</pre>
+{% endif %}
 
 {% else %}
 <h2>DLQ Entry</h2>

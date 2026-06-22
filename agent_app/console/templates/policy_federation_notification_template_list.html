@@ -1,0 +1,49 @@
+<h1>Notification Templates</h1>
+
+{% if filters.event_type %}
+<p>Filtering by event type: <strong>{{ filters.event_type }}</strong></p>
+{% endif %}
+{% if filters.channel %}
+<p>Filtering by channel: <strong>{{ filters.channel }}</strong></p>
+{% endif %}
+
+{% if not store_available %}
+<p class="empty-state">Template store not configured.</p>
+{% elif not templates %}
+<div class="empty-state">
+  <p>No notification templates found.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Template ID</th>
+      <th>Name</th>
+      <th>Event Type</th>
+      <th>Channel</th>
+      <th>Format</th>
+      <th>Enabled</th>
+      <th>Version</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in templates %}
+    <tr>
+      <td><a href="{{ base_path }}/federation/notifications/templates/{{ t.template_id }}">{{ t.template_id }}</a></td>
+      <td>{{ t.name }}</td>
+      <td>{{ t.event_type }}</td>
+      <td>{{ t.channel }}</td>
+      <td>{{ t.format }}</td>
+      <td>
+        {% if t.enabled %}
+        <span style="color: #2aa198;">yes</span>
+        {% else %}
+        <span style="color: #dc322f;">no</span>
+        {% endif %}
+      </td>
+      <td>{{ t.version }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
