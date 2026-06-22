@@ -44,9 +44,9 @@ class TestPhase52FederationHistoryEventTypes:
         assert "notification.alert.resolved" in values
         assert "notification.observability.report_exported" in values
 
-    def test_enum_member_count_42(self) -> None:
-        """Exactly 42 enum members defined (36 previous + 6 Phase 52 Task 10)."""
-        assert len(FederationHistoryEventType) == 42
+    def test_enum_member_count_51(self) -> None:
+        """Exactly 51 enum members defined (42 previous + 9 Phase 53)."""
+        assert len(FederationHistoryEventType) == 51
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""
