@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -348,3 +348,904 @@ class TestExpirationRunOnce:
             rc = _run_async(_cmd_policy_expiration_run_once(args))
 
         assert rc == 0
+
+
+# -- Phase 52: Notification observability CLI tests --
+
+
+def _make_obs_config(store_type="memory", path=".agent_app/test.db"):
+    """Build a mock observability config."""
+    cfg = MagicMock()
+    cfg.store = MagicMock()
+    cfg.store.type = store_type
+    cfg.store.path = path
+    return cfg
+
+
+def _make_alert_config(store_type="memory", path=".agent_app/test_alerts.db"):
+    """Build a mock alert config."""
+    cfg = MagicMock()
+    cfg.store = MagicMock()
+    cfg.store.type = store_type
+    cfg.store.path = path
+    return cfg
+
+
+def _make_sla_config():
+    """Build a mock SLA config."""
+    from agent_app.governance.policy_rollout_federation_notification_sla import (
+        NotificationSlaPolicy,
+    )
+    return NotificationSlaPolicy()
+
+
+def _make_delivery_event(
+    event_id="nde_test001",
+    notification_id="fn_test001",
+    event_type=None,
+    channel="console",
+    status="sent",
+    attempt=1,
+    latency_ms=120,
+    federation_id="frp_test001",
+    approval_id="ap_test001",
+):
+    """Build a mock delivery event."""
+    from agent_app.governance.policy_rollout_federation_notification_observability import (
+        NotificationDeliveryEvent,
+        NotificationDeliveryEventType,
+    )
+    if event_type is None:
+        event_type = NotificationDeliveryEventType.SENT
+    return NotificationDeliveryEvent(
+        event_id=event_id,
+        notification_id=notification_id,
+        approval_id=approval_id,
+        federation_id=federation_id,
+        channel=channel,
+        event_type=event_type,
+        status=status,
+        attempt=attempt,
+        latency_ms=latency_ms,
+        error_code=None,
+        error_message=None,
+        adapter_name="console",
+        template_id=None,
+        preference_decision=None,
+        metadata={},
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def _make_alert_event(
+    alert_id="nae_test001",
+    rule_id="nar_test001",
+    name="Test Alert",
+    severity="warning",
+    metric="failure_rate",
+    observed_value=0.15,
+    threshold=0.05,
+    federation_id="frp_test001",
+    channel="console",
+    message="High failure rate",
+    status="open",
+):
+    """Build a mock alert event."""
+    from agent_app.governance.policy_rollout_federation_notification_observability import (
+        NotificationAlertEvent,
+    )
+    return NotificationAlertEvent(
+        alert_id=alert_id,
+        rule_id=rule_id,
+        name=name,
+        severity=severity,
+        metric=metric,
+        observed_value=observed_value,
+        threshold=threshold,
+        federation_id=federation_id,
+        channel=channel,
+        message=message,
+        status=status,
+        created_at=datetime.now(timezone.utc),
+        acknowledged_at=None,
+        acknowledged_by=None,
+        resolved_at=None,
+        resolved_by=None,
+    )
+
+
+def _make_metric_window(
+    federation_id="frp_test001",
+    channel="console",
+    total=100,
+    sent=95,
+    failed=3,
+    suppressed=1,
+    dlq=1,
+    retry_scheduled=0,
+    success_rate=0.95,
+    failure_rate=0.03,
+    dlq_rate=0.01,
+    avg_latency_ms=150.0,
+    p95_latency_ms=300.0,
+):
+    """Build a mock metric window."""
+    from agent_app.governance.policy_rollout_federation_notification_observability import (
+        NotificationMetricWindow,
+    )
+    now = datetime.now(timezone.utc)
+    return NotificationMetricWindow(
+        window_start=now - timedelta(minutes=60),
+        window_end=now,
+        federation_id=federation_id,
+        channel=channel,
+        total=total,
+        sent=sent,
+        failed=failed,
+        suppressed=suppressed,
+        dlq=dlq,
+        retry_scheduled=retry_scheduled,
+        success_rate=success_rate,
+        failure_rate=failure_rate,
+        dlq_rate=dlq_rate,
+        avg_latency_ms=avg_latency_ms,
+        p95_latency_ms=p95_latency_ms,
+    )
+
+
+class TestNotificationEventsList:
+    def test_list_runs_without_error(self, capsys):
+        """notification events list runs without error."""
+        from agent_app.cli import _cmd_policy_federation_notification_events_list
+
+        mock_store = MagicMock()
+        mock_store.list_events = AsyncMock(return_value=[])
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            notification_id=None,
+            approval_id=None,
+            federation_id=None,
+            channel=None,
+            event_type=None,
+            since=None,
+            until=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_events_list(args))
+
+        assert rc == 0
+
+    def test_list_with_events_table(self, capsys):
+        """notification events list shows events in table format."""
+        from agent_app.cli import _cmd_policy_federation_notification_events_list
+
+        events = [_make_delivery_event()]
+        mock_store = MagicMock()
+        mock_store.list_events = AsyncMock(return_value=events)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            notification_id=None,
+            approval_id=None,
+            federation_id=None,
+            channel=None,
+            event_type=None,
+            since=None,
+            until=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_events_list(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "nde_test001" in captured.out
+
+    def test_list_with_events_json(self, capsys):
+        """notification events list --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_events_list
+
+        events = [_make_delivery_event()]
+        mock_store = MagicMock()
+        mock_store.list_events = AsyncMock(return_value=events)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            notification_id=None,
+            approval_id=None,
+            federation_id=None,
+            channel=None,
+            event_type=None,
+            since=None,
+            until=None,
+            limit=100,
+            offset=0,
+            format="json",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_events_list(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["event_id"] == "nde_test001"
+
+    def test_list_missing_config_exits_nonzero(self, capsys):
+        """notification events list with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_events_list
+
+        app = MagicMock()
+        app._federation_notification_observability_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            notification_id=None,
+            approval_id=None,
+            federation_id=None,
+            channel=None,
+            event_type=None,
+            since=None,
+            until=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_events_list(args))
+
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "not configured" in captured.err.lower()
+
+
+class TestNotificationMetrics:
+    def test_metrics_runs_without_error(self, capsys):
+        """notification metrics runs without error."""
+        from agent_app.cli import _cmd_policy_federation_notification_metrics
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_metrics(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Total:" in captured.out
+        assert "Success Rate:" in captured.out
+
+    def test_metrics_json_output(self, capsys):
+        """notification metrics --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_metrics
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            format="json",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_metrics(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data[0]["total"] == 100
+        assert data[0]["sent"] == 95
+
+    def test_metrics_missing_config_exits_nonzero(self, capsys):
+        """notification metrics with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_metrics
+
+        app = MagicMock()
+        app._federation_notification_observability_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_metrics(args))
+
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "not configured" in captured.err.lower()
+
+
+class TestNotificationHealth:
+    def test_health_runs_without_error(self, capsys):
+        """notification health runs without error."""
+        from agent_app.cli import _cmd_policy_federation_notification_health
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+        mock_store.list_events = AsyncMock(return_value=[_make_delivery_event()])
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_health(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Status:" in captured.out
+
+    def test_health_json_output(self, capsys):
+        """notification health --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_health
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+        mock_store.list_events = AsyncMock(return_value=[_make_delivery_event()])
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            format="json",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_health(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert "status" in data
+        assert "success_rate" in data
+
+    def test_health_no_data(self, capsys):
+        """notification health with no data shows message."""
+        from agent_app.cli import _cmd_policy_federation_notification_health
+
+        empty_window = _make_metric_window(total=0, sent=0, failed=0)
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=empty_window)
+        mock_store.list_events = AsyncMock(return_value=[])
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_health(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "No data" in captured.out
+
+    def test_health_missing_config_exits_nonzero(self, capsys):
+        """notification health with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_health
+
+        app = MagicMock()
+        app._federation_notification_observability_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_health(args))
+
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "not configured" in captured.err.lower()
+
+
+class TestNotificationSlaCheck:
+    def test_sla_check_runs_without_error(self, capsys):
+        """notification sla check runs without error."""
+        from agent_app.cli import _cmd_policy_federation_notification_sla_check
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_sla_config = _make_sla_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_sla_check(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "No SLA violations found" in captured.out
+
+    def test_sla_check_with_violations(self, capsys):
+        """notification sla check shows violations."""
+        from agent_app.cli import _cmd_policy_federation_notification_sla_check
+
+        # Create a metric window that violates SLA
+        bad_window = _make_metric_window(
+            success_rate=0.8,
+            failure_rate=0.15,
+            dlq_rate=0.05,
+        )
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=bad_window)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_sla_config = _make_sla_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_sla_check(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Violation ID" in captured.out
+
+    def test_sla_check_json_output(self, capsys):
+        """notification sla check --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_sla_check
+
+        bad_window = _make_metric_window(
+            success_rate=0.8,
+            failure_rate=0.15,
+            dlq_rate=0.05,
+        )
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=bad_window)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_sla_config = _make_sla_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            format="json",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_sla_check(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+
+    def test_sla_check_missing_observability_config_exits_nonzero(self, capsys):
+        """notification sla check with no observability config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_sla_check
+
+        app = MagicMock()
+        app._federation_notification_observability_config = None
+        app._federation_notification_sla_config = _make_sla_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            federation_id=None,
+            channel=None,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_sla_check(args))
+
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "not configured" in captured.err.lower()
+
+
+class TestNotificationAlertsList:
+    def test_alerts_list_runs_without_error(self, capsys):
+        """notification alerts list runs without error."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_list
+
+        mock_store = MagicMock()
+        mock_store.list_alerts = AsyncMock(return_value=[])
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            status=None,
+            severity=None,
+            channel=None,
+            federation_id=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_list(args))
+
+        assert rc == 0
+
+    def test_alerts_list_with_alerts_table(self, capsys):
+        """notification alerts list shows alerts in table format."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_list
+
+        alerts = [_make_alert_event()]
+        mock_store = MagicMock()
+        mock_store.list_alerts = AsyncMock(return_value=alerts)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            status=None,
+            severity=None,
+            channel=None,
+            federation_id=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_list(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "nae_test001" in captured.out
+
+    def test_alerts_list_json_output(self, capsys):
+        """notification alerts list --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_list
+
+        alerts = [_make_alert_event()]
+        mock_store = MagicMock()
+        mock_store.list_alerts = AsyncMock(return_value=alerts)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            status=None,
+            severity=None,
+            channel=None,
+            federation_id=None,
+            limit=100,
+            offset=0,
+            format="json",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_list(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["alert_id"] == "nae_test001"
+
+    def test_alerts_list_missing_config_exits_nonzero(self, capsys):
+        """notification alerts list with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_list
+
+        app = MagicMock()
+        app._federation_notification_alert_config = None
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            status=None,
+            severity=None,
+            channel=None,
+            federation_id=None,
+            limit=100,
+            offset=0,
+            format="table",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_list(args))
+
+        assert rc != 0
+        captured = capsys.readouterr()
+        assert "not configured" in captured.err.lower()
+
+
+class TestNotificationAlertsAck:
+    def test_alerts_ack_success(self, capsys):
+        """notification alerts ack succeeds."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_ack
+
+        alert = _make_alert_event(status="open")
+        alert.acknowledged_at = datetime.now(timezone.utc)
+        alert.acknowledged_by = "cli-user"
+        alert.status = "acknowledged"
+
+        mock_store = MagicMock()
+        mock_store.acknowledge = AsyncMock(return_value=alert)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            alert_id="nae_test001",
+            by="cli-user",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_ack(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "acknowledged" in captured.out
+
+    def test_alerts_ack_not_found(self, capsys):
+        """notification alerts ack with unknown alert exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_ack
+
+        mock_store = MagicMock()
+        mock_store.acknowledge = AsyncMock(return_value=None)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            alert_id="nae_unknown",
+            by="cli-user",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_ack(args))
+
+        assert rc != 0
+
+
+class TestNotificationAlertsResolve:
+    def test_alerts_resolve_success(self, capsys):
+        """notification alerts resolve succeeds."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_resolve
+
+        alert = _make_alert_event(status="open")
+        alert.resolved_at = datetime.now(timezone.utc)
+        alert.resolved_by = "cli-user"
+        alert.status = "resolved"
+
+        mock_store = MagicMock()
+        mock_store.resolve = AsyncMock(return_value=alert)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            alert_id="nae_test001",
+            by="cli-user",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_resolve(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "resolved" in captured.out
+
+    def test_alerts_resolve_not_found(self, capsys):
+        """notification alerts resolve with unknown alert exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_alerts_resolve
+
+        mock_store = MagicMock()
+        mock_store.resolve = AsyncMock(return_value=None)
+
+        app = MagicMock()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            alert_id="nae_unknown",
+            by="cli-user",
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_alerts_resolve(args))
+
+        assert rc != 0
+
+
+class TestNotificationReportExport:
+    def test_report_export_events_json(self, capsys):
+        """notification report export --type events --format json outputs JSON."""
+        from agent_app.cli import _cmd_policy_federation_notification_report_export
+
+        events = [_make_delivery_event()]
+        mock_store = MagicMock()
+        mock_store.list_events = AsyncMock(return_value=events)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            type="events",
+            format="json",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            output=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_report_export(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["event_id"] == "nde_test001"
+
+    def test_report_export_metrics_table(self, capsys):
+        """notification report export --type metrics outputs metrics."""
+        from agent_app.cli import _cmd_policy_federation_notification_report_export
+
+        mock_store = MagicMock()
+        mock_store.aggregate_metrics = AsyncMock(return_value=_make_metric_window())
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            type="metrics",
+            format="json",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            output=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_observability_store.create_notification_observability_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_report_export(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data[0]["total"] == 100
+
+    def test_report_export_alerts_table(self, capsys):
+        """notification report export --type alerts outputs alerts."""
+        from agent_app.cli import _cmd_policy_federation_notification_report_export
+
+        alerts = [_make_alert_event()]
+        mock_store = MagicMock()
+        mock_store.list_alerts = AsyncMock(return_value=alerts)
+
+        app = MagicMock()
+        app._federation_notification_observability_config = _make_obs_config()
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            type="alerts",
+            format="json",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            output=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app), \
+             patch("agent_app.runtime.policy_rollout_federation_notification_alert_store.create_notification_alert_store", return_value=mock_store):
+            rc = _run_async(_cmd_policy_federation_notification_report_export(args))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["alert_id"] == "nae_test001"
+
+    def test_report_export_missing_observability_config_exits_nonzero(self, capsys):
+        """notification report export --type events with no config exits non-zero."""
+        from agent_app.cli import _cmd_policy_federation_notification_report_export
+
+        app = MagicMock()
+        app._federation_notification_observability_config = None
+        app._federation_notification_alert_config = _make_alert_config()
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            type="events",
+            format="json",
+            federation_id=None,
+            channel=None,
+            window_minutes=60,
+            output=None,
+        )
+
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run_async(_cmd_policy_federation_notification_report_export(args))
+
+        assert rc != 0

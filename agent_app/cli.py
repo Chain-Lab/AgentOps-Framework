@@ -15,6 +15,7 @@ import asyncio
 import json
 import signal
 import sys
+from datetime import datetime, timedelta, timezone
 
 from agent_app.evals.runner import EvalRunner, load_eval_suite
 
@@ -1043,6 +1044,80 @@ def main() -> int:
     fed_webhook_verify_parser.add_argument("--nonce", required=True, help="Signature nonce")
     fed_webhook_verify_parser.set_defaults(func=_cmd_policy_federation_webhook_verify)
 
+    # Phase 52: federation notification observability subcommands
+    notifications_events_parser = federation_notification_sub.add_parser("events", help="Federation notification delivery event commands (Phase 52)")
+    notifications_events_sub = notifications_events_parser.add_subparsers(dest="federation_notification_events_command")
+    notifications_events_list_parser = notifications_events_sub.add_parser("list", help="List notification delivery events")
+    notifications_events_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_events_list_parser.add_argument("--notification-id", default=None, help="Filter by notification ID")
+    notifications_events_list_parser.add_argument("--approval-id", default=None, help="Filter by approval ID")
+    notifications_events_list_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    notifications_events_list_parser.add_argument("--channel", default=None, help="Filter by channel")
+    notifications_events_list_parser.add_argument("--event-type", default=None, help="Filter by event type")
+    notifications_events_list_parser.add_argument("--since", default=None, help="Filter since (ISO datetime)")
+    notifications_events_list_parser.add_argument("--until", default=None, help="Filter until (ISO datetime)")
+    notifications_events_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    notifications_events_list_parser.add_argument("--offset", type=int, default=0, help="Offset for pagination")
+    notifications_events_list_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_events_list_parser.set_defaults(func=_cmd_policy_federation_notification_events_list)
+
+    notifications_metrics_parser = federation_notification_sub.add_parser("metrics", help="Show notification delivery metrics (Phase 52)")
+    notifications_metrics_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_metrics_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    notifications_metrics_parser.add_argument("--channel", default=None, help="Filter by channel")
+    notifications_metrics_parser.add_argument("--window-minutes", type=int, default=60, help="Metrics window in minutes (default: 60)")
+    notifications_metrics_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_metrics_parser.set_defaults(func=_cmd_policy_federation_notification_metrics)
+
+    notifications_health_parser = federation_notification_sub.add_parser("health", help="Show notification channel health (Phase 52)")
+    notifications_health_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_health_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_health_parser.set_defaults(func=_cmd_policy_federation_notification_health)
+
+    notifications_sla_parser = federation_notification_sub.add_parser("sla", help="Federation notification SLA commands (Phase 52)")
+    notifications_sla_sub = notifications_sla_parser.add_subparsers(dest="federation_notification_sla_command")
+    notifications_sla_check_parser = notifications_sla_sub.add_parser("check", help="Check SLA compliance")
+    notifications_sla_check_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_sla_check_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    notifications_sla_check_parser.add_argument("--channel", default=None, help="Filter by channel")
+    notifications_sla_check_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_sla_check_parser.set_defaults(func=_cmd_policy_federation_notification_sla_check)
+
+    notifications_alerts_parser = federation_notification_sub.add_parser("alerts", help="Federation notification alert commands (Phase 52)")
+    notifications_alerts_sub = notifications_alerts_parser.add_subparsers(dest="federation_notification_alerts_command")
+    notifications_alerts_list_parser = notifications_alerts_sub.add_parser("list", help="List notification alerts")
+    notifications_alerts_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_alerts_list_parser.add_argument("--status", default=None, help="Filter by status")
+    notifications_alerts_list_parser.add_argument("--severity", default=None, help="Filter by severity")
+    notifications_alerts_list_parser.add_argument("--channel", default=None, help="Filter by channel")
+    notifications_alerts_list_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    notifications_alerts_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    notifications_alerts_list_parser.add_argument("--offset", type=int, default=0, help="Offset for pagination")
+    notifications_alerts_list_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_alerts_list_parser.set_defaults(func=_cmd_policy_federation_notification_alerts_list)
+    notifications_alerts_ack_parser = notifications_alerts_sub.add_parser("ack", help="Acknowledge an alert")
+    notifications_alerts_ack_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_alerts_ack_parser.add_argument("--alert-id", required=True, help="Alert ID to acknowledge")
+    notifications_alerts_ack_parser.add_argument("--by", default="cli-user", help="User acknowledging (default: cli-user)")
+    notifications_alerts_ack_parser.set_defaults(func=_cmd_policy_federation_notification_alerts_ack)
+    notifications_alerts_resolve_parser = notifications_alerts_sub.add_parser("resolve", help="Resolve an alert")
+    notifications_alerts_resolve_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_alerts_resolve_parser.add_argument("--alert-id", required=True, help="Alert ID to resolve")
+    notifications_alerts_resolve_parser.add_argument("--by", default="cli-user", help="User resolving (default: cli-user)")
+    notifications_alerts_resolve_parser.set_defaults(func=_cmd_policy_federation_notification_alerts_resolve)
+
+    notifications_report_parser = federation_notification_sub.add_parser("report", help="Federation notification report commands (Phase 52)")
+    notifications_report_sub = notifications_report_parser.add_subparsers(dest="federation_notification_report_command")
+    notifications_report_export_parser = notifications_report_sub.add_parser("export", help="Export notification report")
+    notifications_report_export_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_report_export_parser.add_argument("--type", default="events", choices=["events", "metrics", "alerts"], help="Report type (default: events)")
+    notifications_report_export_parser.add_argument("--format", default="json", choices=["json", "csv"], help="Export format (default: json)")
+    notifications_report_export_parser.add_argument("--federation-id", default=None, help="Filter by federation ID")
+    notifications_report_export_parser.add_argument("--channel", default=None, help="Filter by channel")
+    notifications_report_export_parser.add_argument("--window-minutes", type=int, default=60, help="Time window in minutes (default: 60)")
+    notifications_report_export_parser.add_argument("--output", default=None, help="Output file path (default: stdout)")
+    notifications_report_export_parser.set_defaults(func=_cmd_policy_federation_notification_report_export)
+
     federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
     federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
     federation_escalate_due_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
@@ -1627,6 +1702,35 @@ def main() -> int:
                 if args.federation_webhook_command == "verify":
                     return asyncio.run(_cmd_policy_federation_webhook_verify(args))
                 fed_webhook_parser.print_help()
+                return 1
+            # Phase 52: federation notification observability subcommands
+            if args.federation_notification_command == "events":
+                if args.federation_notification_events_command == "list":
+                    return asyncio.run(_cmd_policy_federation_notification_events_list(args))
+                notifications_events_parser.print_help()
+                return 1
+            if args.federation_notification_command == "metrics":
+                return asyncio.run(_cmd_policy_federation_notification_metrics(args))
+            if args.federation_notification_command == "health":
+                return asyncio.run(_cmd_policy_federation_notification_health(args))
+            if args.federation_notification_command == "sla":
+                if args.federation_notification_sla_command == "check":
+                    return asyncio.run(_cmd_policy_federation_notification_sla_check(args))
+                notifications_sla_parser.print_help()
+                return 1
+            if args.federation_notification_command == "alerts":
+                if args.federation_notification_alerts_command == "list":
+                    return asyncio.run(_cmd_policy_federation_notification_alerts_list(args))
+                if args.federation_notification_alerts_command == "ack":
+                    return asyncio.run(_cmd_policy_federation_notification_alerts_ack(args))
+                if args.federation_notification_alerts_command == "resolve":
+                    return asyncio.run(_cmd_policy_federation_notification_alerts_resolve(args))
+                notifications_alerts_parser.print_help()
+                return 1
+            if args.federation_notification_command == "report":
+                if args.federation_notification_report_command == "export":
+                    return asyncio.run(_cmd_policy_federation_notification_report_export(args))
+                notifications_report_parser.print_help()
                 return 1
             federation_notification_parser.print_help()
             return 1
@@ -9247,6 +9351,549 @@ async def _cmd_policy_federation_webhook_verify(args: argparse.Namespace) -> int
     print(f"Valid:           {result.valid}")
     print(f"Reason:          {result.reason or '-'}")
     print(f"Matched Key ID:  {result.matched_key_id or '-'}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 52: Federation notification observability CLI commands
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_events_list(args: argparse.Namespace) -> int:
+    """List notification delivery events."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+        create_notification_observability_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_report_export import (
+        export_notification_events_json,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    obs_cfg = getattr(app, "_federation_notification_observability_config", None)
+    if obs_cfg is None:
+        print("Federation notification observability not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_observability_store(
+        store_type=obs_cfg.store.type,
+        db_path=obs_cfg.store.path,
+    )
+
+    since = None
+    until = None
+    if args.since:
+        try:
+            since = datetime.fromisoformat(args.since)
+        except ValueError:
+            print("Invalid --since datetime. Use ISO format (e.g. 2024-01-15T10:30:00+00:00).", file=sys.stderr)
+            return 1
+    if args.until:
+        try:
+            until = datetime.fromisoformat(args.until)
+        except ValueError:
+            print("Invalid --until datetime. Use ISO format (e.g. 2024-01-15T10:30:00+00:00).", file=sys.stderr)
+            return 1
+
+    try:
+        events = await store.list_events(
+            notification_id=args.notification_id,
+            approval_id=args.approval_id,
+            federation_id=args.federation_id,
+            channel=args.channel,
+            event_type=args.event_type,
+            since=since,
+            until=until,
+            limit=args.limit,
+            offset=args.offset,
+        )
+    except Exception as exc:
+        print(f"Error listing events: {exc}", file=sys.stderr)
+        return 1
+
+    if not events:
+        print("No events found.")
+        return 0
+
+    if args.format == "json":
+        output = export_notification_events_json(events)
+        print(output)
+    else:
+        print(f"{'Event ID':<24} {'Notification ID':<24} {'Event Type':<24} {'Channel':<10} {'Status':<10} {'Attempt':<8} {'Latency':<10} {'Created At'}")
+        print("-" * 130)
+        for e in events:
+            eid = e.event_id[:24]
+            nid = (e.notification_id or "-")[:24]
+            etype = e.event_type.value[:24]
+            ch = (e.channel or "-")[:10]
+            st = (e.status or "-")[:10]
+            att = str(e.attempt if e.attempt is not None else "-")[:8]
+            lat = str(e.latency_ms if e.latency_ms is not None else "-")[:10]
+            ca = e.created_at.isoformat()
+            print(f"{eid:<24} {nid:<24} {etype:<24} {ch:<10} {st:<10} {att:<8} {lat:<10} {ca}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_metrics(args: argparse.Namespace) -> int:
+    """Show notification delivery metrics."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+        create_notification_observability_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_report_export import (
+        export_notification_metrics_json,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    obs_cfg = getattr(app, "_federation_notification_observability_config", None)
+    if obs_cfg is None:
+        print("Federation notification observability not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_observability_store(
+        store_type=obs_cfg.store.type,
+        db_path=obs_cfg.store.path,
+    )
+
+    try:
+        window = await store.aggregate_metrics(
+            federation_id=args.federation_id,
+            channel=args.channel,
+            window_minutes=args.window_minutes,
+        )
+    except Exception as exc:
+        print(f"Error aggregating metrics: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        output = export_notification_metrics_json([window])
+        print(output)
+    else:
+        print(f"Window:            {window.window_start.isoformat()} — {window.window_end.isoformat()}")
+        print(f"Federation ID:     {window.federation_id or '-'}")
+        print(f"Channel:           {window.channel or '-'}")
+        print(f"Total:             {window.total}")
+        print(f"Sent:              {window.sent}")
+        print(f"Failed:            {window.failed}")
+        print(f"Suppressed:        {window.suppressed}")
+        print(f"DLQ:               {window.dlq}")
+        print(f"Retry Scheduled:   {window.retry_scheduled}")
+        print(f"Success Rate:      {window.success_rate * 100:.2f}%")
+        print(f"Failure Rate:      {window.failure_rate * 100:.2f}%")
+        print(f"DLQ Rate:          {window.dlq_rate * 100:.2f}%")
+        if window.avg_latency_ms is not None:
+            print(f"Avg Latency:       {window.avg_latency_ms:.0f} ms")
+        if window.p95_latency_ms is not None:
+            print(f"P95 Latency:       {window.p95_latency_ms:.0f} ms")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_health(args: argparse.Namespace) -> int:
+    """Show notification channel health."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation_notification_observability import (
+        ChannelHealthStatus,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+        create_notification_observability_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    obs_cfg = getattr(app, "_federation_notification_observability_config", None)
+    if obs_cfg is None:
+        print("Federation notification observability not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_observability_store(
+        store_type=obs_cfg.store.type,
+        db_path=obs_cfg.store.path,
+    )
+
+    try:
+        window = await store.aggregate_metrics(window_minutes=60)
+    except Exception as exc:
+        print(f"Error computing health: {exc}", file=sys.stderr)
+        return 1
+
+    if window.total == 0:
+        print("No data available for health assessment.")
+        return 0
+
+    # Derive channel from the most recent events
+    events = await store.list_events(limit=1)
+    channel = events[0].channel if events else "unknown"
+    federation_id = events[0].federation_id if events else None
+
+    status = ChannelHealthStatus.UNKNOWN
+    reason = "No data"
+    if window.total > 0:
+        if window.success_rate >= 0.95 and window.failure_rate <= 0.05 and window.dlq_rate <= 0.01:
+            status = ChannelHealthStatus.HEALTHY
+            reason = "All metrics within thresholds"
+        elif window.success_rate >= 0.8:
+            status = ChannelHealthStatus.DEGRADED
+            reason = "Success rate below 95%"
+        else:
+            status = ChannelHealthStatus.UNHEALTHY
+            reason = "Success rate below 80%"
+
+    if args.format == "json":
+        import json as _json
+        data = {
+            "channel": channel,
+            "federation_id": federation_id,
+            "status": status.value,
+            "reason": reason,
+            "total": window.total,
+            "success_rate": window.success_rate,
+            "failure_rate": window.failure_rate,
+            "dlq_rate": window.dlq_rate,
+            "avg_latency_ms": window.avg_latency_ms,
+            "p95_latency_ms": window.p95_latency_ms,
+            "window_start": window.window_start.isoformat(),
+            "window_end": window.window_end.isoformat(),
+        }
+        print(_json.dumps(data, indent=2))
+    else:
+        print(f"Channel:           {channel or '-'}")
+        print(f"Federation ID:     {federation_id or '-'}")
+        print(f"Status:            {status.value}")
+        print(f"Reason:            {reason}")
+        print(f"Total:             {window.total}")
+        print(f"Success Rate:      {window.success_rate * 100:.2f}%")
+        print(f"Failure Rate:      {window.failure_rate * 100:.2f}%")
+        print(f"DLQ Rate:          {window.dlq_rate * 100:.2f}%")
+        if window.avg_latency_ms is not None:
+            print(f"Avg Latency:       {window.avg_latency_ms:.0f} ms")
+        if window.p95_latency_ms is not None:
+            print(f"P95 Latency:       {window.p95_latency_ms:.0f} ms")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_sla_check(args: argparse.Namespace) -> int:
+    """Check SLA compliance for notification delivery."""
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation_notification_sla import (
+        NotificationSlaPolicy,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+        create_notification_observability_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_sla_service import (
+        NotificationSlaService,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    obs_cfg = getattr(app, "_federation_notification_observability_config", None)
+    sla_cfg = getattr(app, "_federation_notification_sla_config", None)
+    if obs_cfg is None:
+        print("Federation notification observability not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_observability_store(
+        store_type=obs_cfg.store.type,
+        db_path=obs_cfg.store.path,
+    )
+
+    sla_policy = sla_cfg if sla_cfg is not None else NotificationSlaPolicy()
+    sla_service = NotificationSlaService(
+        observability_store=store,
+        sla_policy=sla_policy,
+    )
+
+    try:
+        violations = await sla_service.evaluate(
+            federation_id=args.federation_id,
+            channel=args.channel,
+        )
+    except Exception as exc:
+        print(f"Error checking SLA: {exc}", file=sys.stderr)
+        return 1
+
+    if not violations:
+        print("No SLA violations found.")
+        return 0
+
+    if args.format == "json":
+        import json as _json
+        rows = []
+        for v in violations:
+            rows.append(v.model_dump(mode="json"))
+        print(_json.dumps(rows, indent=2))
+    else:
+        print(f"{'Violation ID':<28} {'Metric':<20} {'Observed':<12} {'Threshold':<12} {'Severity':<10} {'Channel':<10} {'Message'}")
+        print("-" * 120)
+        for v in violations:
+            vid = v.violation_id[:28]
+            metric = v.metric[:20]
+            obs = f"{v.observed_value:.4f}"[:12]
+            thr = f"{v.threshold:.4f}"[:12]
+            sev = v.severity[:10]
+            ch = (v.channel or "-")[:10]
+            msg = v.message[:50]
+            print(f"{vid:<28} {metric:<20} {obs:<12} {thr:<12} {sev:<10} {ch:<10} {msg}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_alerts_list(args: argparse.Namespace) -> int:
+    """List notification alerts."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_store import (
+        create_notification_alert_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_report_export import (
+        export_notification_alerts_json,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    alerts_cfg = getattr(app, "_federation_notification_alert_config", None)
+    if alerts_cfg is None:
+        print("Federation notification alerts not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_alert_store(
+        store_type=alerts_cfg.store.type,
+        db_path=alerts_cfg.store.path,
+    )
+
+    try:
+        alerts = await store.list_alerts(
+            status=args.status,
+            severity=args.severity,
+            channel=args.channel,
+            federation_id=args.federation_id,
+            limit=args.limit,
+            offset=args.offset,
+        )
+    except Exception as exc:
+        print(f"Error listing alerts: {exc}", file=sys.stderr)
+        return 1
+
+    if not alerts:
+        print("No alerts found.")
+        return 0
+
+    if args.format == "json":
+        output = export_notification_alerts_json(alerts)
+        print(output)
+    else:
+        print(f"{'Alert ID':<24} {'Name':<24} {'Severity':<10} {'Metric':<20} {'Channel':<10} {'Status':<12} {'Created At'}")
+        print("-" * 124)
+        for a in alerts:
+            aid = a.alert_id[:24]
+            name = a.name[:24]
+            sev = a.severity[:10]
+            metric = a.metric[:20]
+            ch = (a.channel or "-")[:10]
+            st = a.status[:12]
+            ca = a.created_at.isoformat()
+            print(f"{aid:<24} {name:<24} {sev:<10} {metric:<20} {ch:<10} {st:<12} {ca}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_alerts_ack(args: argparse.Namespace) -> int:
+    """Acknowledge a notification alert."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_store import (
+        create_notification_alert_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    alerts_cfg = getattr(app, "_federation_notification_alert_config", None)
+    if alerts_cfg is None:
+        print("Federation notification alerts not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_alert_store(
+        store_type=alerts_cfg.store.type,
+        db_path=alerts_cfg.store.path,
+    )
+
+    try:
+        alert = await store.acknowledge(args.alert_id, args.by)
+    except Exception as exc:
+        print(f"Error acknowledging alert: {exc}", file=sys.stderr)
+        return 1
+
+    if alert is None:
+        print(f"Alert '{args.alert_id}' not found or already resolved.", file=sys.stderr)
+        return 1
+
+    print(f"Alert '{alert.alert_id}' acknowledged by {args.by}.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_alerts_resolve(args: argparse.Namespace) -> int:
+    """Resolve a notification alert."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_store import (
+        create_notification_alert_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    alerts_cfg = getattr(app, "_federation_notification_alert_config", None)
+    if alerts_cfg is None:
+        print("Federation notification alerts not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_alert_store(
+        store_type=alerts_cfg.store.type,
+        db_path=alerts_cfg.store.path,
+    )
+
+    try:
+        alert = await store.resolve(args.alert_id, args.by)
+    except Exception as exc:
+        print(f"Error resolving alert: {exc}", file=sys.stderr)
+        return 1
+
+    if alert is None:
+        print(f"Alert '{args.alert_id}' not found or already resolved.", file=sys.stderr)
+        return 1
+
+    print(f"Alert '{alert.alert_id}' resolved by {args.by}.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_report_export(args: argparse.Namespace) -> int:
+    """Export notification report."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+        create_notification_observability_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_store import (
+        create_notification_alert_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_report_export import (
+        export_notification_events_csv,
+        export_notification_events_json,
+        export_notification_metrics_csv,
+        export_notification_metrics_json,
+        export_notification_alerts_csv,
+        export_notification_alerts_json,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    obs_cfg = getattr(app, "_federation_notification_observability_config", None)
+    alerts_cfg = getattr(app, "_federation_notification_alert_config", None)
+
+    output = ""
+    try:
+        if args.type == "events":
+            if obs_cfg is None:
+                print("Federation notification observability not configured.", file=sys.stderr)
+                return 1
+            store = create_notification_observability_store(
+                store_type=obs_cfg.store.type,
+                db_path=obs_cfg.store.path,
+            )
+            events = await store.list_events(
+                federation_id=args.federation_id,
+                channel=args.channel,
+                limit=10000,
+                offset=0,
+            )
+            if args.format == "csv":
+                output = export_notification_events_csv(events)
+            else:
+                output = export_notification_events_json(events)
+
+        elif args.type == "metrics":
+            if obs_cfg is None:
+                print("Federation notification observability not configured.", file=sys.stderr)
+                return 1
+            store = create_notification_observability_store(
+                store_type=obs_cfg.store.type,
+                db_path=obs_cfg.store.path,
+            )
+            window = await store.aggregate_metrics(
+                federation_id=args.federation_id,
+                channel=args.channel,
+                window_minutes=args.window_minutes,
+            )
+            if args.format == "csv":
+                output = export_notification_metrics_csv([window])
+            else:
+                output = export_notification_metrics_json([window])
+
+        elif args.type == "alerts":
+            if alerts_cfg is None:
+                print("Federation notification alerts not configured.", file=sys.stderr)
+                return 1
+            store = create_notification_alert_store(
+                store_type=alerts_cfg.store.type,
+                db_path=alerts_cfg.store.path,
+            )
+            alerts = await store.list_alerts(
+                federation_id=args.federation_id,
+                channel=args.channel,
+                limit=10000,
+                offset=0,
+            )
+            if args.format == "csv":
+                output = export_notification_alerts_csv(alerts)
+            else:
+                output = export_notification_alerts_json(alerts)
+    except Exception as exc:
+        print(f"Error exporting report: {exc}", file=sys.stderr)
+        return 1
+
+    if args.output:
+        try:
+            with open(args.output, "w") as f:
+                f.write(output)
+            print(f"Report exported to {args.output}")
+        except Exception as exc:
+            print(f"Error writing output file: {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(output)
 
     return 0
 
