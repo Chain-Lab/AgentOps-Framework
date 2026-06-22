@@ -1311,6 +1311,33 @@ def build_app(
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 
+        # -- Phase 52: Federation notification observability, SLA, alerts --
+        try:
+            if (
+                fed_cfg is not None
+                and hasattr(fed_cfg, "notifications")
+                and fed_cfg.notifications is not None
+                and fed_cfg.notifications.enabled
+            ):
+                notif_cfg = fed_cfg.notifications
+
+                # Observability config
+                obs_cfg = getattr(notif_cfg, "observability", None)
+                if obs_cfg is not None:
+                    app._federation_notification_observability_config = obs_cfg
+
+                # SLA config
+                sla_cfg = getattr(notif_cfg, "sla", None)
+                if sla_cfg is not None:
+                    app._federation_notification_sla_config = sla_cfg
+
+                # Alerts config
+                alerts_cfg = getattr(notif_cfg, "alerts", None)
+                if alerts_cfg is not None:
+                    app._federation_notification_alert_config = alerts_cfg
+        except Exception:  # noqa: BLE001 — graceful failure
+            pass
+
     app._release_config = release_config
     return app
 

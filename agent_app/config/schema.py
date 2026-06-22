@@ -661,6 +661,90 @@ class RolloutFederationWebhookReplayConfig(BaseModel):
     allow_target_override: bool = Field(default=False, description="Allow replay to different URL")
 
 
+class RolloutFederationStoreConfig(BaseModel):
+    """Generic store configuration for federation notification sub-systems."""
+
+    type: str = Field(
+        default="memory",
+        description="Store backend: memory | sqlite",
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite database path (required when type=sqlite)",
+    )
+
+
+class RolloutFederationNotificationObservabilityConfig(BaseModel):
+    """Configuration for federation notification observability (Phase 52)."""
+
+    enabled: bool = Field(default=True, description="Enable delivery event recording")
+    store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="sqlite",
+            path=".agent_app/federation_notification_observability.db",
+        ),
+        description="Observability event store configuration",
+    )
+
+
+class RolloutFederationNotificationSlaChannelOverrideConfig(BaseModel):
+    """Per-channel SLA override (Phase 52)."""
+
+    max_delivery_latency_ms: int | None = Field(default=None, description="Max delivery latency in ms")
+    min_success_rate: float | None = Field(default=None, description="Minimum success rate (0.0-1.0)")
+    max_failure_rate: float | None = Field(default=None, description="Maximum failure rate (0.0-1.0)")
+    max_dlq_rate: float | None = Field(default=None, description="Maximum DLQ rate (0.0-1.0)")
+    window_minutes: int | None = Field(default=None, description="Evaluation window in minutes")
+
+
+class RolloutFederationNotificationSlaConfig(BaseModel):
+    """Configuration for federation notification SLA monitoring (Phase 52)."""
+
+    enabled: bool = Field(default=True, description="Enable SLA monitoring")
+    max_delivery_latency_ms: int = Field(default=30000, description="Max delivery latency in ms")
+    min_success_rate: float = Field(default=0.95, description="Minimum success rate (0.0-1.0)")
+    max_failure_rate: float = Field(default=0.05, description="Maximum failure rate (0.0-1.0)")
+    max_dlq_rate: float = Field(default=0.01, description="Maximum DLQ rate (0.0-1.0)")
+    window_minutes: int = Field(default=60, description="Evaluation window in minutes")
+    channels: dict[str, RolloutFederationNotificationSlaChannelOverrideConfig] = Field(
+        default_factory=dict,
+        description="Per-channel SLA overrides",
+    )
+
+
+class RolloutFederationNotificationAlertRuleConfig(BaseModel):
+    """Configuration for a single federation notification alert rule (Phase 52)."""
+
+    rule_id: str = Field(description="Unique rule identifier")
+    name: str = Field(description="Human-readable rule name")
+    enabled: bool = Field(default=True, description="Whether rule is active")
+    metric: str = Field(description="Metric to monitor (e.g. failure_rate, success_rate)")
+    operator: str = Field(description="Comparison operator: >, >=, <, <=, ==")
+    threshold: float = Field(description="Threshold value for the metric")
+    severity: str = Field(default="warning", description="Alert severity: info, warning, critical")
+    channel: str | None = Field(default=None, description="Filter to specific channel")
+    federation_id: str | None = Field(default=None, description="Filter to specific federation")
+    window_minutes: int = Field(default=60, description="Evaluation window in minutes")
+    cooldown_minutes: int = Field(default=30, description="Minimum minutes between alerts for same rule")
+
+
+class RolloutFederationNotificationAlertConfig(BaseModel):
+    """Configuration for federation notification alerts (Phase 52)."""
+
+    enabled: bool = Field(default=True, description="Enable alert rules")
+    store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="sqlite",
+            path=".agent_app/federation_notification_alerts.db",
+        ),
+        description="Alert store configuration",
+    )
+    rules: list[RolloutFederationNotificationAlertRuleConfig] = Field(
+        default_factory=list,
+        description="Alert rules",
+    )
+
+
 class RolloutFederationNotificationConfig(BaseModel):
     """Configuration for federation notification (Phase 49)."""
     enabled: bool = Field(default=False, description="Enable federation notification")
@@ -683,6 +767,18 @@ class RolloutFederationNotificationConfig(BaseModel):
     preferences: RolloutFederationPreferenceConfig = Field(default_factory=RolloutFederationPreferenceConfig, description="Preference config (Phase 51)")
     webhook_signing: RolloutFederationWebhookSigningConfig = Field(default_factory=RolloutFederationWebhookSigningConfig, description="Webhook signing config (Phase 51)")
     webhook_replay: RolloutFederationWebhookReplayConfig = Field(default_factory=RolloutFederationWebhookReplayConfig, description="Webhook replay config (Phase 51)")
+    observability: RolloutFederationNotificationObservabilityConfig = Field(
+        default_factory=RolloutFederationNotificationObservabilityConfig,
+        description="Observability config (Phase 52)",
+    )
+    sla: RolloutFederationNotificationSlaConfig = Field(
+        default_factory=RolloutFederationNotificationSlaConfig,
+        description="SLA monitoring config (Phase 52)",
+    )
+    alerts: RolloutFederationNotificationAlertConfig = Field(
+        default_factory=RolloutFederationNotificationAlertConfig,
+        description="Alert rules config (Phase 52)",
+    )
 
 
 class RolloutFederationWorkerConfig(BaseModel):
