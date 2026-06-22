@@ -157,8 +157,32 @@ class TestPolicyChangeEventTypePhase49:
         assert PolicyChangeEventType.FEDERATION_APPROVAL_ESCALATION_LOCK_SKIPPED == "policy.federation.approval.escalation_lock_skipped"
 
     def test_event_type_count(self):
-        """94 original + 6 Phase 49 + 6 Phase 50 + 12 Phase 51 = 118."""
-        assert len(PolicyChangeEventType) == 118
+        """94 original + 6 Phase 49 + 6 Phase 50 + 12 Phase 51 + 6 Phase 52 + 9 Phase 53 = 133."""
+        assert len(PolicyChangeEventType) == 133
+
+    def test_phase53_alert_delivery_event_types_exist(self) -> None:
+        """Phase 53 alert delivery PolicyChangeEventType members."""
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED == \
+            "policy.federation.notification.alert_delivery.target_created"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED == \
+            "policy.federation.notification.alert_delivery.target_updated"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED == \
+            "policy.federation.notification.alert_delivery.target_disabled"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED == \
+            "policy.federation.notification.alert_delivery.attempt_recorded"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED == \
+            "policy.federation.notification.alert_delivery.dlq_created"
+
+    def test_phase53_export_retention_rollup_event_types_exist(self) -> None:
+        """Phase 53 prometheus/jsonl/retention/rollup PolicyChangeEventType members."""
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_PROMETHEUS_EXPORTED == \
+            "policy.federation.notification.prometheus.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_JSONL_EXPORTED == \
+            "policy.federation.notification.jsonl.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_RETENTION_CLEANUP_RAN == \
+            "policy.federation.notification.retention.cleanup_ran"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ROLLUP_BUILT == \
+            "policy.federation.notification.rollup.built"
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +217,29 @@ class TestFederationHistoryEventTypePhase49:
         assert FederationHistoryEventType.ESCALATION_LOCK_SKIPPED == "federation.escalation.lock_skipped"
 
     def test_event_type_count(self):
-        """28 original + 2 Phase 49 + 3 Phase 50 + 3 Phase 51 = 36."""
-        assert len(FederationHistoryEventType) == 36
+        """28 original + 2 Phase 49 + 3 Phase 50 + 3 Phase 51 + 6 Phase 52 + 9 Phase 53 = 51."""
+        assert len(FederationHistoryEventType) == 51
+
+    def test_phase53_federation_history_event_types_exist(self) -> None:
+        """Phase 53 alert delivery/export/retention/rollup FederationHistoryEventType members."""
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED == \
+            "notification.alert_delivery.target_created"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED == \
+            "notification.alert_delivery.target_updated"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED == \
+            "notification.alert_delivery.target_disabled"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED == \
+            "notification.alert_delivery.attempt_recorded"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED == \
+            "notification.alert_delivery.dlq_created"
+        assert FederationHistoryEventType.NOTIFICATION_PROMETHEUS_METRICS_EXPORTED == \
+            "notification.prometheus.metrics_exported"
+        assert FederationHistoryEventType.NOTIFICATION_JSONL_EXPORTED == \
+            "notification.jsonl.exported"
+        assert FederationHistoryEventType.NOTIFICATION_RETENTION_CLEANUP_RAN == \
+            "notification.retention.cleanup_ran"
+        assert FederationHistoryEventType.NOTIFICATION_ROLLUP_BUILT == \
+            "notification.rollup.built"
 
 
 # ---------------------------------------------------------------------------

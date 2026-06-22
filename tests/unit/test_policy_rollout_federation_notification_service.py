@@ -4,6 +4,7 @@ Phase 49 Task 4.
 Phase 50 Task 3: DLQ Integration + Retry Policy tests.
 Phase 51 Task 6: Template rendering, preference checks, webhook signing integration.
 Phase 52 Task 6: Notification service integration with observability.
+Phase 52 Task 10: Audit/history/change event wiring for observability.
 """
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agent_app.governance.policy_change_event import PolicyChangeEventType
+from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
 from agent_app.governance.policy_rollout_federation_notification import (
     FederationNotificationChannel,
     FederationNotificationDeadLetter,
@@ -882,10 +885,10 @@ class TestFederationNotificationServiceDLQ:
             requested_by="alice",
         )
         await svc.dispatch_pending()
-        # Check that a change event with type "federation.notification.dlq_created" was recorded
+        # Check that a change event with type FEDERATION_NOTIFICATION_DLQ_CREATED was recorded
         dlq_events = [
             call for call in change_event_store.record.call_args_list
-            if call.kwargs.get("event_type") == "federation.notification.dlq_created"
+            if call.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_DLQ_CREATED
         ]
         assert len(dlq_events) == 1
         payload = dlq_events[0].kwargs["payload"]
@@ -1979,3 +1982,345 @@ class TestObservabilityIntegration:
         # All events should be from the first service (fn_ prefix from first)
         # Second service used None, so no new events added to obs_store
         assert len(events_without_obs) == len(events_with_obs)
+
+
+# ---------------------------------------------------------------------------
+# Phase 52 Task 10: Observability event types and recording
+# ---------------------------------------------------------------------------
+
+
+class TestPhase52ObservabilityEventTypes:
+    """Tests for the 6 new observability event types added in Phase 52 Task 10."""
+
+    def test_policy_change_event_types_exist(self) -> None:
+        """All 6 new PolicyChangeEventType observability members exist."""
+        from agent_app.governance.policy_change_event import PolicyChangeEventType
+
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED == \
+            "policy.federation.notification.observability.event_recorded"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_SLA_VIOLATION_DETECTED == \
+            "policy.federation.notification.sla.violation_detected"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_CREATED == \
+            "policy.federation.notification.alert.created"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_ACKNOWLEDGED == \
+            "policy.federation.notification.alert.acknowledged"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_RESOLVED == \
+            "policy.federation.notification.alert.resolved"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_REPORT_EXPORTED == \
+            "policy.federation.notification.report.exported"
+
+    def test_federation_history_event_types_exist(self) -> None:
+        """All 6 new FederationHistoryEventType observability members exist."""
+        from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+
+        assert FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED == \
+            "notification.delivery.event_recorded"
+        assert FederationHistoryEventType.NOTIFICATION_SLA_VIOLATION_DETECTED == \
+            "notification.sla.violation_detected"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_CREATED == \
+            "notification.alert.created"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_ACKNOWLEDGED == \
+            "notification.alert.acknowledged"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_RESOLVED == \
+            "notification.alert.resolved"
+        assert FederationHistoryEventType.NOTIFICATION_OBSERVABILITY_REPORT_EXPORTED == \
+            "notification.observability.report_exported"
+
+    def test_new_enum_count_policy_change_event(self) -> None:
+        """PolicyChangeEventType has 133 members (124 + 9 Phase 53)."""
+        from agent_app.governance.policy_change_event import PolicyChangeEventType
+
+        assert len(PolicyChangeEventType) == 133
+
+    def test_new_enum_count_federation_history_event(self) -> None:
+        """FederationHistoryEventType has 51 members (42 + 9 Phase 53)."""
+        from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+
+        assert len(FederationHistoryEventType) == 51
+
+    def test_phase53_alert_delivery_event_types_exist(self) -> None:
+        """Phase 53 alert delivery PolicyChangeEventType members."""
+        from agent_app.governance.policy_change_event import PolicyChangeEventType
+
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED == \
+            "policy.federation.notification.alert_delivery.target_created"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED == \
+            "policy.federation.notification.alert_delivery.target_updated"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED == \
+            "policy.federation.notification.alert_delivery.target_disabled"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED == \
+            "policy.federation.notification.alert_delivery.attempt_recorded"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED == \
+            "policy.federation.notification.alert_delivery.dlq_created"
+
+    def test_phase53_export_retention_rollup_event_types_exist(self) -> None:
+        """Phase 53 prometheus/jsonl/retention/rollup PolicyChangeEventType members."""
+        from agent_app.governance.policy_change_event import PolicyChangeEventType
+
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_PROMETHEUS_EXPORTED == \
+            "policy.federation.notification.prometheus.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_JSONL_EXPORTED == \
+            "policy.federation.notification.jsonl.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_RETENTION_CLEANUP_RAN == \
+            "policy.federation.notification.retention.cleanup_ran"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ROLLUP_BUILT == \
+            "policy.federation.notification.rollup.built"
+
+    def test_phase53_federation_history_event_types_exist(self) -> None:
+        """Phase 53 FederationHistoryEventType members for alert delivery/export/retention/rollup."""
+        from agent_app.governance.policy_rollout_federation_history import FederationHistoryEventType
+
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED == \
+            "notification.alert_delivery.target_created"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED == \
+            "notification.alert_delivery.target_updated"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED == \
+            "notification.alert_delivery.target_disabled"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED == \
+            "notification.alert_delivery.attempt_recorded"
+        assert FederationHistoryEventType.NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED == \
+            "notification.alert_delivery.dlq_created"
+        assert FederationHistoryEventType.NOTIFICATION_PROMETHEUS_METRICS_EXPORTED == \
+            "notification.prometheus.metrics_exported"
+        assert FederationHistoryEventType.NOTIFICATION_JSONL_EXPORTED == \
+            "notification.jsonl.exported"
+        assert FederationHistoryEventType.NOTIFICATION_RETENTION_CLEANUP_RAN == \
+            "notification.retention.cleanup_ran"
+        assert FederationHistoryEventType.NOTIFICATION_ROLLUP_BUILT == \
+            "notification.rollup.built"
+
+
+class TestObservabilityRecording:
+    """Tests for Phase 52 observability event recording in FederationNotificationService."""
+
+    def _make_service_with_observability(
+        self,
+        change_event_store: Any | None = None,
+        history_recorder: Any | None = None,
+    ) -> FederationNotificationService:
+        return _make_service(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+
+    def test_record_sla_violation_records_change_event_and_history(self) -> None:
+        """record_sla_violation records both a change event and a history event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        svc = self._make_service_with_observability(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        svc.record_sla_violation(
+            federation_id="fed_1",
+            notification_id="fn_001",
+            channel="email",
+            metric="success_rate",
+            observed_value=0.80,
+            threshold=0.95,
+            severity="critical",
+        )
+        # Change event recorded
+        change_calls = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_SLA_VIOLATION_DETECTED
+        ]
+        assert len(change_calls) == 1
+        # History event recorded
+        assert history_recorder.record.call_count == 1
+        history_call = history_recorder.record.call_args
+        assert history_call.kwargs["event_type"] == FederationHistoryEventType.NOTIFICATION_SLA_VIOLATION_DETECTED
+        assert history_call.kwargs["federation_id"] == "fed_1"
+
+    def test_record_alert_created_records_change_event_and_history(self) -> None:
+        """record_alert_created records both a change event and a history event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        svc = self._make_service_with_observability(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        svc.record_alert_created(
+            federation_id="fed_1",
+            alert_id="nae_001",
+            rule_id="nar_001",
+            severity="warning",
+        )
+        change_calls = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_CREATED
+        ]
+        assert len(change_calls) == 1
+        assert history_recorder.record.call_count == 1
+        history_call = history_recorder.record.call_args
+        assert history_call.kwargs["event_type"] == FederationHistoryEventType.NOTIFICATION_ALERT_CREATED
+
+    def test_record_alert_acknowledged_records_change_event_and_history(self) -> None:
+        """record_alert_acknowledged records both a change event and a history event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        svc = self._make_service_with_observability(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        svc.record_alert_acknowledged(
+            federation_id="fed_1",
+            alert_id="nae_002",
+            acknowledged_by="admin",
+        )
+        change_calls = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_ACKNOWLEDGED
+        ]
+        assert len(change_calls) == 1
+        assert history_recorder.record.call_count == 1
+        history_call = history_recorder.record.call_args
+        assert history_call.kwargs["event_type"] == FederationHistoryEventType.NOTIFICATION_ALERT_ACKNOWLEDGED
+
+    def test_record_alert_resolved_records_change_event_and_history(self) -> None:
+        """record_alert_resolved records both a change event and a history event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        svc = self._make_service_with_observability(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        svc.record_alert_resolved(
+            federation_id="fed_1",
+            alert_id="nae_003",
+            resolved_by="admin",
+        )
+        change_calls = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_RESOLVED
+        ]
+        assert len(change_calls) == 1
+        assert history_recorder.record.call_count == 1
+        history_call = history_recorder.record.call_args
+        assert history_call.kwargs["event_type"] == FederationHistoryEventType.NOTIFICATION_ALERT_RESOLVED
+
+    def test_record_report_exported_records_change_event_and_history(self) -> None:
+        """record_report_exported records both a change event and a history event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        svc = self._make_service_with_observability(
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        svc.record_report_exported(
+            federation_id="fed_1",
+            report_type="sla",
+            format="json",
+        )
+        change_calls = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_REPORT_EXPORTED
+        ]
+        assert len(change_calls) == 1
+        assert history_recorder.record.call_count == 1
+        history_call = history_recorder.record.call_args
+        assert history_call.kwargs["event_type"] == FederationHistoryEventType.NOTIFICATION_OBSERVABILITY_REPORT_EXPORTED
+
+    def test_observability_methods_do_not_raise_without_stores(self) -> None:
+        """Observability methods are no-op when change_event_store and history_recorder are None."""
+        svc = _make_service()  # No change_event_store, no history_recorder
+        # Should not raise
+        svc.record_sla_violation(
+            federation_id="fed_1",
+            notification_id="fn_001",
+            channel="email",
+            metric="success_rate",
+            observed_value=0.80,
+            threshold=0.95,
+            severity="critical",
+        )
+        svc.record_alert_created(
+            federation_id="fed_1",
+            alert_id="nae_001",
+            rule_id="nar_001",
+            severity="warning",
+        )
+        svc.record_alert_acknowledged(
+            federation_id="fed_1",
+            alert_id="nae_001",
+        )
+        svc.record_alert_resolved(
+            federation_id="fed_1",
+            alert_id="nae_001",
+        )
+        svc.record_report_exported(
+            federation_id="fed_1",
+            report_type="sla",
+            format="json",
+        )
+
+    @pytest.mark.asyncio
+    async def test_sent_delivery_records_observability_event(self) -> None:
+        """Successful delivery (SENT) records a delivery observability change event + history."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        store = InMemoryFederationNotificationStore()
+        adapter = FakeFederationNotificationAdapter()
+
+        svc = _make_service(
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: adapter},
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_del_1",
+            federation_id="fed_1",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        delivery_events = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED
+        ]
+        assert len(delivery_events) == 1
+        # History events: 1 NOTIFICATION_CREATED (enqueue) + 1 NOTIFICATION_DELIVERY_EVENT_RECORDED (dispatch)
+        delivery_history_events = [
+            c for c in history_recorder.record.call_args_list
+            if c.kwargs.get("event_type") == FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED
+        ]
+        assert len(delivery_history_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_delivery_at_max_retries_records_observability_event(self) -> None:
+        """Delivery failure at max retries records a delivery observability event."""
+        change_event_store = MagicMock()
+        history_recorder = MagicMock()
+        store = InMemoryFederationNotificationStore()
+        retry_policy = FederationNotificationRetryPolicy(max_attempts=1, backoff_seconds=10, send_to_dlq=True)
+        failing_adapter = FailingFakeAdapter()
+
+        svc = _make_service(
+            policy=_make_policy(max_attempts=1),
+            store=store,
+            adapters={FederationNotificationChannel.CONSOLE: failing_adapter},
+            change_event_store=change_event_store,
+            history_recorder=history_recorder,
+            retry_policy=retry_policy,
+        )
+        await svc.enqueue_for_approval_created(
+            approval_id="ap_obs_del_2",
+            federation_id="fed_1",
+            action="deploy",
+            requested_by="alice",
+        )
+        await svc.dispatch_pending()
+
+        delivery_events = [
+            c for c in change_event_store.record.call_args_list
+            if c.kwargs.get("event_type") == PolicyChangeEventType.FEDERATION_NOTIFICATION_DELIVERY_EVENT_RECORDED
+        ]
+        assert len(delivery_events) == 1
+        # History events: 1 NOTIFICATION_CREATED (enqueue) + 1 NOTIFICATION_DELIVERY_EVENT_RECORDED (dispatch)
+        delivery_history_events = [
+            c for c in history_recorder.record.call_args_list
+            if c.kwargs.get("event_type") == FederationHistoryEventType.NOTIFICATION_DELIVERY_EVENT_RECORDED
+        ]
+        assert len(delivery_history_events) == 1

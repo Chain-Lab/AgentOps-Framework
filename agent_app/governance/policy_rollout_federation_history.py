@@ -56,6 +56,15 @@ class FederationHistoryEventType(str, Enum):
     NOTIFICATION_ALERT_ACKNOWLEDGED = "notification.alert.acknowledged"
     NOTIFICATION_ALERT_RESOLVED = "notification.alert.resolved"
     NOTIFICATION_OBSERVABILITY_REPORT_EXPORTED = "notification.observability.report_exported"
+    NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED = "notification.alert_delivery.target_created"
+    NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED = "notification.alert_delivery.target_updated"
+    NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED = "notification.alert_delivery.target_disabled"
+    NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED = "notification.alert_delivery.attempt_recorded"
+    NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED = "notification.alert_delivery.dlq_created"
+    NOTIFICATION_PROMETHEUS_METRICS_EXPORTED = "notification.prometheus.metrics_exported"
+    NOTIFICATION_JSONL_EXPORTED = "notification.jsonl.exported"
+    NOTIFICATION_RETENTION_CLEANUP_RAN = "notification.retention.cleanup_ran"
+    NOTIFICATION_ROLLUP_BUILT = "notification.rollup.built"
 
 
 class FederationHistoryEvent(BaseModel):

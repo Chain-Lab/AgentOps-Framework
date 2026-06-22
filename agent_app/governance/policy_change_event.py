@@ -136,6 +136,15 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_NOTIFICATION_ALERT_ACKNOWLEDGED = "policy.federation.notification.alert.acknowledged"
     FEDERATION_NOTIFICATION_ALERT_RESOLVED = "policy.federation.notification.alert.resolved"
     FEDERATION_NOTIFICATION_REPORT_EXPORTED = "policy.federation.notification.report.exported"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED = "policy.federation.notification.alert_delivery.target_created"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED = "policy.federation.notification.alert_delivery.target_updated"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED = "policy.federation.notification.alert_delivery.target_disabled"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED = "policy.federation.notification.alert_delivery.attempt_recorded"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED = "policy.federation.notification.alert_delivery.dlq_created"
+    FEDERATION_NOTIFICATION_PROMETHEUS_EXPORTED = "policy.federation.notification.prometheus.exported"
+    FEDERATION_NOTIFICATION_JSONL_EXPORTED = "policy.federation.notification.jsonl.exported"
+    FEDERATION_NOTIFICATION_RETENTION_CLEANUP_RAN = "policy.federation.notification.retention.cleanup_ran"
+    FEDERATION_NOTIFICATION_ROLLUP_BUILT = "policy.federation.notification.rollup.built"
 
 
 class PolicyChangeEvent(BaseModel):

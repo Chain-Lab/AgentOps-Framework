@@ -56,7 +56,8 @@ class TestFederationHistoryChangeEvents:
     """Tests for federation history change event types."""
 
     def test_event_type_count(self) -> None:
-        assert len(PolicyChangeEventType) == 118
+        """133 total: 124 previous + 9 Phase 53."""
+        assert len(PolicyChangeEventType) == 133
 
     def test_federation_history_events_exist(self) -> None:
         assert PolicyChangeEventType.FEDERATION_HISTORY_RECORDED.value == "policy.federation.history.recorded"
@@ -66,6 +67,27 @@ class TestFederationHistoryChangeEvents:
         assert PolicyChangeEventType.FEDERATION_ANALYTICS_EXPORT_GENERATED.value == "policy.federation.analytics.export_generated"
         assert PolicyChangeEventType.FEDERATION_ANALYTICS_EXPORT_FAILED.value == "policy.federation.analytics.export_failed"
         assert PolicyChangeEventType.FEDERATION_ANALYTICS_PERMISSION_DENIED.value == "policy.federation.analytics.permission_denied"
+
+    def test_phase53_notification_event_types_exist(self) -> None:
+        """Phase 53 alert delivery, prometheus, jsonl, retention, rollup event types."""
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_CREATED.value == \
+            "policy.federation.notification.alert_delivery.target_created"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_UPDATED.value == \
+            "policy.federation.notification.alert_delivery.target_updated"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_TARGET_DISABLED.value == \
+            "policy.federation.notification.alert_delivery.target_disabled"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_ATTEMPT_RECORDED.value == \
+            "policy.federation.notification.alert_delivery.attempt_recorded"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_CREATED.value == \
+            "policy.federation.notification.alert_delivery.dlq_created"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_PROMETHEUS_EXPORTED.value == \
+            "policy.federation.notification.prometheus.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_JSONL_EXPORTED.value == \
+            "policy.federation.notification.jsonl.exported"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_RETENTION_CLEANUP_RAN.value == \
+            "policy.federation.notification.retention.cleanup_ran"
+        assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ROLLUP_BUILT.value == \
+            "policy.federation.notification.rollup.built"
 
 
 class TestAgentAppFederationHistoryProperties:

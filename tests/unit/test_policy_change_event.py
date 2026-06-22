@@ -136,13 +136,28 @@ class TestPolicyChangeEventType:
             "policy.federation.webhook.replay_failed",
             "policy.federation.webhook.signature_verified",
             "policy.federation.webhook.signature_failed",
+            "policy.federation.notification.observability.event_recorded",
+            "policy.federation.notification.sla.violation_detected",
+            "policy.federation.notification.alert.created",
+            "policy.federation.notification.alert.acknowledged",
+            "policy.federation.notification.alert.resolved",
+            "policy.federation.notification.report.exported",
+            "policy.federation.notification.alert_delivery.target_created",
+            "policy.federation.notification.alert_delivery.target_updated",
+            "policy.federation.notification.alert_delivery.target_disabled",
+            "policy.federation.notification.alert_delivery.attempt_recorded",
+            "policy.federation.notification.alert_delivery.dlq_created",
+            "policy.federation.notification.prometheus.exported",
+            "policy.federation.notification.jsonl.exported",
+            "policy.federation.notification.retention.cleanup_ran",
+            "policy.federation.notification.rollup.built",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 118 enum members defined (106 previous + 12 Phase 51)."""
-        assert len(PolicyChangeEventType) == 118
+        """Exactly 133 enum members defined (124 previous + 9 Phase 53 Task 12)."""
+        assert len(PolicyChangeEventType) == 133
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""
