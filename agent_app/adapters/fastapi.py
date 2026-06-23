@@ -10,6 +10,7 @@ with a clear message.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from agent_app.runtime.streaming import StreamEvent
@@ -122,6 +123,62 @@ class PolicyDecisionSummary(BaseModel):
     reason: str | None = None
     tool_name: str | None = None
     created_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 56: Request models for operations endpoints
+# (Module-level so Pydantic v2 can resolve forward references)
+# ---------------------------------------------------------------------------
+
+class _RunOnceRequest(BaseModel):
+    """Request body for retry daemon run-once."""
+    dry_run: bool = False
+    confirmation: str | None = None
+
+
+class _StartDaemonRequest(BaseModel):
+    """Request body for retry daemon start."""
+    confirmation: str | None = None
+
+
+class _StopDaemonRequest(BaseModel):
+    """Request body for retry daemon stop."""
+    confirmation: str | None = None
+
+
+class BatchReplayRequest(BaseModel):
+    """Request body for batch DLQ replay."""
+    target_id: str | None = None
+    alert_id: str | None = None
+    since: str | None = None
+    until: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    dry_run: bool = False
+    confirmation: str | None = None
+
+
+class PriorityUpdateRequest(BaseModel):
+    """Request body for retry queue priority update."""
+    priority: int
+    confirmation: str | None = None
+
+
+class CleanupRequest(BaseModel):
+    """Request body for archive cleanup."""
+    data_type: str = Field(default="rollup")
+    dry_run: bool = False
+    confirmation: str | None = None
+
+
+class ClearCheckpointRequest(BaseModel):
+    """Request body for clearing archive checkpoints."""
+    checkpoint_id: str
+    confirmation: str | None = None
+
+
+class IncrementalRollupRequest(BaseModel):
+    """Request body for incremental rollup build."""
+    granularity: str = Field(default="hourly")
 
 
 # ---------------------------------------------------------------------------
@@ -750,6 +807,612 @@ def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastA
             limit=limit,
         )
         return report.model_dump(mode="json")
+
+    # ------------------------------------------------------------------
+    # Phase 56: FastAPI operations endpoints for Phase 55 services
+    # ------------------------------------------------------------------
+
+    # -- Request models are defined at module level for Pydantic v2 compatibility --
+
+    def _redact_error(exc: Exception) -> str:
+        """Redact an exception message — no stack traces, no secrets."""
+        msg = str(exc)
+        _SENSITIVE_PATTERNS = (
+            "token", "secret", "password", "api_key", "authorization",
+            "x-signature", "x-api-key", "x-secret", "x-auth-token",
+        )
+        lowered = msg.lower()
+        for pattern in _SENSITIVE_PATTERNS:
+            if pattern in lowered:
+                return "Internal server error."
+        return msg[:500]
+
+    async def _safe_service_call(result):
+        """Normalize a service result to a dict.
+
+        Accepts both coroutines and resolved objects.  Never calls asyncio.run().
+        """
+        if hasattr(result, "__await__"):
+            result = await result
+        if hasattr(result, "model_dump"):
+            return result.model_dump(mode="json")
+        if hasattr(result, "__dict__"):
+            return result.__dict__
+        return result
+
+    async def _safe_service_call_async(result):
+        """Await a service result, catching and redacting errors."""
+        try:
+            return await _safe_service_call(result)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    def _dt_iso(dt) -> str | None:
+        """Convert a datetime to ISO string, or None."""
+        if dt is None:
+            return None
+        if hasattr(dt, "isoformat"):
+            return dt.isoformat()
+        return str(dt)
+
+    def _attempt_to_dict(attempt: Any) -> dict:
+        """Convert an AlertDeliveryAttempt to a serialisable dict."""
+        return {
+            "attempt_id": getattr(attempt, "attempt_id", ""),
+            "alert_id": getattr(attempt, "alert_id", ""),
+            "target_id": getattr(attempt, "target_id", ""),
+            "status": str(getattr(attempt, "status", "")),
+            "attempt": getattr(attempt, "attempt", 0),
+            "priority": getattr(attempt, "priority", 0),
+            "error_code": getattr(attempt, "error_code", None),
+            "error_message": getattr(attempt, "error_message", None),
+            "created_at": _dt_iso(getattr(attempt, "created_at", None)),
+            "delivered_at": _dt_iso(getattr(attempt, "delivered_at", None)),
+            "next_retry_at": _dt_iso(getattr(attempt, "next_retry_at", None)),
+        }
+
+    def _dedup_to_dict(record: Any) -> dict:
+        """Convert a NotificationAlertDedupRecord to a serialisable dict."""
+        return {
+            "dedup_key": record.dedup_key,
+            "alert_id": record.alert_id,
+            "federation_id": record.federation_id,
+            "channel": record.channel,
+            "metric": record.metric,
+            "severity": record.severity,
+            "occurrence_count": record.occurrence_count,
+            "first_seen_at": _dt_iso(record.first_seen_at),
+            "last_seen_at": _dt_iso(record.last_seen_at),
+            "expires_at": _dt_iso(record.expires_at),
+            "status": record.status,
+        }
+
+    def _checkpoint_to_dict(cp: Any) -> dict:
+        """Convert an ArchiveCheckpoint to a serialisable dict."""
+        return {
+            "checkpoint_id": cp.checkpoint_id,
+            "data_type": cp.data_type,
+            "last_processed_id": cp.last_processed_id,
+            "last_processed_at": _dt_iso(cp.last_processed_at),
+            "records_processed": cp.records_processed,
+            "is_complete": cp.is_complete,
+            "created_at": _dt_iso(cp.created_at),
+            "updated_at": _dt_iso(cp.updated_at),
+        }
+
+    def _rollup_to_dict(rollup: Any) -> dict:
+        """Convert a NotificationMetricsRollup to a serialisable dict."""
+        return {
+            "rollup_id": rollup.rollup_id,
+            "granularity": rollup.granularity.value if hasattr(rollup.granularity, "value") else str(rollup.granularity),
+            "window_start": _dt_iso(rollup.window_start),
+            "window_end": _dt_iso(rollup.window_end),
+            "federation_id": rollup.federation_id,
+            "channel": rollup.channel,
+            "total": rollup.total,
+            "sent": rollup.sent,
+            "failed": rollup.failed,
+            "suppressed": rollup.suppressed,
+            "dlq": rollup.dlq,
+            "retry_scheduled": rollup.retry_scheduled,
+            "success_rate": rollup.success_rate,
+            "failure_rate": rollup.failure_rate,
+            "dlq_rate": rollup.dlq_rate,
+            "avg_latency_ms": rollup.avg_latency_ms,
+            "p95_latency_ms": rollup.p95_latency_ms,
+            "created_at": _dt_iso(rollup.created_at),
+        }
+
+    # -- Retry daemon endpoints --
+    @api.get("/federation/notifications/retry-daemon/status")
+    async def get_retry_daemon_status() -> dict:
+        """Return the current status of the alert delivery retry daemon."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            return {"is_running": False, "config": None}
+        # Use _running flag directly for cross-loop compatibility
+        running = getattr(daemon, "_running", False)
+        return {
+            "is_running": running,
+            "config": {
+                "enabled": daemon._config.enabled,
+                "interval_seconds": daemon._config.interval_seconds,
+                "jitter_seconds": daemon._config.jitter_seconds,
+                "batch_limit": daemon._config.batch_limit,
+            } if hasattr(daemon, "_config") else None,
+        }
+
+    @api.post("/federation/notifications/retry-daemon/run-once")
+    async def retry_daemon_run_once(body: _RunOnceRequest) -> dict:
+        """Execute a single retry daemon run."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Retry daemon is not configured.",
+            )
+        if body.dry_run is False and body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        result = await daemon.run_once(dry_run=body.dry_run)
+        return {"result": await _safe_service_call_async(result)}
+
+    @api.post("/federation/notifications/retry-daemon/start")
+    async def retry_daemon_start(body: _StartDaemonRequest) -> dict:
+        """Start the retry daemon loop."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Retry daemon is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        await daemon.start()
+        return {"is_running": daemon._running}
+
+    @api.post("/federation/notifications/retry-daemon/stop")
+    async def retry_daemon_stop(body: _StopDaemonRequest) -> dict:
+        """Stop the retry daemon loop."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Retry daemon is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        await daemon.stop()
+        return {"is_running": daemon._running}
+
+    # -- Retry queue endpoints --
+    @api.get("/federation/notifications/retry-queue")
+    async def list_retry_queue(
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List alert delivery attempts in the retry queue, sorted by priority."""
+        priority_queue = getattr(agent_app, "_federation_notification_priority_queue", None)
+        if priority_queue is None:
+            return {"attempts": [], "total": 0, "limit": limit, "offset": offset}
+        try:
+            attempts = await priority_queue.dequeue(limit=min(limit, 1000))
+            return {
+                "attempts": [_attempt_to_dict(a) for a in attempts],
+                "total": await priority_queue.count(),
+                "limit": limit,
+                "offset": offset,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/retry-queue/{attempt_id}/priority")
+    async def update_retry_queue_priority(
+        attempt_id: str,
+        body: PriorityUpdateRequest,
+    ) -> dict:
+        """Update the priority of a retry queue attempt."""
+        delivery_store = getattr(
+            agent_app, "_federation_notification_alert_delivery_store", None
+        )
+        if delivery_store is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Alert delivery store is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            existing = await delivery_store.get_attempt(attempt_id)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Attempt '{attempt_id}' not found.",
+            )
+        try:
+            from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+                AlertDeliveryAttempt,
+            )
+            updated = AlertDeliveryAttempt(
+                attempt_id=existing.attempt_id,
+                alert_id=existing.alert_id,
+                target_id=existing.target_id,
+                channel_type=existing.channel_type,
+                status=existing.status,
+                attempt=existing.attempt,
+                next_retry_at=existing.next_retry_at,
+                error_code=existing.error_code,
+                error_message=existing.error_message,
+                payload_preview=getattr(existing, "payload_preview", {}),
+                priority=body.priority,
+                delivered_at=getattr(existing, "delivered_at", None),
+                created_at=getattr(existing, "created_at", None),
+            )
+            result = await delivery_store.update_attempt(updated)
+            return _attempt_to_dict(result)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    # -- DLQ endpoints --
+    @api.get("/federation/notifications/dlq")
+    async def list_dlq(
+        federation_id: str | None = None,
+        approval_id: str | None = None,
+        channel: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List dead-letter queue entries."""
+        delivery_service = getattr(
+            agent_app, "_federation_notification_alert_delivery_service", None
+        )
+        delivery_store = getattr(
+            agent_app, "_federation_notification_alert_delivery_store", None
+        )
+        if delivery_store is None:
+            return {"attempts": [], "total": 0, "limit": limit, "offset": offset}
+        try:
+            # Use the store directly for listing DLQ items
+            from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+                AlertDeliveryStatus,
+            )
+            attempts = await delivery_store.list_attempts(
+                status=AlertDeliveryStatus.DLQ,
+                limit=limit,
+                offset=offset,
+            )
+            return {
+                "attempts": [_attempt_to_dict(a) for a in attempts],
+                "total": len(attempts),
+                "limit": limit,
+                "offset": offset,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/dlq/{attempt_id}/replay")
+    async def replay_dlq_attempt(
+        attempt_id: str,
+        body: BatchReplayRequest,
+    ) -> dict:
+        """Replay a single DLQ attempt."""
+        delivery_service = getattr(
+            agent_app, "_federation_notification_alert_delivery_service", None
+        )
+        if delivery_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Alert delivery service is not configured.",
+            )
+        if body.dry_run is False and body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            result = await delivery_service.replay_dlq_attempt(
+                attempt_id=attempt_id,
+                dry_run=body.dry_run,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"DLQ attempt '{attempt_id}' not found.",
+            )
+        return {"attempt": _attempt_to_dict(result)}
+
+    @api.post("/federation/notifications/dlq/batch-replay")
+    async def batch_replay_dlq(body: BatchReplayRequest) -> dict:
+        """Replay multiple DLQ entries matching the given filters."""
+        delivery_service = getattr(
+            agent_app, "_federation_notification_alert_delivery_service", None
+        )
+        if delivery_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Alert delivery service is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+                AlertDeliveryStatus,
+            )
+            delivery_store = getattr(
+                agent_app, "_federation_notification_alert_delivery_store", None
+            )
+            if delivery_store is None:
+                return {"result": {"attempts": [], "total": 0, "dry_run": body.dry_run}}
+
+            # Parse time filters
+            since_dt = None
+            until_dt = None
+            if body.since:
+                since_dt = datetime.fromisoformat(body.since.replace("Z", "+00:00"))
+            if body.until:
+                until_dt = datetime.fromisoformat(body.until.replace("Z", "+00:00"))
+
+            # Fetch DLQ attempts
+            dlq_attempts = await delivery_store.list_attempts(
+                status=AlertDeliveryStatus.DLQ,
+                limit=min(body.limit, 1000),
+            )
+            replayed = []
+            for attempt in dlq_attempts:
+                # Apply filters
+                if body.target_id and attempt.target_id != body.target_id:
+                    continue
+                if body.alert_id and attempt.alert_id != body.alert_id:
+                    continue
+                if since_dt and attempt.created_at < since_dt:
+                    continue
+                if until_dt and attempt.created_at > until_dt:
+                    continue
+                result = await delivery_service.replay_dlq_attempt(
+                    attempt_id=attempt.attempt_id,
+                    dry_run=body.dry_run,
+                )
+                if result is not None:
+                    replayed.append(_attempt_to_dict(result))
+            return {"result": {"attempts": replayed, "total": len(replayed), "dry_run": body.dry_run}}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    # -- Dedup endpoints --
+    @api.get("/federation/notifications/dedup/active")
+    async def list_active_dedup(
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List active (open) dedup records."""
+        dedup_store = getattr(agent_app, "_federation_notification_dedup_store", None)
+        if dedup_store is None:
+            return {"records": [], "total": 0, "limit": limit, "offset": offset}
+        try:
+            records = dedup_store.list_active(limit=min(limit, 1000), offset=offset)
+            return {
+                "records": [_dedup_to_dict(r) for r in records],
+                "total": len(records),
+                "limit": limit,
+                "offset": offset,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/dedup/prune")
+    async def prune_dedup(body: BatchReplayRequest) -> dict:
+        """Prune expired dedup records."""
+        dedup_store = getattr(agent_app, "_federation_notification_dedup_store", None)
+        if dedup_store is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Dedup store is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            count = dedup_store.prune_expired()
+            return {"pruned_count": count}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.get("/federation/notifications/dedup/{dedup_key}")
+    async def get_dedup_record(dedup_key: str) -> dict:
+        """Get a specific dedup record by key."""
+        dedup_store = getattr(agent_app, "_federation_notification_dedup_store", None)
+        if dedup_store is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Dedup store is not configured.",
+            )
+        try:
+            record = dedup_store.get(dedup_key)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Dedup key '{dedup_key}' not found.",
+            )
+        return _dedup_to_dict(record)
+
+    # -- Archive cleanup endpoints --
+    @api.get("/federation/notifications/archives/checkpoint")
+    async def list_archive_checkpoints() -> dict:
+        """List archive cleanup checkpoints."""
+        cleanup_service = getattr(
+            agent_app, "_federation_notification_archive_cleanup_service", None
+        )
+        if cleanup_service is None:
+            return {"checkpoints": []}
+        try:
+            checkpoint_store = cleanup_service._checkpoint_store
+            if hasattr(checkpoint_store, "list_checkpoints"):
+                checkpoints = await checkpoint_store.list_checkpoints()
+            else:
+                checkpoints = []
+            return {
+                "checkpoints": [_checkpoint_to_dict(cp) for cp in checkpoints],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/archives/cleanup")
+    async def run_archive_cleanup(body: CleanupRequest) -> dict:
+        """Run archive cleanup for a data type."""
+        cleanup_service = getattr(
+            agent_app, "_federation_notification_archive_cleanup_service", None
+        )
+        if cleanup_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Archive cleanup service is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            result = await cleanup_service.run_cleanup(
+                data_type=body.data_type,
+                dry_run=body.dry_run,
+            )
+            return {"result": await _safe_service_call_async(result)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/archives/checkpoint/clear")
+    async def clear_archive_checkpoint(body: ClearCheckpointRequest) -> dict:
+        """Clear (delete) an archive checkpoint."""
+        cleanup_service = getattr(
+            agent_app, "_federation_notification_archive_cleanup_service", None
+        )
+        if cleanup_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Archive cleanup service is not configured.",
+            )
+        if body.confirmation != "yes":
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive operation requires confirmation='yes'.",
+            )
+        try:
+            checkpoint_store = cleanup_service._checkpoint_store
+            if hasattr(checkpoint_store, "delete_checkpoint"):
+                await checkpoint_store.delete_checkpoint(body.checkpoint_id)
+            return {"checkpoint_id": body.checkpoint_id, "deleted": True}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    # -- Rollup endpoints --
+    @api.get("/federation/notifications/rollup")
+    async def list_rollups(
+        granularity: str | None = None,
+        channel: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List metric rollup records."""
+        rollup_service = getattr(agent_app, "_federation_notification_rollup_service", None)
+        if rollup_service is None:
+            return {"rollups": [], "total": 0, "limit": limit, "offset": offset}
+        try:
+            gran_enum = None
+            if granularity is not None:
+                gran_enum = NotificationRollupGranularity(granularity)
+            rollups = await rollup_service.list_rollups_async(
+                granularity=gran_enum,
+                channel=channel,
+                limit=min(limit, 1000),
+                offset=offset,
+            )
+            return {
+                "rollups": [_rollup_to_dict(r) for r in rollups],
+                "total": len(rollups),
+                "limit": limit,
+                "offset": offset,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.get("/federation/notifications/rollup/checkpoints")
+    async def list_rollup_checkpoints() -> dict:
+        """List rollup build checkpoints."""
+        rollup_service = getattr(agent_app, "_federation_notification_rollup_service", None)
+        if rollup_service is None:
+            return {"checkpoints": []}
+        try:
+            checkpoints = await rollup_service.list_checkpoints_async()
+            return {"checkpoints": checkpoints}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.post("/federation/notifications/rollup/incremental")
+    async def build_incremental_rollup(body: IncrementalRollupRequest) -> dict:
+        """Build an incremental rollup for recent delivery events."""
+        rollup_service = getattr(agent_app, "_federation_notification_rollup_service", None)
+        if rollup_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Rollup service is not configured.",
+            )
+        try:
+            gran_enum = NotificationRollupGranularity(body.granularity)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid granularity '{body.granularity}'. Use 'hourly' or 'daily'.",
+            )
+        try:
+            rollups = await rollup_service.build_incremental_rollup(
+                granularity=gran_enum,
+            )
+            return {"rollups": [_rollup_to_dict(r) for r in rollups]}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_redact_error(exc))
 
     return api
 
