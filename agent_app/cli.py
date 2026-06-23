@@ -1032,6 +1032,17 @@ def main() -> int:
     fed_dlq_replay_original_parser.add_argument("--key-id", default=None, help="Signing key ID to use")
     fed_dlq_replay_original_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_replay_original)
 
+    # Phase 56: federation notification DLQ batch-replay subcommand
+    fed_dlq_batch_replay_parser = federation_notification_dlq_sub.add_parser("batch-replay", help="Batch replay DLQ entries matching filters (Phase 56)")
+    fed_dlq_batch_replay_parser.add_argument("--config", required=True, help="Config file path")
+    fed_dlq_batch_replay_parser.add_argument("--target-id", default=None, help="Filter by target ID")
+    fed_dlq_batch_replay_parser.add_argument("--alert-id", default=None, help="Filter by alert ID")
+    fed_dlq_batch_replay_parser.add_argument("--since", default=None, help="Filter entries created after this ISO timestamp")
+    fed_dlq_batch_replay_parser.add_argument("--until", default=None, help="Filter entries created before this ISO timestamp")
+    fed_dlq_batch_replay_parser.add_argument("--limit", type=int, default=100, help="Max entries to replay (default: 100)")
+    fed_dlq_batch_replay_parser.add_argument("--dry-run", action="store_true", help="Simulate without delivering")
+    fed_dlq_batch_replay_parser.set_defaults(func=_cmd_policy_federation_notification_dlq_batch_replay)
+
     # Phase 51: federation webhook verify subcommand
     fed_webhook_parser = federation_notification_sub.add_parser("webhook", help="Federation webhook commands (Phase 51)")
     fed_webhook_sub = fed_webhook_parser.add_subparsers(dest="federation_webhook_command")
@@ -1814,6 +1825,9 @@ def main() -> int:
                 # Phase 51: DLQ replay-original
                 if args.federation_notification_dlq_command == "replay-original":
                     return asyncio.run(_cmd_policy_federation_notification_dlq_replay_original(args))
+                # Phase 56: DLQ batch-replay
+                if args.federation_notification_dlq_command == "batch-replay":
+                    return asyncio.run(_cmd_policy_federation_notification_dlq_batch_replay(args))
                 federation_notification_dlq_parser.print_help()
                 return 1
             # Phase 51: federation notification template subcommands
@@ -9540,6 +9554,80 @@ async def _cmd_policy_federation_notification_dlq_replay_original(args: argparse
         print(f"Last Replay At:  {result.last_replay_at.isoformat()}")
     if result.error:
         print(f"Error:           {result.error}")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_dlq_batch_replay(args: argparse.Namespace) -> int:
+    """Batch replay DLQ entries matching the given filters."""
+    from datetime import datetime, timezone
+
+    from agent_app.config.loader import build_app
+    from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+        AlertDeliveryStatus,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_service = getattr(app, "_federation_notification_alert_delivery_service", None)
+    if delivery_service is None:
+        print("Alert delivery service not configured.", file=sys.stderr)
+        return 1
+
+    dlq_store = getattr(app, "federation_dlq_store", None)
+    if dlq_store is None:
+        print("Federation DLQ store not configured.", file=sys.stderr)
+        return 1
+
+    # Parse time filters
+    since_dt = None
+    until_dt = None
+    if args.since:
+        since_dt = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
+    if args.until:
+        until_dt = datetime.fromisoformat(args.until.replace("Z", "+00:00"))
+
+    # Fetch DLQ attempts
+    try:
+        dlq_attempts = await dlq_store.list_attempts(
+            status=AlertDeliveryStatus.DLQ,
+            limit=min(args.limit, 1000),
+        )
+    except Exception as exc:
+        print(f"Error listing DLQ entries: {exc}", file=sys.stderr)
+        return 1
+
+    replayed = 0
+    failed = 0
+    for attempt in dlq_attempts:
+        # Apply filters
+        if args.target_id and attempt.target_id != args.target_id:
+            continue
+        if args.alert_id and attempt.alert_id != args.alert_id:
+            continue
+        if since_dt and attempt.created_at < since_dt:
+            continue
+        if until_dt and attempt.created_at > until_dt:
+            continue
+
+        result = await delivery_service.replay_dlq_attempt(
+            attempt_id=attempt.attempt_id,
+            dry_run=args.dry_run,
+        )
+        if result is not None and result.status == AlertDeliveryStatus.DELIVERED:
+            replayed += 1
+        else:
+            failed += 1
+
+    mode = "DRY RUN" if args.dry_run else "LIVE"
+    print(f"Batch DLQ Replay [{mode}]")
+    print(f"  Replayed: {replayed}")
+    print(f"  Failed:   {failed}")
+    print(f"  Total:    {replayed + failed}")
 
     return 0
 

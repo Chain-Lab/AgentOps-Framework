@@ -693,3 +693,112 @@ class TestFederationWebhookCLI:
         output = capsys.readouterr().out
         assert "False" in output
         assert "Cannot replay non-webhook channel" in output
+
+
+class TestDlqBatchReplayCLI:
+    """Tests for Phase 56 DLQ batch-replay CLI command."""
+
+    def test_batch_replay_dry_run(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_batch_replay
+
+        attempts = [
+            MagicMock(
+                attempt_id="nda_t1_a1_1", target_id="t1", alert_id="a1",
+                created_at=datetime.now(timezone.utc),
+                status=AlertDeliveryStatus.DLQ,
+            ),
+            MagicMock(
+                attempt_id="nda_t1_a2_1", target_id="t1", alert_id="a2",
+                created_at=datetime.now(timezone.utc),
+                status=AlertDeliveryStatus.DLQ,
+            ),
+        ]
+        dlq_store = MagicMock()
+        dlq_store.list_attempts = AsyncMock(return_value=attempts)
+        service = MagicMock()
+        service.replay_dlq_attempt = AsyncMock(return_value=MagicMock(status=AlertDeliveryStatus.DELIVERED))
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            target_id=None, alert_id=None,
+            since=None, until=None,
+            limit=100, dry_run=True,
+        )
+        app = MagicMock()
+        app._federation_notification_alert_delivery_service = service
+        app.federation_dlq_store = dlq_store
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "DRY RUN" in output
+        assert "Replayed: 2" in output
+
+    def test_batch_replay_with_filters(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_batch_replay
+
+        now = datetime.now(timezone.utc)
+        attempts = [
+            MagicMock(
+                attempt_id="nda_t1_a1_1", target_id="t1", alert_id="a1",
+                created_at=now, status=AlertDeliveryStatus.DLQ,
+            ),
+            MagicMock(
+                attempt_id="nda_t2_a1_1", target_id="t2", alert_id="a1",
+                created_at=now, status=AlertDeliveryStatus.DLQ,
+            ),
+        ]
+        dlq_store = MagicMock()
+        dlq_store.list_attempts = AsyncMock(return_value=attempts)
+        service = MagicMock()
+        service.replay_dlq_attempt = AsyncMock(return_value=MagicMock(status=AlertDeliveryStatus.DELIVERED))
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            target_id="t1", alert_id=None,
+            since=None, until=None,
+            limit=100, dry_run=False,
+        )
+        app = MagicMock()
+        app._federation_notification_alert_delivery_service = service
+        app.federation_dlq_store = dlq_store
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
+        assert rc == 0
+        output = capsys.readouterr().out
+        assert "LIVE" in output
+        assert "Replayed: 1" in output  # Only t1 matches
+
+    def test_batch_replay_service_not_configured(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_batch_replay
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            target_id=None, alert_id=None,
+            since=None, until=None,
+            limit=100, dry_run=False,
+        )
+        app = MagicMock()
+        app._federation_notification_alert_delivery_service = None
+        app.federation_dlq_store = MagicMock()
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
+        assert rc == 1
+        output = capsys.readouterr().out
+        assert "not configured" in output
+
+    def test_batch_replay_dlq_store_not_configured(self, capsys) -> None:
+        from agent_app.cli import _cmd_policy_federation_notification_dlq_batch_replay
+
+        args = argparse.Namespace(
+            config="agentapp.yaml",
+            target_id=None, alert_id=None,
+            since=None, until=None,
+            limit=100, dry_run=False,
+        )
+        app = MagicMock()
+        app._federation_notification_alert_delivery_service = MagicMock()
+        app.federation_dlq_store = None
+        with patch("agent_app.config.loader.build_app", return_value=app):
+            rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
+        assert rc == 1
+        output = capsys.readouterr().out
+        assert "DLQ store not configured" in output
