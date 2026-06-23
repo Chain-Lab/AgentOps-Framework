@@ -111,6 +111,7 @@ class AlertDeliveryAttempt(BaseModel):
     error_code: str | None = Field(default=None, description="Error code if failed")
     error_message: str | None = Field(default=None, description="Error message — sensitive values redacted")
     payload_preview: dict[str, Any] = Field(default_factory=dict, description="Payload preview — sensitive values redacted")
+    priority: int = Field(default=0, description="Delivery priority (higher = more urgent, derived from alert severity)")
     created_at: datetime = Field(..., description="Timezone-aware creation timestamp")
     delivered_at: datetime | None = Field(default=None, description="Timezone-aware delivery timestamp")
 
@@ -164,6 +165,22 @@ def _redact_in_string(value: str) -> str:
                 result = _redact_after_key(result, key, sep)
                 break
     return result
+
+
+_SEVERITY_PRIORITY: dict[str, int] = {
+    "critical": 100,
+    "error": 75,
+    "warning": 50,
+    "info": 25,
+}
+
+
+def severity_to_priority(severity: str) -> int:
+    """Map alert severity to delivery priority integer.
+
+    Higher values = more urgent. Unknown severity defaults to 0.
+    """
+    return _SEVERITY_PRIORITY.get(severity.lower().strip(), 0)
 
 
 def _redact_after_key(text: str, key: str, sep: str) -> str:

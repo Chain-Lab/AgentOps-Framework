@@ -130,7 +130,7 @@ class InMemoryAlertDeliveryStore:
         if status is not None:
             attempts = [a for a in attempts if a.status == status]
 
-        attempts.sort(key=lambda a: a.created_at, reverse=True)
+        attempts.sort(key=lambda a: (a.priority, a.created_at), reverse=True)
         return attempts[offset: offset + limit]
 
 
@@ -177,6 +177,7 @@ class SQLiteAlertDeliveryStore:
                 error_code TEXT,
                 error_message TEXT,
                 payload_preview_json TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 delivered_at TEXT
             );
@@ -282,8 +283,8 @@ class SQLiteAlertDeliveryStore:
             """INSERT INTO notification_alert_delivery_attempts
                (attempt_id, alert_id, target_id, channel_type, status, attempt,
                 next_retry_at, error_code, error_message, payload_preview_json,
-                created_at, delivered_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                priority, created_at, delivered_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 attempt.attempt_id,
                 attempt.alert_id,
@@ -295,6 +296,7 @@ class SQLiteAlertDeliveryStore:
                 attempt.error_code,
                 attempt.error_message,
                 json.dumps(attempt.payload_preview),
+                attempt.priority,
                 attempt.created_at.isoformat(),
                 attempt.delivered_at.isoformat() if attempt.delivered_at else None,
             ),
@@ -339,7 +341,7 @@ class SQLiteAlertDeliveryStore:
         params.extend([limit, offset])
         rows = self._conn.execute(
             f"SELECT * FROM notification_alert_delivery_attempts {where} "
-            "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?",
             params,
         ).fetchall()
         return [self._row_to_attempt(r) for r in rows]
