@@ -1,0 +1,24 @@
+<h1>DLQ Replay: {{ dlq_id }}</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p><a href="{{ base_path }}/federation/notifications/dlq">&larr; Back to DLQ</a></p>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if not replay_result %}
+<form method="post" action="{{ base_path }}/federation/notifications/alert-delivery/dlq/{{ dlq_id }}/replay">
+  <label>Actor ID: <input type="text" name="actor_id" required></label><br>
+  <label><input type="checkbox" name="dry_run" checked> Dry run (no changes)</label><br>
+  <button type="submit">Replay</button>
+</form>
+{% else %}
+<h2>Replay Result</h2>
+<table>
+  <tr><th>Attempt ID</th><td>{{ replay_result.attempt_id }}</td></tr>
+  <tr><th>Status</th><td>{{ replay_result.status }}</td></tr>
+  <tr><th>Attempt</th><td>{{ replay_result.attempt }}</td></tr>
+  <tr><th>Error</th><td>{{ replay_result.error_message or "&mdash;" }}</td></tr>
+</table>
+<p><a href="{{ base_path }}/federation/notifications/dlq/{{ dlq_id }}">&larr; Back to DLQ entry</a></p>
+{% endif %}

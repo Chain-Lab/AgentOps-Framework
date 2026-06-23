@@ -2,6 +2,17 @@
 <p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
 <p><a href="{{ base_path }}/federation/notifications/alert-delivery">&larr; Back to Targets</a></p>
 
+{% if updated_attempt %}
+<h2>Priority Updated</h2>
+<table>
+  <tr><th>Attempt ID</th><td>{{ updated_attempt.attempt_id }}</td></tr>
+  <tr><th>Alert ID</th><td>{{ updated_attempt.alert_id }}</td></tr>
+  <tr><th>Target</th><td>{{ updated_attempt.target_id }}</td></tr>
+  <tr><th>Priority</th><td>{{ updated_attempt.priority }}</td></tr>
+  <tr><th>Status</th><td>{{ updated_attempt.status }}</td></tr>
+</table>
+{% endif %}
+
 {% if not store_available %}
 <div class="empty-state">
   <p>Alert delivery store not configured.</p>

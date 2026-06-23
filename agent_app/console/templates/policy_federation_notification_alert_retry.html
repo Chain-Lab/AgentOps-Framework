@@ -1,0 +1,27 @@
+<h1>Alert Delivery Retry</h1>
+<p><a href="{{ base_path }}/federation/notifications/alert-delivery">&larr; Back to Targets</a></p>
+<p><a href="{{ base_path }}/federation/notifications/alert-delivery/attempts">&larr; Back to Attempts</a></p>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if not retry_result %}
+<form method="post" action="{{ base_path }}/federation/notifications/alert-delivery/retry">
+  <label>Actor ID: <input type="text" name="actor_id" required></label><br>
+  <label><input type="checkbox" name="dry_run" checked> Dry run (no changes)</label><br>
+  <button type="submit">Run Retry</button>
+</form>
+{% else %}
+<h2>Retry Result</h2>
+<table>
+  <tr><th>Dry Run</th><td>{{ retry_result.dry_run }}</td></tr>
+  <tr><th>Scanned</th><td>{{ retry_result.scanned }}</td></tr>
+  <tr><th>Retried</th><td>{{ retry_result.retried }}</td></tr>
+  <tr><th>Delivered</th><td>{{ retry_result.delivered }}</td></tr>
+  <tr><th>Retry Scheduled</th><td>{{ retry_result.retry_scheduled }}</td></tr>
+  <tr><th>DLQ</th><td>{{ retry_result.dlq }}</td></tr>
+  <tr><th>Failed</th><td>{{ retry_result.failed }}</td></tr>
+</table>
+<p><a href="{{ base_path }}/federation/notifications/alert-delivery/retry">&larr; Run another retry</a></p>
+{% endif %}

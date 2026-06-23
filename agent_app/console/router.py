@@ -6056,6 +6056,123 @@ def build_policy_console_router(
             },
         )
 
+    @router.post("/federation/notifications/alert-delivery/retry", response_class=HTMLResponse)
+    async def federation_notification_alert_delivery_retry(request: Request):
+        """Trigger retry of failed/scheduled alert deliveries."""
+        error_msg = None
+        retry_result = None
+        if federation_notification_alert_delivery_service is None:
+            error_msg = "Alert delivery service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                dry_run = form.get("dry_run") == "on"
+                if not actor_id:
+                    error_msg = "actor_id is required."
+                else:
+                    retry_result = await federation_notification_alert_delivery_service.run_once(
+                        dry_run=dry_run,
+                    )
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_retry.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": federation_notification_alert_delivery_store is not None,
+                "error": error_msg,
+                "retry_result": retry_result,
+            },
+        )
+
+    @router.post(
+        "/federation/notifications/alert-delivery/dlq/{dlq_id}/replay",
+        response_class=HTMLResponse,
+    )
+    async def federation_notification_alert_delivery_dlq_replay(
+        request: Request, dlq_id: str,
+    ):
+        """Replay a DLQ alert delivery attempt."""
+        error_msg = None
+        replay_result = None
+        if federation_notification_alert_delivery_service is None:
+            error_msg = "Alert delivery service not configured."
+        else:
+            try:
+                form = await request.form()
+                actor_id = form.get("actor_id", "")
+                dry_run = form.get("dry_run") == "on"
+                if not actor_id:
+                    error_msg = "actor_id is required."
+                else:
+                    replay_result = await federation_notification_alert_delivery_service.replay_dlq_attempt(
+                        attempt_id=dlq_id,
+                        dry_run=dry_run,
+                    )
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_dlq_replay.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": federation_notification_alert_delivery_store is not None,
+                "dlq_id": dlq_id,
+                "error": error_msg,
+                "replay_result": replay_result,
+            },
+        )
+
+    @router.post(
+        "/federation/notifications/alert-delivery/attempts/{attempt_id}/priority",
+        response_class=HTMLResponse,
+    )
+    async def federation_notification_alert_delivery_update_priority(
+        request: Request, attempt_id: str,
+    ):
+        """Update the priority of an alert delivery attempt."""
+        error_msg = None
+        updated_attempt = None
+        if federation_notification_alert_delivery_store is None:
+            error_msg = "Alert delivery store not configured."
+        else:
+            try:
+                form = await request.form()
+                priority_raw = form.get("priority", "")
+                actor_id = form.get("actor_id", "")
+                if not actor_id:
+                    error_msg = "actor_id is required."
+                else:
+                    try:
+                        priority = int(priority_raw)
+                    except (TypeError, ValueError):
+                        error_msg = f"Invalid priority value: '{priority_raw}'. Must be an integer."
+                        priority = None
+                    if priority is not None:
+                        existing = await federation_notification_alert_delivery_store.get_attempt(attempt_id)
+                        if existing is None:
+                            error_msg = f"Attempt '{attempt_id}' not found."
+                        else:
+                            existing.priority = priority
+                            updated_attempt = await federation_notification_alert_delivery_store.update_attempt(existing)
+            except Exception as exc:
+                error_msg = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_alert_attempts.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "store_available": federation_notification_alert_delivery_store is not None,
+                "error": error_msg,
+                "updated_attempt": updated_attempt,
+            },
+        )
+
     @router.get("/federation/notifications/prometheus", response_class=HTMLResponse)
     async def federation_notification_prometheus_page(request: Request):
         """Prometheus metrics export display page."""

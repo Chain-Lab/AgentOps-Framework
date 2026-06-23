@@ -38,6 +38,7 @@ class AlertDeliveryStore(Protocol):
     # Attempt CRUD
     async def record_attempt(self, attempt: AlertDeliveryAttempt) -> AlertDeliveryAttempt: ...
     async def get_attempt(self, attempt_id: str) -> AlertDeliveryAttempt | None: ...
+    async def update_attempt(self, attempt: AlertDeliveryAttempt) -> AlertDeliveryAttempt: ...
     async def list_attempts(
         self,
         alert_id: str | None = None,
@@ -105,6 +106,12 @@ class InMemoryAlertDeliveryStore:
 
     async def get_attempt(self, attempt_id: str) -> AlertDeliveryAttempt | None:
         return self._attempts.get(attempt_id)
+
+    async def update_attempt(self, attempt: AlertDeliveryAttempt) -> AlertDeliveryAttempt:
+        if attempt.attempt_id not in self._attempts:
+            raise ValueError(f"Attempt '{attempt.attempt_id}' not found")
+        self._attempts[attempt.attempt_id] = attempt
+        return attempt
 
     async def list_attempts(
         self,
@@ -312,6 +319,34 @@ class SQLiteAlertDeliveryStore:
         if row is None:
             return None
         return self._row_to_attempt(row)
+
+    async def update_attempt(self, attempt: AlertDeliveryAttempt) -> AlertDeliveryAttempt:
+        import json
+        cursor = self._conn.execute(
+            """UPDATE notification_alert_delivery_attempts
+               SET alert_id=?, target_id=?, channel_type=?, status=?,
+                   attempt=?, next_retry_at=?, error_code=?, error_message=?,
+                   payload_preview_json=?, priority=?, delivered_at=?
+               WHERE attempt_id=?""",
+            (
+                attempt.alert_id,
+                attempt.target_id,
+                attempt.channel_type.value,
+                attempt.status.value,
+                attempt.attempt,
+                attempt.next_retry_at.isoformat() if attempt.next_retry_at else None,
+                attempt.error_code,
+                attempt.error_message,
+                json.dumps(attempt.payload_preview),
+                attempt.priority,
+                attempt.delivered_at.isoformat() if attempt.delivered_at else None,
+                attempt.attempt_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Attempt '{attempt.attempt_id}' not found")
+        self._conn.commit()
+        return attempt
 
     async def list_attempts(
         self,
