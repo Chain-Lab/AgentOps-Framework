@@ -1,10 +1,13 @@
 """Metrics rollup — hourly/daily aggregation of delivery events.
 
 Phase 53 Task 8: Metrics rollup.
+Phase 55 Task 1: Async-safe rollup store (asyncio.to_thread).
 """
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -141,17 +144,36 @@ class InMemoryNotificationRollupStore:
 
 
 class SQLiteNotificationRollupStore:
-    """SQLite-backed rollup store."""
+    """SQLite-backed rollup store with async-safe operations.
+
+    Each blocking SQLite call is offloaded via ``asyncio.to_thread()`` so
+    the event loop is never blocked.  Per-thread connections are created
+    lazily and cached in thread-local storage.
+    """
 
     def __init__(self, db_path: str) -> None:
-        self._db_path = Path(db_path)
+        self._db_path = Path(db_path).resolve()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._init_db()
+        self._local = threading.local()
+        # Init schema on the creating thread (cheap, one-time).
+        self._init_db_sync()
 
-    def _init_db(self) -> None:
-        self._conn.executescript("""
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return (and cache) a thread-local connection."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
+
+    def _init_db_sync(self) -> None:
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS notification_rollups (
                 rollup_id TEXT PRIMARY KEY,
                 granularity TEXT NOT NULL,
@@ -187,10 +209,16 @@ class SQLiteNotificationRollupStore:
                 created_at TEXT NOT NULL
             );
         """)
-        self._conn.commit()
+        conn.commit()
+        conn.close()
 
-    async def upsert_rollup(self, rollup: NotificationMetricsRollup) -> None:
-        self._conn.execute(
+    # ------------------------------------------------------------------
+    # Synchronous "doer" methods — called via asyncio.to_thread()
+    # ------------------------------------------------------------------
+
+    def _sync_upsert_rollup(self, rollup: NotificationMetricsRollup) -> None:
+        conn = self._get_conn()
+        conn.execute(
             """INSERT OR REPLACE INTO notification_rollups
                (rollup_id, granularity, window_start, window_end, federation_id,
                 channel, total, sent, failed, suppressed, dlq, retry_scheduled,
@@ -218,22 +246,23 @@ class SQLiteNotificationRollupStore:
                 rollup.created_at.isoformat(),
             ),
         )
-        self._conn.commit()
+        conn.commit()
 
-    async def get_rollup(self, rollup_id: str) -> NotificationMetricsRollup | None:
-        row = self._conn.execute(
+    def _sync_get_rollup(self, rollup_id: str) -> NotificationMetricsRollup | None:
+        conn = self._get_conn()
+        row = conn.execute(
             "SELECT * FROM notification_rollups WHERE rollup_id=?", (rollup_id,)
         ).fetchone()
         if row is None:
             return None
         return self._row_to_rollup(row)
 
-    async def list_rollups(
+    def _sync_list_rollups(
         self,
-        granularity: NotificationRollupGranularity | None = None,
-        channel: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
+        granularity: NotificationRollupGranularity | None,
+        channel: str | None,
+        limit: int,
+        offset: int,
     ) -> list[NotificationMetricsRollup]:
         conditions: list[str] = []
         params: list[Any] = []
@@ -250,35 +279,37 @@ class SQLiteNotificationRollupStore:
             where = "WHERE " + " AND ".join(conditions)
 
         params.extend([limit, offset])
-        rows = self._conn.execute(
+        conn = self._get_conn()
+        rows = conn.execute(
             f"SELECT * FROM notification_rollups {where} "
             "ORDER BY window_start DESC LIMIT ? OFFSET ?",
             params,
         ).fetchall()
         return [self._row_to_rollup(r) for r in rows]
 
-    async def build_incremental_rollup(
-        self,
-        since: datetime | None = None,
+    def _sync_build_incremental_rollup(
+        self, since: datetime | None,
     ) -> list[NotificationMetricsRollup]:
-        """Build rollup for events newer than `since` (or all if since is None)."""
         if since is None:
-            return await self.list_rollups()
-        rows = self._conn.execute(
+            return self._sync_list_rollups(None, None, 10000, 0)
+        conn = self._get_conn()
+        rows = conn.execute(
             "SELECT * FROM notification_rollups WHERE window_start >= ? "
             "ORDER BY window_start DESC",
             (since.isoformat(),),
         ).fetchall()
         return [self._row_to_rollup(r) for r in rows]
 
-    async def list_checkpoints(self) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
+    def _sync_list_checkpoints(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
             "SELECT * FROM notification_rollup_checkpoints ORDER BY window_start"
         ).fetchall()
         return [dict(row) for row in rows]
 
-    async def record_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        self._conn.execute(
+    def _sync_record_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        conn = self._get_conn()
+        conn.execute(
             """INSERT OR REPLACE INTO notification_rollup_checkpoints
                (checkpoint_id, granularity, window_start, window_end, entry_count, created_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -288,10 +319,46 @@ class SQLiteNotificationRollupStore:
                 checkpoint.get("window_start"),
                 checkpoint.get("window_end"),
                 checkpoint.get("entry_count", 0),
-                checkpoint.get("created_at", datetime.now(timezone.utc).isoformat()),
+                checkpoint.get(
+                    "created_at", datetime.now(timezone.utc).isoformat(),
+                ),
             ),
         )
-        self._conn.commit()
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Async public API — delegates to sync doers via to_thread
+    # ------------------------------------------------------------------
+
+    async def upsert_rollup(self, rollup: NotificationMetricsRollup) -> None:
+        await asyncio.to_thread(self._sync_upsert_rollup, rollup)
+
+    async def get_rollup(self, rollup_id: str) -> NotificationMetricsRollup | None:
+        return await asyncio.to_thread(self._sync_get_rollup, rollup_id)
+
+    async def list_rollups(
+        self,
+        granularity: NotificationRollupGranularity | None = None,
+        channel: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[NotificationMetricsRollup]:
+        return await asyncio.to_thread(
+            self._sync_list_rollups, granularity, channel, limit, offset,
+        )
+
+    async def build_incremental_rollup(
+        self,
+        since: datetime | None = None,
+    ) -> list[NotificationMetricsRollup]:
+        """Build rollup for events newer than `since` (or all if since is None)."""
+        return await asyncio.to_thread(self._sync_build_incremental_rollup, since)
+
+    async def list_checkpoints(self) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._sync_list_checkpoints)
+
+    async def record_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._sync_record_checkpoint, checkpoint)
 
     def _row_to_rollup(self, row: sqlite3.Row) -> NotificationMetricsRollup:
         data = dict(row)
@@ -302,7 +369,14 @@ class SQLiteNotificationRollupStore:
         return NotificationMetricsRollup(**data)
 
     def close(self) -> None:
-        self._conn.close()
+        """Close any thread-local connections best-effort."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
 
 # ---------------------------------------------------------------------------
@@ -474,3 +548,23 @@ class NotificationRollupService:
             since=since or (until - timedelta(hours=1)),
             until=until,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 55 async convenience wrappers
+    # ------------------------------------------------------------------
+
+    async def list_rollups_async(
+        self,
+        granularity: NotificationRollupGranularity | None = None,
+        channel: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[NotificationMetricsRollup]:
+        """Async wrapper around rollup_store.list_rollups."""
+        return await self._rollup_store.list_rollups(
+            granularity=granularity, channel=channel, limit=limit, offset=offset,
+        )
+
+    async def list_checkpoints_async(self) -> list[dict[str, Any]]:
+        """Async wrapper around rollup_store.list_checkpoints."""
+        return await self._rollup_store.list_checkpoints()
