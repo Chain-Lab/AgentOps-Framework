@@ -791,6 +791,16 @@ class RolloutFederationNotificationAlertDeliveryConfig(BaseModel):
         default_factory=list,
         description="Alert delivery targets",
     )
+    # Phase 55: retry daemon config
+    retry_daemon: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Retry daemon configuration (enabled, interval_seconds, jitter_seconds, batch_limit)",
+    )
+    # Phase 55: write actions config
+    write_actions: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Console write actions configuration (enabled, require_confirmation)",
+    )
 
 
 class RolloutFederationNotificationRetentionConfig(BaseModel):
@@ -821,6 +831,19 @@ class RolloutFederationNotificationRollupConfig(BaseModel):
         ),
         description="Rollup store configuration",
     )
+
+
+class RolloutFederationNotificationArchiveCleanupConfig(BaseModel):
+    """Archive cleanup configuration for notification data (Phase 55)."""
+
+    enabled: bool = Field(default=False, description="Enable archive cleanup")
+    rollup_retention_days: int = Field(default=90, description="Days to retain rollup data")
+    checkpoint_retention_days: int = Field(default=30, description="Days to retain cleanup checkpoints")
+    archive_dir: str = Field(
+        default=".agent_app/archives/federation_notifications",
+        description="Directory for archive files",
+    )
+    archive_format: str = Field(default="jsonl", description="Archive file format")
 
 
 class RolloutFederationNotificationConfig(BaseModel):
@@ -868,6 +891,10 @@ class RolloutFederationNotificationConfig(BaseModel):
     rollup: RolloutFederationNotificationRollupConfig = Field(
         default_factory=RolloutFederationNotificationRollupConfig,
         description="Rollup config (Phase 53)",
+    )
+    archive_cleanup: RolloutFederationNotificationArchiveCleanupConfig = Field(
+        default_factory=RolloutFederationNotificationArchiveCleanupConfig,
+        description="Archive cleanup config (Phase 55)",
     )
 
 

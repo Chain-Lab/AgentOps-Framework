@@ -1158,6 +1158,46 @@ def main() -> int:
     notifications_delivery_dlq_replay_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
     notifications_delivery_dlq_replay_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_dlq_replay)
 
+    # Phase 55: alert delivery daemon commands
+    notifications_delivery_daemon_parser = notifications_delivery_sub.add_parser("daemon", help="Alert delivery retry daemon commands (Phase 55)")
+    notifications_delivery_daemon_sub = notifications_delivery_daemon_parser.add_subparsers(dest="federation_notification_delivery_daemon_command")
+    notifications_delivery_daemon_start_parser = notifications_delivery_daemon_sub.add_parser("start", help="Start the retry daemon (Phase 55)")
+    notifications_delivery_daemon_start_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_start_parser.add_argument("--interval", type=float, default=None, help="Override interval seconds")
+    notifications_delivery_daemon_start_parser.add_argument("--jitter", type=float, default=None, help="Override jitter seconds")
+    notifications_delivery_daemon_start_parser.add_argument("--batch-limit", type=int, default=None, help="Override batch limit")
+    notifications_delivery_daemon_start_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_delivery_daemon_start_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_start)
+    notifications_delivery_daemon_stop_parser = notifications_delivery_daemon_sub.add_parser("stop", help="Stop the retry daemon (Phase 55)")
+    notifications_delivery_daemon_stop_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_stop_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_delivery_daemon_stop_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_stop)
+    notifications_delivery_daemon_status_parser = notifications_delivery_daemon_sub.add_parser("status", help="Show retry daemon status (Phase 55)")
+    notifications_delivery_daemon_status_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_status_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_status)
+
+    # Phase 55: alert delivery priority commands
+    notifications_delivery_priority_parser = notifications_delivery_sub.add_parser("priority", help="Alert delivery priority commands (Phase 55)")
+    notifications_delivery_priority_sub = notifications_delivery_priority_parser.add_subparsers(dest="federation_notification_delivery_priority_command")
+    notifications_delivery_priority_list_parser = notifications_delivery_priority_sub.add_parser("list", help="List attempts sorted by priority (Phase 55)")
+    notifications_delivery_priority_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_priority_list_parser.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
+    notifications_delivery_priority_list_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_delivery_priority_list_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_priority_list)
+    notifications_delivery_priority_update_parser = notifications_delivery_priority_sub.add_parser("update", help="Update attempt priority (Phase 55)")
+    notifications_delivery_priority_update_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_priority_update_parser.add_argument("--attempt-id", required=True, help="Attempt ID to update")
+    notifications_delivery_priority_update_parser.add_argument("--priority", type=int, required=True, help="New priority (0-100)")
+    notifications_delivery_priority_update_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_delivery_priority_update_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_priority_update)
+
+    # Phase 55: archive cleanup command
+    notifications_archive_cleanup_parser = federation_notification_sub.add_parser("archive-cleanup", help="Archive and cleanup old notification data (Phase 55)")
+    notifications_archive_cleanup_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_archive_cleanup_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    notifications_archive_cleanup_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_archive_cleanup_parser.set_defaults(func=_cmd_policy_federation_notification_archive_cleanup)
+
     # Phase 54: federation notification alert dedup
     notifications_dedup_parser = federation_notification_sub.add_parser("dedup", help="Alert deduplication commands (Phase 54)")
     notifications_dedup_parser.add_argument("--config", required=True, help="Config file path")
@@ -1901,6 +1941,28 @@ def main() -> int:
             # Phase 54: federation notification alert dedup
             if args.federation_notification_command == "dedup":
                 return asyncio.run(_cmd_policy_federation_notification_alert_dedup_explain(args))
+            # Phase 55: alert delivery daemon subcommands
+            if args.federation_notification_command == "delivery":
+                if args.federation_notification_delivery_command == "daemon":
+                    if args.federation_notification_delivery_daemon_command == "start":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_start(args))
+                    if args.federation_notification_delivery_daemon_command == "stop":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_stop(args))
+                    if args.federation_notification_delivery_daemon_command == "status":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_status(args))
+                    notifications_delivery_daemon_parser.print_help()
+                    return 1
+                # Phase 55: alert delivery priority subcommands
+                if args.federation_notification_delivery_command == "priority":
+                    if args.federation_notification_delivery_priority_command == "list":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_list(args))
+                    if args.federation_notification_delivery_priority_command == "update":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_update(args))
+                    notifications_delivery_priority_parser.print_help()
+                    return 1
+            # Phase 55: archive cleanup
+            if args.federation_notification_command == "archive-cleanup":
+                return asyncio.run(_cmd_policy_federation_notification_archive_cleanup(args))
             federation_notification_parser.print_help()
             return 1
         # Phase 49: federation escalate-due subcommand
@@ -10600,7 +10662,289 @@ async def _cmd_policy_federation_notification_alert_dedup_explain(args: argparse
 
 
 # ---------------------------------------------------------------------------
-# Phase 54: Retention archives cleanup
+# Phase 55: Alert delivery retry daemon
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_alert_delivery_daemon_start(args: argparse.Namespace) -> int:
+    """Start the alert delivery retry daemon."""
+    import signal
+
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_adapters import (
+        MemoryAlertDeliveryAdapter,
+        WebhookAlertDeliveryAdapter,
+        ConsoleAlertDeliveryAdapter,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_service import (
+        NotificationAlertDeliveryService,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+        AlertDeliveryRetryDaemonConfig,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    adapters = {
+        "memory": MemoryAlertDeliveryAdapter(),
+        "webhook": WebhookAlertDeliveryAdapter(dry_run=True),
+        "console": ConsoleAlertDeliveryAdapter(),
+    }
+    service = NotificationAlertDeliveryService(
+        store=store, adapters=adapters, retry_policy=delivery_cfg.retry,
+    )
+
+    # Build daemon config from app config + CLI overrides
+    daemon_cfg_raw = getattr(app, "_federation_notification_retry_daemon_config", {})
+    if not isinstance(daemon_cfg_raw, dict):
+        daemon_cfg_raw = {}
+    daemon_config = AlertDeliveryRetryDaemonConfig(
+        enabled=daemon_cfg_raw.get("enabled", True),
+        interval_seconds=args.interval or daemon_cfg_raw.get("interval_seconds", 60.0),
+        jitter_seconds=args.jitter or daemon_cfg_raw.get("jitter_seconds", 5.0),
+        batch_limit=args.batch_limit or daemon_cfg_raw.get("batch_limit", 100),
+    )
+
+    if not daemon_config.enabled:
+        print("Retry daemon is disabled in config. Enable it to start.", file=sys.stderr)
+        return 1
+
+    daemon = AlertDeliveryRetryDaemon(
+        scheduler=service,
+        config=daemon_config,
+        audit_logger=lambda event, payload: None,
+    )
+
+    # Handle graceful shutdown
+    shutdown_event = asyncio.Event()
+
+    def _handle_signal():
+        shutdown_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _handle_signal)
+        except NotImplementedError:
+            pass  # Windows fallback
+
+    print(f"Starting retry daemon (interval={daemon_config.interval_seconds}s, jitter={daemon_config.jitter_seconds}s)...")
+    await daemon.start()
+    print("Daemon started. Press Ctrl+C to stop.")
+
+    try:
+        await shutdown_event.wait()
+    finally:
+        await daemon.stop()
+        print("Daemon stopped.")
+
+    return 0
+
+
+async def _cmd_policy_federation_notification_alert_delivery_daemon_stop(args: argparse.Namespace) -> int:
+    """Stop the retry daemon (placeholder — daemon is process-local)."""
+    print("The retry daemon runs in-process. Stop it with Ctrl+C or by terminating the process.", file=sys.stderr)
+    return 0
+
+
+async def _cmd_policy_federation_notification_alert_delivery_daemon_status(args: argparse.Namespace) -> int:
+    """Show retry daemon configuration status."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", {})
+    if not daemon_cfg:
+        print("Retry daemon not configured.")
+        return 0
+
+    print(f"enabled={daemon_cfg.get('enabled', False)}")
+    print(f"interval_seconds={daemon_cfg.get('interval_seconds', 60.0)}")
+    print(f"jitter_seconds={daemon_cfg.get('jitter_seconds', 5.0)}")
+    print(f"batch_limit={daemon_cfg.get('batch_limit', 100)}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 55: Alert delivery priority management
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_alert_delivery_priority_list(args: argparse.Namespace) -> int:
+    """List alert delivery attempts sorted by priority."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_priority_queue import (
+        AlertPriorityQueue,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    queue = AlertPriorityQueue(store=store)
+    attempts = await queue.peek(limit=args.limit)
+
+    for a in attempts:
+        print(f"{a.attempt_id}\t{a.alert_id}\tpriority={a.priority}\tstatus={a.status.value}\t"
+              f"attempt={a.attempt}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_alert_delivery_priority_update(args: argparse.Namespace) -> int:
+    """Update the priority of an alert delivery attempt."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    if not args.yes:
+        confirm = input(f"Update priority of attempt '{args.attempt_id}' to {args.priority}? [y/N]: ")
+        if confirm.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return 0
+
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    existing = await store.get_attempt(args.attempt_id)
+    if existing is None:
+        print(f"Attempt not found: {args.attempt_id}", file=sys.stderr)
+        return 1
+
+    from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+        AlertDeliveryAttempt,
+    )
+    updated = AlertDeliveryAttempt(
+        attempt_id=existing.attempt_id,
+        alert_id=existing.alert_id,
+        target_id=existing.target_id,
+        channel_type=existing.channel_type,
+        status=existing.status,
+        attempt=existing.attempt,
+        next_retry_at=existing.next_retry_at,
+        error_code=existing.error_code,
+        error_message=existing.error_message,
+        payload_preview_json=existing.payload_preview_json,
+        priority=args.priority,
+        delivered_at=existing.delivered_at,
+    )
+    try:
+        result = await store.update_attempt(updated)
+    except Exception as exc:
+        print(f"Error updating priority: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Updated priority for {result.attempt_id} -> {result.priority}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 55: Archive cleanup
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_archive_cleanup(args: argparse.Namespace) -> int:
+    """Run archive cleanup for old notification data."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_archive_cleanup_service import (
+        ResumableArchiveCleanup,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_archive_cleanup import (
+        ArchiveCheckpointStore,
+        InMemoryArchiveCheckpointStore,
+        ArchiveCleanupPolicy,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    archive_cfg = getattr(app, "_federation_notification_archive_cleanup_config", None)
+    if archive_cfg is None or not archive_cfg.enabled:
+        print("Archive cleanup is not configured or disabled.", file=sys.stderr)
+        return 1
+
+    # Build policy from config
+    policy = ArchiveCleanupPolicy(
+        enabled=archive_cfg.enabled,
+        rollup_retention_days=archive_cfg.rollup_retention_days,
+        checkpoint_retention_days=archive_cfg.checkpoint_retention_days,
+        archive_dir=archive_cfg.archive_dir,
+        archive_format=archive_cfg.archive_format,
+    )
+
+    checkpoint_store = InMemoryArchiveCheckpointStore()
+    cleanup = ResumableArchiveCleanup(
+        checkpoint_store=checkpoint_store,
+        policy=policy,
+        audit_logger=lambda event, payload: None,
+    )
+
+    print(f"Running archive cleanup (dry_run={args.dry_run})...")
+    result = await cleanup.run_cleanup(dry_run=args.dry_run)
+
+    print(f"Checkpoint: {result.checkpoint_id}")
+    print(f"Records processed: {result.records_processed}")
+    print(f"Records archived: {result.records_archived}")
+    print(f"Records deleted: {result.records_deleted}")
+    print(f"Complete: {result.is_complete}")
+    if result.error:
+        print(f"Error: {result.error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Alert dedup
 # ---------------------------------------------------------------------------
 
 

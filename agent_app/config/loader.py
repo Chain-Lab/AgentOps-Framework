@@ -1350,6 +1350,22 @@ def build_app(
                 rollup_cfg = getattr(notif_cfg, "rollup", None)
                 if rollup_cfg is not None:
                     app._federation_notification_rollup_config = rollup_cfg
+
+                # -- Phase 55: Alert delivery extensions (retry daemon, write actions, archive cleanup) --
+                if alert_delivery_cfg is not None:
+                    # Wire retry_daemon config from alert_delivery
+                    retry_daemon_cfg = getattr(alert_delivery_cfg, "retry_daemon", None)
+                    if retry_daemon_cfg is not None:
+                        app._federation_notification_retry_daemon_config = retry_daemon_cfg
+                    # Wire write_actions config from alert_delivery
+                    write_actions_cfg = getattr(alert_delivery_cfg, "write_actions", None)
+                    if write_actions_cfg is not None:
+                        app._federation_notification_write_actions_config = write_actions_cfg
+
+                # Wire archive_cleanup config from notification top-level
+                archive_cleanup_cfg = getattr(notif_cfg, "archive_cleanup", None)
+                if archive_cleanup_cfg is not None:
+                    app._federation_notification_archive_cleanup_config = archive_cleanup_cfg
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 
