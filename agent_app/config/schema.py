@@ -745,6 +745,84 @@ class RolloutFederationNotificationAlertConfig(BaseModel):
     )
 
 
+class RolloutFederationNotificationAlertDeliveryRetryPolicyConfig(BaseModel):
+    """Retry policy for alert delivery (Phase 53)."""
+
+    max_attempts: int = Field(default=3, description="Maximum delivery attempts")
+    base_delay_seconds: int = Field(default=60, description="Base delay for exponential backoff (seconds)")
+    max_delay_seconds: int = Field(default=600, description="Maximum delay between retries (seconds)")
+
+
+class RolloutFederationNotificationAlertDeliveryTargetConfig(BaseModel):
+    """Configuration for an alert delivery target (Phase 53)."""
+
+    target_id: str = Field(description="Unique target identifier")
+    name: str = Field(description="Human-readable target name")
+    channel_type: str = Field(description="Delivery channel: memory, webhook, email, slack, console")
+    enabled: bool = Field(default=True, description="Whether this target is active")
+    severity_filter: list[str] = Field(
+        default_factory=list, description="Only deliver alerts with these severities (empty = all)"
+    )
+    channel_filter: list[str] = Field(
+        default_factory=list, description="Only deliver alerts from these channels (empty = all)"
+    )
+    federation_filter: list[str] = Field(
+        default_factory=list, description="Only deliver alerts for these federations (empty = all)"
+    )
+    endpoint: str | None = Field(default=None, description="Endpoint URL for webhook/email/slack")
+
+
+class RolloutFederationNotificationAlertDeliveryConfig(BaseModel):
+    """Configuration for federation notification alert delivery (Phase 53)."""
+
+    enabled: bool = Field(default=False, description="Enable external alert delivery")
+    store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="sqlite",
+            path=".agent_app/federation_notification_alert_delivery.db",
+        ),
+        description="Alert delivery store configuration",
+    )
+    retry: RolloutFederationNotificationAlertDeliveryRetryPolicyConfig = Field(
+        default_factory=RolloutFederationNotificationAlertDeliveryRetryPolicyConfig,
+        description="Retry policy for failed deliveries",
+    )
+    targets: list[RolloutFederationNotificationAlertDeliveryTargetConfig] = Field(
+        default_factory=list,
+        description="Alert delivery targets",
+    )
+
+
+class RolloutFederationNotificationRetentionConfig(BaseModel):
+    """Retention policy for notification observability data (Phase 53)."""
+
+    enabled: bool = Field(default=True, description="Whether retention is active")
+    raw_event_retention_days: int = Field(
+        default=30, description="Days to retain raw delivery events"
+    )
+    archive_before_purge: bool = Field(
+        default=True, description="Archive data before deleting"
+    )
+    archive_format: str = Field(default="jsonl", description="Archive format: jsonl or csv")
+    archive_dir: str = Field(
+        default=".agent_app/archives/federation_notifications",
+        description="Directory for archive files",
+    )
+
+
+class RolloutFederationNotificationRollupConfig(BaseModel):
+    """Metrics rollup configuration (Phase 53)."""
+
+    enabled: bool = Field(default=False, description="Enable metrics rollup")
+    store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="sqlite",
+            path=".agent_app/federation_notification_rollups.db",
+        ),
+        description="Rollup store configuration",
+    )
+
+
 class RolloutFederationNotificationConfig(BaseModel):
     """Configuration for federation notification (Phase 49)."""
     enabled: bool = Field(default=False, description="Enable federation notification")
@@ -778,6 +856,18 @@ class RolloutFederationNotificationConfig(BaseModel):
     alerts: RolloutFederationNotificationAlertConfig = Field(
         default_factory=RolloutFederationNotificationAlertConfig,
         description="Alert rules config (Phase 52)",
+    )
+    alert_delivery: RolloutFederationNotificationAlertDeliveryConfig = Field(
+        default_factory=RolloutFederationNotificationAlertDeliveryConfig,
+        description="Alert delivery config (Phase 53)",
+    )
+    retention: RolloutFederationNotificationRetentionConfig = Field(
+        default_factory=RolloutFederationNotificationRetentionConfig,
+        description="Retention config (Phase 53)",
+    )
+    rollup: RolloutFederationNotificationRollupConfig = Field(
+        default_factory=RolloutFederationNotificationRollupConfig,
+        description="Rollup config (Phase 53)",
     )
 
 

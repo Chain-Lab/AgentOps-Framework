@@ -79,6 +79,12 @@ class NotificationRollupStore(Protocol):
         limit: int = 100,
         offset: int = 0,
     ) -> list[NotificationMetricsRollup]: ...
+    async def build_incremental_rollup(
+        self,
+        since: datetime | None = None,
+    ) -> list[NotificationMetricsRollup]: ...
+    async def list_checkpoints(self) -> list[dict[str, Any]]: ...
+    async def record_checkpoint(self, checkpoint: dict[str, Any]) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +118,21 @@ class InMemoryNotificationRollupStore:
             rollups = [r for r in rollups if r.channel == channel]
         rollups.sort(key=lambda r: r.window_start, reverse=True)
         return rollups[offset: offset + limit]
+
+    async def build_incremental_rollup(
+        self,
+        since: datetime | None = None,
+    ) -> list[NotificationMetricsRollup]:
+        """In-memory: return existing rollups newer than `since`."""
+        if since is None:
+            return list(self._rollups.values())
+        return [r for r in self._rollups.values() if r.window_start >= since]
+
+    async def list_checkpoints(self) -> list[dict[str, Any]]:
+        return []
+
+    async def record_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +178,14 @@ class SQLiteNotificationRollupStore:
                 ON notification_rollups(channel);
             CREATE INDEX IF NOT EXISTS idx_nru_window
                 ON notification_rollups(window_start);
+            CREATE TABLE IF NOT EXISTS notification_rollup_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                granularity TEXT NOT NULL,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                entry_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
         """)
         self._conn.commit()
 
@@ -227,6 +256,42 @@ class SQLiteNotificationRollupStore:
             params,
         ).fetchall()
         return [self._row_to_rollup(r) for r in rows]
+
+    async def build_incremental_rollup(
+        self,
+        since: datetime | None = None,
+    ) -> list[NotificationMetricsRollup]:
+        """Build rollup for events newer than `since` (or all if since is None)."""
+        if since is None:
+            return await self.list_rollups()
+        rows = self._conn.execute(
+            "SELECT * FROM notification_rollups WHERE window_start >= ? "
+            "ORDER BY window_start DESC",
+            (since.isoformat(),),
+        ).fetchall()
+        return [self._row_to_rollup(r) for r in rows]
+
+    async def list_checkpoints(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM notification_rollup_checkpoints ORDER BY window_start"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    async def record_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO notification_rollup_checkpoints
+               (checkpoint_id, granularity, window_start, window_end, entry_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                checkpoint.get("checkpoint_id"),
+                checkpoint.get("granularity"),
+                checkpoint.get("window_start"),
+                checkpoint.get("window_end"),
+                checkpoint.get("entry_count", 0),
+                checkpoint.get("created_at", datetime.now(timezone.utc).isoformat()),
+            ),
+        )
+        self._conn.commit()
 
     def _row_to_rollup(self, row: sqlite3.Row) -> NotificationMetricsRollup:
         data = dict(row)
@@ -390,3 +455,22 @@ class NotificationRollupService:
         upper = min(lower + 1, len(sorted_vals) - 1)
         frac = idx - lower
         return sorted_vals[lower] + frac * (sorted_vals[upper] - sorted_vals[lower])
+
+    async def build_incremental_rollup(
+        self,
+        since: datetime | None = None,
+        granularity: NotificationRollupGranularity | None = None,
+    ) -> list[NotificationMetricsRollup]:
+        """Build rollup for events newer than `since` checkpoint."""
+        if since is None:
+            checkpoints = await self._rollup_store.list_checkpoints()
+            if checkpoints:
+                latest = max(cp["window_end"] for cp in checkpoints)
+                since = datetime.fromisoformat(latest) if isinstance(latest, str) else latest
+
+        until = datetime.now(timezone.utc)
+        return await self.build_rollups(
+            granularity=granularity or NotificationRollupGranularity.HOURLY,
+            since=since or (until - timedelta(hours=1)),
+            until=until,
+        )

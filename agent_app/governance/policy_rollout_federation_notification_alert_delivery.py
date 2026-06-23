@@ -73,6 +73,7 @@ class AlertDeliveryTarget(BaseModel):
     endpoint: str | None = Field(default=None, description="Delivery endpoint URL")
     headers: dict[str, str] = Field(default_factory=dict, description="Additional headers — sensitive fields redacted")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata — sensitive fields redacted")
+    webhook_secret: str | None = Field(default=None, description="Secret for HMAC-SHA256 webhook signing")
 
     @field_validator("target_id")
     @classmethod

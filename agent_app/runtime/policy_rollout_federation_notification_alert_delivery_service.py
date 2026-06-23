@@ -1,14 +1,17 @@
 """Alert delivery service — match targets, build payloads, call adapters, record attempts, retry.
 
 Phase 53 Task 3: Alert delivery service.
+Phase 54: Retry scheduler, DLQ replay, webhook signing integration, change events.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
     AlertDeliveryAttempt,
     AlertDeliveryChannelType,
@@ -19,6 +22,8 @@ from agent_app.governance.policy_rollout_federation_notification_alert_delivery 
 from agent_app.governance.policy_rollout_federation_notification_observability import (
     NotificationAlertEvent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AlertDeliveryAdapterResult(BaseModel):
@@ -31,6 +36,19 @@ class AlertDeliveryAdapterResult(BaseModel):
     retryable: bool = False
 
 
+class AlertDeliveryRetryRunResult(BaseModel):
+    """Result from a single retry scheduler run."""
+
+    dry_run: bool
+    scanned: int = 0
+    retried: int = 0
+    delivered: int = 0
+    retry_scheduled: int = 0
+    dlq: int = 0
+    failed: int = 0
+    attempt_ids: list[str] = Field(default_factory=list)
+
+
 class NotificationAlertDeliveryService:
     """Delivers alert events to configured targets via adapters."""
 
@@ -39,10 +57,12 @@ class NotificationAlertDeliveryService:
         store: Any,
         adapters: dict[str, Any],
         retry_policy: AlertDeliveryRetryPolicy | None = None,
+        change_event_store: Any | None = None,
     ) -> None:
         self._store = store
         self._adapters = adapters
         self._retry_policy = retry_policy or AlertDeliveryRetryPolicy()
+        self._change_event_store = change_event_store
 
     async def deliver_alert(
         self,
@@ -142,6 +162,23 @@ class NotificationAlertDeliveryService:
 
         return retried
 
+    def _record_change_event(
+        self,
+        *,
+        event_type: PolicyChangeEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Best-effort change event recording — never break the caller on failure."""
+        if self._change_event_store is None:
+            return
+        try:
+            self._change_event_store.record(
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            logger.debug("Change event recording failed for %s", event_type, exc_info=True)
+
     def _match_target(self, target: AlertDeliveryTarget, alert: NotificationAlertEvent) -> bool:
         """Check if a target matches an alert."""
         if target.severity_filter and alert.severity not in target.severity_filter:
@@ -208,3 +245,140 @@ class NotificationAlertDeliveryService:
             delivered_at=now if status == AlertDeliveryStatus.DELIVERED else None,
         )
         return await self._store.record_attempt(attempt)
+
+    async def run_once(
+        self,
+        now: datetime | None = None,
+        limit: int = 100,
+        dry_run: bool = False,
+    ) -> AlertDeliveryRetryRunResult:
+        """Retry all RETRY_SCHEDULED attempts past their next_retry_at."""
+        if now is None:
+            now = datetime.now(timezone.utc)
+
+        result = AlertDeliveryRetryRunResult(dry_run=dry_run)
+        due_attempts = await self._store.list_attempts(
+            status=AlertDeliveryStatus.RETRY_SCHEDULED, limit=limit,
+        )
+        result.scanned = len(due_attempts)
+
+        for attempt in due_attempts:
+            if attempt.next_retry_at is not None and attempt.next_retry_at > now:
+                continue
+
+            target = await self._store.get_target(attempt.target_id)
+            if target is None:
+                result.failed += 1
+                continue
+
+            adapter = self._adapters.get(target.channel_type.value)
+            if adapter is None:
+                result.failed += 1
+                continue
+
+            if dry_run:
+                result.retry_scheduled += 1
+                result.attempt_ids.append(attempt.attempt_id)
+                continue
+
+            payload = {"alert_id": attempt.alert_id, "retry_of": attempt.attempt_id}
+            try:
+                result_adapter = adapter.deliver(target, None, payload)  # type: ignore
+            except Exception as exc:
+                result_adapter = AlertDeliveryAdapterResult(
+                    success=False, error_code="ADAPTER_ERROR",
+                    error_message=str(exc), retryable=True,
+                )
+
+            new_attempt = await self._record_attempt_result(
+                target, None, result_adapter, now, attempt_num=attempt.attempt + 1,
+            )
+            result.attempt_ids.append(new_attempt.attempt_id)
+            if new_attempt.status == AlertDeliveryStatus.DELIVERED:
+                result.delivered += 1
+            elif new_attempt.status == AlertDeliveryStatus.RETRY_SCHEDULED:
+                result.retry_scheduled += 1
+            elif new_attempt.status == AlertDeliveryStatus.DLQ:
+                result.dlq += 1
+            else:
+                result.retried += 1
+
+        self._record_change_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_RETRY_RAN,
+            payload={
+                "dry_run": dry_run,
+                "scanned": result.scanned,
+                "delivered": result.delivered,
+                "retry_scheduled": result.retry_scheduled,
+                "dlq": result.dlq,
+                "failed": result.failed,
+            },
+        )
+        return result
+
+    async def replay_dlq_attempt(
+        self,
+        attempt_id: str,
+        dry_run: bool = False,
+    ) -> AlertDeliveryAttempt | None:
+        """Replay a DLQ attempt by creating a new delivery attempt."""
+        original = await self._store.get_attempt(attempt_id)
+        if original is None or original.status != AlertDeliveryStatus.DLQ:
+            return None
+
+        target = await self._store.get_target(original.target_id)
+        if target is None:
+            return None
+
+        adapter = self._adapters.get(target.channel_type.value)
+        if adapter is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+        payload = {"alert_id": original.alert_id, "replay_of": original.attempt_id}
+
+        if dry_run:
+            new_attempt = AlertDeliveryAttempt(
+                attempt_id=f"nda_replay_{original.target_id}_{original.alert_id}_{original.attempt + 1}",
+                alert_id=original.alert_id,
+                target_id=original.target_id,
+                channel_type=original.channel_type,
+                status=AlertDeliveryStatus.SUPPRESSED,
+                attempt=original.attempt + 1,
+                payload_preview=payload,
+                created_at=now,
+            )
+            recorded = await self._store.record_attempt(new_attempt)
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_REPLAYED,
+                payload={
+                    "attempt_id": attempt_id,
+                    "new_attempt_id": recorded.attempt_id,
+                    "dry_run": True,
+                    "success": True,
+                },
+            )
+            return recorded
+
+        try:
+            result = adapter.deliver(target, None, payload)  # type: ignore
+        except Exception as exc:
+            result = AlertDeliveryAdapterResult(
+                success=False, error_code="ADAPTER_ERROR",
+                error_message=str(exc), retryable=True,
+            )
+
+        new_attempt = await self._record_attempt_result(
+            target, None, result, now, attempt_num=original.attempt + 1,
+        )
+        self._record_change_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_REPLAYED,
+            payload={
+                "attempt_id": attempt_id,
+                "new_attempt_id": new_attempt.attempt_id,
+                "dry_run": False,
+                "success": new_attempt.status == AlertDeliveryStatus.DELIVERED,
+                "status": new_attempt.status.value,
+            },
+        )
+        return new_attempt

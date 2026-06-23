@@ -17,6 +17,9 @@ from agent_app.governance.policy_rollout_federation_notification_alert_delivery 
 from agent_app.governance.policy_rollout_federation_notification_observability import (
     NotificationAlertEvent,
 )
+from agent_app.runtime.policy_rollout_federation_notification_webhook_signing import (
+    make_signed_headers,
+)
 
 
 class AlertDeliveryAdapterResult(BaseModel):
@@ -88,7 +91,7 @@ class MemoryAlertDeliveryAdapter:
 
 
 class WebhookAlertDeliveryAdapter:
-    """Webhook adapter — supports dry-run mode only (no real network)."""
+    """Webhook adapter — real HTTP POST with optional HMAC-SHA256 signing."""
 
     def __init__(
         self,
@@ -110,7 +113,6 @@ class WebhookAlertDeliveryAdapter:
                 response_metadata={"mode": "dry_run", "endpoint": target.endpoint or ""},
             )
 
-        # Real webhook delivery (not required for tests)
         if not target.endpoint:
             return AlertDeliveryAdapterResult(
                 success=False,
@@ -121,11 +123,16 @@ class WebhookAlertDeliveryAdapter:
 
         try:
             import json
-            data = json.dumps(payload).encode("utf-8")
+            data_bytes = json.dumps(payload).encode("utf-8")
+
+            headers = {"Content-Type": "application/json"}
+            if target.webhook_secret:
+                headers = make_signed_headers(data_bytes, target.webhook_secret)
+
             req = Request(
                 target.endpoint,
-                data=data,
-                headers={"Content-Type": "application/json"},
+                data=data_bytes,
+                headers=headers,
                 method="POST",
             )
             with urlopen(req, timeout=self.timeout_seconds) as resp:

@@ -2,6 +2,45 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.41.0 — Phase 53: Federation Notification External Alert Delivery, Prometheus Export, Retention & Rollup
+
+### Added
+- Alert delivery models (targets, attempts, retry policy) with InMemory and SQLite stores
+- Alert delivery service with target matching, severity/channel/federation filters, dry-run mode
+- Alert delivery adapters: Memory, Webhook (dry-run only), Console
+- Prometheus metrics text export with HELP/TYPE comments, label escaping, no secrets
+- JSONL structured export for delivery events, alerts, and delivery attempts
+- Retention service with archive-before-purge, dry-run support, per-type retention days
+- Metrics rollup service with hourly/daily granularity and upsert semantics
+- Alert delivery CLI commands (deliver, targets list, attempts list)
+- Prometheus export, JSONL export, retention cleanup, rollup build/list CLI commands
+- Console pages for alert delivery, prometheus, JSONL, retention, rollup
+- 9 new PolicyChangeEventType values for Phase 53 notification lifecycle events
+- 9 new FederationHistoryEventType values for Phase 53 notification history
+
+### Changed
+- PolicyChangeEventType count: 124 → 133
+- FederationHistoryEventType count: 42 → 51
+
+## v0.42.0 — Phase 54: Alert Delivery Productionization — Retry, DLQ Replay, Dedup, Incremental Rollup, Webhook Signing
+
+### Added
+- Retry scheduler: `run_once()` scans and retries RETRY_SCHEDULED attempts past next_retry_at
+- DLQ replay: `replay_dlq_attempt()` creates new delivery attempt from DLQ record
+- Alert deduplication service with configurable merge window and key fields
+- Incremental rollup with checkpoints (`build_incremental_rollup`, `list_checkpoints`, `record_checkpoint`)
+- Webhook HMAC-SHA256 signing with X-Signature and X-Timestamp headers
+- Real HTTP POST webhook adapter (stdlib urllib, opt-in via webhook_secret)
+- Archive file auto-cleanup for framework-generated notification archives
+- 7 new PolicyChangeEventType values for Phase 54 notification lifecycle events
+- CLI commands: retry-run, dlq list/replay, dedup explain, rollup incremental/checkpoint, retention archives cleanup
+- 34 comprehensive Phase 54 tests covering change events, dedup, signing, DLQ replay, rollup, retry scheduler
+
+### Changed
+- WebhookAlertDeliveryAdapter: real HTTP POST when dry_run=False and endpoint is configured
+- PolicyChangeEventType count: 133 → 140
+- AlertDeliveryTarget: added optional `webhook_secret` field for HMAC signing
+
 ## v0.40.0 — Phase 52: Federation Notification Observability
 
 ### Added

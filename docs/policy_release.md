@@ -4841,3 +4841,141 @@ agentapp policy federation notification rollup list [--federation-id <id>] [--ch
 5. **Prometheus export is pull-only** — Metrics are available via CLI and console export. There is no push-based integration with Prometheus scraping or external monitoring platforms.
 
 6. **JSONL export requires post-processing for SIEM** — JSONL format is suitable for log aggregation pipelines but requires external tooling (Splunk, Elastic, etc.) for alerting and dashboarding.
+
+## Phase 54: Alert Delivery Productionization — Retry, DLQ Replay, Dedup, Incremental Rollup, Webhook Signing & Archive Cleanup
+
+### Overview
+
+**Phase 54** upgrades Phase 53's alert delivery from "configurable, dry-run capable" to a production operations closed loop with real delivery, signing, retry, DLQ replay, deduplication, incremental aggregation, and archive cleanup.
+
+### Retry Scheduler
+
+`NotificationAlertDeliveryService.run_once()` scans `RETRY_SCHEDULED` attempts past their `next_retry_at` and retries them:
+
+```bash
+agentapp policy federation notification alert delivery retry-run [--dry-run] [--limit <n>]
+```
+
+- Dry-run reports which attempts would be retried without making adapter calls
+- Respects `AlertDeliveryRetryPolicy` (max_attempts, base_delay_seconds, max_delay_seconds)
+- Exhausted retries automatically move attempts to DLQ status
+
+### DLQ Replay
+
+Replay a dead-letter queue attempt by ID:
+
+```bash
+agentapp policy federation notification alert delivery dlq replay <attempt_id> [--dry-run]
+```
+
+- Creates a new delivery attempt (does not overwrite the original DLQ record)
+- Only replays attempts with `DLQ` status
+- Records `FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_REPLAYED` change event
+
+### Alert Deduplication
+
+`NotificationAlertDedupService` suppresses or merges duplicate alert delivery events within a configurable time window:
+
+- Key fields: `alert_id`, `target_id` (configurable)
+- Merge window: default 300 seconds
+- Prune expired entries to prevent unbounded memory growth
+
+```bash
+agentapp policy federation notification alert dedup explain <alert_id> <target_id>
+```
+
+### Incremental Rollup with Checkpoints
+
+`NotificationRollupStore` extended with incremental rollup and checkpoint tracking:
+
+- `build_incremental_rollup(since)` — only processes rollups newer than the given timestamp
+- `list_checkpoints()` — lists recorded rollup checkpoints
+- `record_checkpoint(checkpoint)` — records a new checkpoint after rollup completion
+- Checkpoints enable efficient incremental processing without scanning full history
+
+```bash
+agentapp policy federation notification rollup incremental [--since <ISO8601>]
+agentapp policy federation notification rollup checkpoint list
+```
+
+### Webhook Signing (HMAC-SHA256)
+
+`WebhookAlertDeliveryAdapter` now supports real HTTP POST with optional HMAC-SHA256 signing:
+
+- When `webhook_secret` is configured on the target, signs payload with `X-Signature: v1=<hex>` and `X-Timestamp` headers
+- Uses stdlib `hmac` + `hashlib` only (no external dependencies)
+- Sensitive headers (`X-Signature`, `X-Timestamp`) are never logged or exported
+
+```python
+from agent_app.runtime.policy_rollout_federation_notification_webhook_signing import (
+    sign_payload, make_signed_headers, redact_sensitive,
+)
+```
+
+### Archive Cleanup
+
+```bash
+agentapp policy federation notification retention archives cleanup [--older-than-days <n>]
+```
+
+- Deletes framework-generated archive files matching `notification_*` pattern
+- Only deletes files older than the specified threshold
+- Dry-run mode available for preview
+
+### Change Events (Phase 54 additions)
+
+| Event Type | Trigger |
+|-----------|---------|
+| `policy.federation.notification.alert_delivery.retry_ran` | Retry scheduler completed a run |
+| `policy.federation.notification.alert_delivery.dlq_replayed` | DLQ attempt was replayed |
+| `policy.federation.notification.alert_delivery.webhook_signed` | Webhook payload was HMAC-signed |
+| `policy.federation.notification.alert.dedup.processed` | Dedup decision was made for an alert |
+| `policy.federation.notification.rollup.incremental_built` | Incremental rollup completed |
+| `policy.federation.notification.rollup.checkpoint_recorded` | Rollup checkpoint recorded |
+| `policy.federation.notification.retention.archives_cleaned` | Archive cleanup completed |
+
+### RBAC Permissions (Phase 54 additions)
+
+| Permission | Value | Default |
+|-----------|-------|---------|
+| `ALERT_DELIVERY_RETRY_RUN` | `policy.federation.notification.alert_delivery.retry_run` | Allowed |
+| `ALERT_DELIVERY_DLQ_REPLAY` | `policy.federation.notification.alert_delivery.dlq_replay` | Allowed |
+| `ALERT_DELIVERY_DEDUP_VIEW` | `policy.federation.notification.alert_dedup.view` | Allowed |
+| `ROLLUP_INCREMENTAL_BUILD` | `policy.federation.notification.rollup.incremental_build` | Allowed |
+| `ROLLUP_CHECKPOINT_VIEW` | `policy.federation.notification.rollup.checkpoint.view` | Allowed |
+| `RETENTION_ARCHIVES_CLEANUP` | `policy.federation.notification.retention.archives_cleanup` | Allowed |
+
+### CLI Commands (Phase 54 additions)
+
+```bash
+# Retry scheduler
+agentapp policy federation notification alert delivery retry-run [--dry-run] [--limit <n>]
+
+# DLQ replay
+agentapp policy federation notification alert delivery dlq list [--alert-id <id>]
+agentapp policy federation notification alert delivery dlq replay <attempt_id> [--dry-run]
+
+# Dedup
+agentapp policy federation notification alert dedup explain <alert_id> <target_id>
+
+# Rollup incremental + checkpoints
+agentapp policy federation notification rollup incremental [--since <ISO8601>]
+agentapp policy federation notification rollup checkpoint list
+
+# Archive cleanup
+agentapp policy federation notification retention archives cleanup [--older-than-days <n>]
+```
+
+### Security Constraints
+
+1. **No keys/signatures/sensitive headers in logs/console/exports** — `_SENSITIVE_KEYS` set used for redaction across all adapters, exports, and payload previews. HMAC secrets and signatures are never emitted.
+2. **No external network in tests** — All adapter tests use `dry_run=True`. Webhook signing is tested at the function level only.
+3. **Stdlib urllib only** — Webhook HTTP POST uses `urllib.request.Request`/`urlopen` from Python stdlib.
+4. **Backward-compatible config defaults** — `webhook_secret` is optional on `AlertDeliveryTarget`; signing is only activated when explicitly configured.
+
+### Design Decisions
+
+1. **Change events are best-effort** — Recording failures never break delivery flows. Logged at debug level only.
+2. **DLQ replay creates new attempts** — Original DLQ records are preserved for audit. Replay creates a new attempt with incremented attempt number.
+3. **Incremental rollup uses checkpoints** — Checkpoints track the last processed window_end, enabling efficient incremental builds.
+4. **Archive cleanup is pattern-scoped** — Only deletes files matching `notification_*` to avoid accidental deletion of unrelated data.

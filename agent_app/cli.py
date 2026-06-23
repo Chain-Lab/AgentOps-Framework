@@ -1118,8 +1118,8 @@ def main() -> int:
     notifications_report_export_parser.add_argument("--output", default=None, help="Output file path (default: stdout)")
     notifications_report_export_parser.set_defaults(func=_cmd_policy_federation_notification_report_export)
 
-    # Phase 53: alert delivery subcommands
-    notifications_delivery_parser = notifications_alerts_parser.add_parser("delivery", help="Alert delivery commands (Phase 53)")
+    # Phase 53: alert delivery subcommands (under alerts)
+    notifications_delivery_parser = notifications_alerts_sub.add_parser("delivery", help="Alert delivery commands (Phase 53)")
     notifications_delivery_sub = notifications_delivery_parser.add_subparsers(dest="federation_notification_delivery_command")
     notifications_deliver_parser = notifications_delivery_sub.add_parser("deliver", help="Deliver an alert (Phase 53)")
     notifications_deliver_parser.add_argument("--config", required=True, help="Config file path")
@@ -1131,6 +1131,39 @@ def main() -> int:
     notifications_delivery_targets_list_parser = notifications_delivery_targets_sub.add_parser("list", help="List alert delivery targets (Phase 53)")
     notifications_delivery_targets_list_parser.add_argument("--config", required=True, help="Config file path")
     notifications_delivery_targets_list_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_targets_list)
+
+    # Phase 54: alert delivery retry subcommand
+    notifications_delivery_retry_parser = notifications_delivery_sub.add_parser("retry", help="Alert delivery retry commands (Phase 54)")
+    notifications_delivery_retry_sub = notifications_delivery_retry_parser.add_subparsers(dest="federation_notification_delivery_retry_command")
+    notifications_delivery_retry_run_parser = notifications_delivery_retry_sub.add_parser("run", help="Run retry scheduler for due attempts (Phase 54)")
+    notifications_delivery_retry_run_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_retry_run_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    notifications_delivery_retry_run_parser.add_argument("--limit", type=int, default=100, help="Max retries per run (default: 100)")
+    notifications_delivery_retry_run_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_delivery_retry_run_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_retry_run)
+
+    # Phase 54: alert delivery DLQ subcommands
+    notifications_delivery_dlq_parser = notifications_delivery_sub.add_parser("dlq", help="Alert delivery dead-letter queue commands (Phase 54)")
+    notifications_delivery_dlq_sub = notifications_delivery_dlq_parser.add_subparsers(dest="federation_notification_delivery_dlq_command")
+    notifications_delivery_dlq_list_parser = notifications_delivery_dlq_sub.add_parser("list", help="List DLQ attempts (Phase 54)")
+    notifications_delivery_dlq_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_dlq_list_parser.add_argument("--alert-id", default=None, help="Filter by alert ID")
+    notifications_delivery_dlq_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
+    notifications_delivery_dlq_list_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_delivery_dlq_list_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_dlq_list)
+    notifications_delivery_dlq_replay_parser = notifications_delivery_dlq_sub.add_parser("replay", help="Replay a DLQ attempt (Phase 54)")
+    notifications_delivery_dlq_replay_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_dlq_replay_parser.add_argument("--attempt-id", required=True, help="DLQ attempt ID to replay")
+    notifications_delivery_dlq_replay_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    notifications_delivery_dlq_replay_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_delivery_dlq_replay_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_dlq_replay)
+
+    # Phase 54: federation notification alert dedup
+    notifications_dedup_parser = federation_notification_sub.add_parser("dedup", help="Alert deduplication commands (Phase 54)")
+    notifications_dedup_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_dedup_parser.add_argument("--alert-id", default=None, help="Alert ID to explain dedup decision")
+    notifications_dedup_parser.add_argument("--format", default="table", choices=["table", "json"], help="Output format (default: table)")
+    notifications_dedup_parser.set_defaults(func=_cmd_policy_federation_notification_alert_dedup_explain)
 
     # Phase 53: prometheus export
     notifications_prometheus_parser = federation_notification_sub.add_parser("prometheus", help="Prometheus metrics export (Phase 53)")
@@ -1158,6 +1191,14 @@ def main() -> int:
     notifications_retention_cleanup_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
     notifications_retention_cleanup_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
     notifications_retention_cleanup_parser.set_defaults(func=_cmd_policy_federation_notification_retention_cleanup)
+    # Phase 54: archive file cleanup
+    notifications_retention_archives_parser = notifications_retention_sub.add_parser("archives", help="Archive file management (Phase 54)")
+    notifications_retention_archives_sub = notifications_retention_archives_parser.add_subparsers(dest="federation_notification_retention_archives_command")
+    notifications_retention_archives_cleanup_parser = notifications_retention_archives_sub.add_parser("cleanup", help="Clean up old archive files (Phase 54)")
+    notifications_retention_archives_cleanup_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_retention_archives_cleanup_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    notifications_retention_archives_cleanup_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    notifications_retention_archives_cleanup_parser.set_defaults(func=_cmd_policy_federation_notification_retention_archives_cleanup)
 
     # Phase 53: rollup commands
     notifications_rollup_parser = federation_notification_sub.add_parser("rollup", help="Metrics rollup commands (Phase 53)")
@@ -1174,6 +1215,17 @@ def main() -> int:
     notifications_rollup_list_parser.add_argument("--channel", default=None, help="Filter by channel")
     notifications_rollup_list_parser.add_argument("--limit", type=int, default=100, help="Max results")
     notifications_rollup_list_parser.set_defaults(func=_cmd_policy_federation_notification_rollup_list)
+    # Phase 54: incremental rollup
+    notifications_rollup_incremental_parser = notifications_rollup_sub.add_parser("incremental", help="Build incremental rollup (Phase 54)")
+    notifications_rollup_incremental_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_rollup_incremental_parser.add_argument("--granularity", default="hourly", choices=["hourly", "daily"], help="Rollup granularity (default: hourly)")
+    notifications_rollup_incremental_parser.set_defaults(func=_cmd_policy_federation_notification_rollup_incremental)
+    # Phase 54: rollup checkpoint list
+    notifications_rollup_checkpoint_parser = notifications_rollup_sub.add_parser("checkpoint", help="Rollup checkpoint commands (Phase 54)")
+    notifications_rollup_checkpoint_sub = notifications_rollup_checkpoint_parser.add_subparsers(dest="federation_notification_rollup_checkpoint_command")
+    notifications_rollup_checkpoint_list_parser = notifications_rollup_checkpoint_sub.add_parser("list", help="List rollup checkpoints (Phase 54)")
+    notifications_rollup_checkpoint_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_rollup_checkpoint_list_parser.set_defaults(func=_cmd_policy_federation_notification_rollup_checkpoint_list)
 
     federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
     federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
@@ -1782,15 +1834,7 @@ def main() -> int:
                     return asyncio.run(_cmd_policy_federation_notification_alerts_ack(args))
                 if args.federation_notification_alerts_command == "resolve":
                     return asyncio.run(_cmd_policy_federation_notification_alerts_resolve(args))
-                notifications_alerts_parser.print_help()
-                return 1
-            if args.federation_notification_command == "report":
-                if args.federation_notification_report_command == "export":
-                    return asyncio.run(_cmd_policy_federation_notification_report_export(args))
-                notifications_report_parser.print_help()
-                return 1
-            # Phase 53: federation notification alert delivery subcommands
-            if args.federation_notification_command == "alerts":
+                # Phase 53: alert delivery subcommands
                 if args.federation_notification_alerts_command == "deliver":
                     return asyncio.run(_cmd_policy_federation_notification_alert_deliver(args))
                 if args.federation_notification_alerts_command == "delivery":
@@ -1801,14 +1845,22 @@ def main() -> int:
                             return asyncio.run(_cmd_policy_federation_notification_alert_delivery_targets_list(args))
                         notifications_delivery_targets_parser.print_help()
                         return 1
+                    # Phase 54: delivery retry subcommands
+                    if args.federation_notification_delivery_command == "retry":
+                        if args.federation_notification_delivery_retry_command == "run":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_retry_run(args))
+                        notifications_delivery_retry_parser.print_help()
+                        return 1
+                    # Phase 54: delivery DLQ subcommands
+                    if args.federation_notification_delivery_command == "dlq":
+                        if args.federation_notification_delivery_dlq_command == "list":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_dlq_list(args))
+                        if args.federation_notification_delivery_dlq_command == "replay":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_dlq_replay(args))
+                        notifications_delivery_dlq_parser.print_help()
+                        return 1
                     notifications_delivery_parser.print_help()
                     return 1
-                if args.federation_notification_alerts_command == "list":
-                    return asyncio.run(_cmd_policy_federation_notification_alerts_list(args))
-                if args.federation_notification_alerts_command == "ack":
-                    return asyncio.run(_cmd_policy_federation_notification_alerts_ack(args))
-                if args.federation_notification_alerts_command == "resolve":
-                    return asyncio.run(_cmd_policy_federation_notification_alerts_resolve(args))
                 notifications_alerts_parser.print_help()
                 return 1
             # Phase 53: federation notification prometheus export
@@ -1821,6 +1873,12 @@ def main() -> int:
             if args.federation_notification_command == "retention":
                 if args.federation_notification_retention_command == "cleanup":
                     return asyncio.run(_cmd_policy_federation_notification_retention_cleanup(args))
+                # Phase 54: archive cleanup
+                if args.federation_notification_retention_command == "archives":
+                    if args.federation_notification_retention_archives_command == "cleanup":
+                        return asyncio.run(_cmd_policy_federation_notification_retention_archives_cleanup(args))
+                    notifications_retention_archives_parser.print_help()
+                    return 1
                 notifications_retention_parser.print_help()
                 return 1
             # Phase 53: federation notification rollup commands
@@ -1829,8 +1887,20 @@ def main() -> int:
                     return asyncio.run(_cmd_policy_federation_notification_rollup_build(args))
                 if args.federation_notification_rollup_command == "list":
                     return asyncio.run(_cmd_policy_federation_notification_rollup_list(args))
+                # Phase 54: incremental rollup
+                if args.federation_notification_rollup_command == "incremental":
+                    return asyncio.run(_cmd_policy_federation_notification_rollup_incremental(args))
+                # Phase 54: rollup checkpoint
+                if args.federation_notification_rollup_command == "checkpoint":
+                    if args.federation_notification_rollup_checkpoint_command == "list":
+                        return asyncio.run(_cmd_policy_federation_notification_rollup_checkpoint_list(args))
+                    notifications_rollup_checkpoint_parser.print_help()
+                    return 1
                 notifications_rollup_parser.print_help()
                 return 1
+            # Phase 54: federation notification alert dedup
+            if args.federation_notification_command == "dedup":
+                return asyncio.run(_cmd_policy_federation_notification_alert_dedup_explain(args))
             federation_notification_parser.print_help()
             return 1
         # Phase 49: federation escalate-due subcommand
@@ -10353,6 +10423,304 @@ async def _cmd_policy_federation_notification_rollup_list(args: argparse.Namespa
     )
     for r in rollups:
         print(f"{r.rollup_id}\t{r.granularity.value}\t{r.channel or 'all'}\t{r.total}\t{r.sent}\t{r.failed}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Alert delivery retry
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_alert_delivery_retry_run(args: argparse.Namespace) -> int:
+    """Run the alert delivery retry scheduler once."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_adapters import (
+        MemoryAlertDeliveryAdapter,
+        WebhookAlertDeliveryAdapter,
+        ConsoleAlertDeliveryAdapter,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_service import (
+        NotificationAlertDeliveryService,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    adapters = {
+        "memory": MemoryAlertDeliveryAdapter(),
+        "webhook": WebhookAlertDeliveryAdapter(dry_run=True),
+        "console": ConsoleAlertDeliveryAdapter(),
+    }
+    service = NotificationAlertDeliveryService(
+        store=store, adapters=adapters, retry_policy=delivery_cfg.retry,
+    )
+
+    try:
+        result = await service.run_once(dry_run=args.dry_run, limit=args.limit)
+    except Exception as exc:
+        print(f"Error running retry scheduler: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Scanned={result.scanned} Delivered={result.delivered} "
+          f"RetryScheduled={result.retry_scheduled} DLQ={result.dlq} Failed={result.failed}")
+    if result.attempt_ids:
+        for aid in result.attempt_ids:
+            print(f"  Attempt={aid}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Alert delivery DLQ list and replay
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_alert_delivery_dlq_list(args: argparse.Namespace) -> int:
+    """List DLQ alert delivery attempts."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+    from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+        AlertDeliveryStatus,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    attempts = await store.list_attempts(
+        status=AlertDeliveryStatus.DLQ,
+        limit=args.limit,
+    )
+    for a in attempts:
+        print(f"{a.attempt_id}\t{a.alert_id}\t{a.target_id}\t{a.channel_type.value}\t"
+              f"attempt={a.attempt}\terror={a.error_code or 'none'}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_alert_delivery_dlq_replay(args: argparse.Namespace) -> int:
+    """Replay a DLQ alert delivery attempt."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_adapters import (
+        MemoryAlertDeliveryAdapter,
+        WebhookAlertDeliveryAdapter,
+        ConsoleAlertDeliveryAdapter,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_service import (
+        NotificationAlertDeliveryService,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    delivery_cfg = getattr(app, "_federation_notification_alert_delivery_config", None)
+    if delivery_cfg is None or not delivery_cfg.enabled:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_store import (
+        create_alert_delivery_store,
+    )
+    store = create_alert_delivery_store(
+        store_type=delivery_cfg.store.type,
+        db_path=delivery_cfg.store.path,
+    )
+    adapters = {
+        "memory": MemoryAlertDeliveryAdapter(),
+        "webhook": WebhookAlertDeliveryAdapter(dry_run=True),
+        "console": ConsoleAlertDeliveryAdapter(),
+    }
+    service = NotificationAlertDeliveryService(
+        store=store, adapters=adapters, retry_policy=delivery_cfg.retry,
+    )
+
+    try:
+        result = await service.replay_dlq_attempt(
+            attempt_id=args.attempt_id, dry_run=args.dry_run,
+        )
+    except Exception as exc:
+        print(f"Error replaying DLQ attempt: {exc}", file=sys.stderr)
+        return 1
+
+    if result is None:
+        print(f"DLQ attempt not found or not in DLQ status: {args.attempt_id}", file=sys.stderr)
+        return 1
+
+    print(f"Replayed attempt={result.attempt_id} Status={result.status} Attempt={result.attempt}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Alert dedup
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_alert_dedup_explain(args: argparse.Namespace) -> int:
+    """Explain dedup decisions for an alert event."""
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_dedup import (
+        NotificationAlertDedupService,
+    )
+
+    service = NotificationAlertDedupService()
+    decision = service.should_suppress_or_merge(args.alert_id, args.key_fields.split(",") if args.key_fields else None)
+    print(f"alert_id={decision['alert_id']}")
+    print(f"suppressed={decision['suppressed']}")
+    print(f"merged_with={decision['merged_with'] or 'none'}")
+    print(f"reason={decision['reason']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Retention archives cleanup
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_retention_archives_cleanup(args: argparse.Namespace) -> int:
+    """Clean up old notification archive files."""
+    import os
+    import re
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retention import (
+        NotificationRetentionService,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    retention_cfg = getattr(app, "_federation_notification_retention_config", None)
+    if retention_cfg is None:
+        print("Retention not configured.", file=sys.stderr)
+        return 1
+
+    service = NotificationRetentionService(retention_cfg)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=args.older_than_days)
+    archive_dir = getattr(retention_cfg, "archive_dir", None)
+    if archive_dir is None:
+        print("No archive_dir configured.", file=sys.stderr)
+        return 1
+
+    pattern = re.compile(r"^notification_.*\.(json|csv|jsonl)$")
+    deleted = 0
+    if os.path.isdir(archive_dir):
+        for fname in os.listdir(archive_dir):
+            if pattern.match(fname):
+                fpath = os.path.join(archive_dir, fname)
+                mtime = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
+                if mtime < cutoff:
+                    if not args.dry_run:
+                        os.remove(fpath)
+                    deleted += 1
+                    print(f"Deleted={fname} Modified={mtime.isoformat()}")
+
+    print(f"Archives cleaned up: {deleted} files (dry_run={args.dry_run})")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 54: Rollup incremental and checkpoint list
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_rollup_incremental(args: argparse.Namespace) -> int:
+    """Build incremental rollup since last checkpoint."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_rollup import (
+        create_notification_rollup_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    rollup_cfg = getattr(app, "_federation_notification_rollup_config", None)
+    if rollup_cfg is None:
+        print("Rollup not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_rollup_store(
+        store_type=rollup_cfg.store.type,
+        db_path=rollup_cfg.store.path,
+    )
+    since = None
+    if args.since:
+        try:
+            since = datetime.fromisoformat(args.since)
+        except ValueError:
+            print(f"Invalid --since datetime: {args.since}", file=sys.stderr)
+            return 1
+
+    try:
+        rollups = await store.build_incremental_rollup(since=since)
+    except Exception as exc:
+        print(f"Error building incremental rollup: {exc}", file=sys.stderr)
+        return 1
+
+    for r in rollups:
+        print(f"{r.rollup_id}\t{r.granularity.value}\t{r.channel or 'all'}\t{r.total}\t{r.sent}\t{r.failed}")
+    print(f"Built {len(rollups)} incremental rollup entries.")
+    return 0
+
+
+async def _cmd_policy_federation_notification_rollup_checkpoint_list(args: argparse.Namespace) -> int:
+    """List rollup checkpoints."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_rollup import (
+        create_notification_rollup_store,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    rollup_cfg = getattr(app, "_federation_notification_rollup_config", None)
+    if rollup_cfg is None:
+        print("Rollup not configured.", file=sys.stderr)
+        return 1
+
+    store = create_notification_rollup_store(
+        store_type=rollup_cfg.store.type,
+        db_path=rollup_cfg.store.path,
+    )
+    checkpoints = await store.list_checkpoints()
+    for cp in checkpoints:
+        print(f"{cp.checkpoint_id}\t{cp.granularity.value}\t{cp.window_start.isoformat()}\t"
+              f"{cp.window_end.isoformat()}\tentries={cp.entry_count}")
     return 0
 
 

@@ -1,0 +1,65 @@
+<h1>Alert Detail: {{ alert.alert_id if alert else alert_id }}</h1>
+
+<p>
+  <a href="{{ base_path }}/federation/notifications/alerts">&larr; Back to Alerts</a>
+</p>
+
+{% if error %}
+<h2>Error</h2>
+<p style="color: #dc322f;">{{ error }}</p>
+{% endif %}
+
+{% if message %}
+<h2>Action Result</h2>
+<p style="color: #2aa198;">{{ message }}</p>
+{% endif %}
+
+{% if alert %}
+<h2>Alert Information</h2>
+<table>
+  <tr><th>Alert ID</th><td>{{ alert.alert_id }}</td></tr>
+  <tr><th>Rule ID</th><td>{{ alert.rule_id }}</td></tr>
+  <tr><th>Name</th><td>{{ alert.name }}</td></tr>
+  <tr><th>Severity</th><td>
+    {% if alert.severity == "critical" %}
+    <span style="color: #dc322f;">{{ alert.severity }}</span>
+    {% elif alert.severity == "warning" %}
+    <span style="color: #b58900;">{{ alert.severity }}</span>
+    {% else %}
+    {{ alert.severity }}
+    {% endif %}
+  </td></tr>
+  <tr><th>Metric</th><td>{{ alert.metric }}</td></tr>
+  <tr><th>Observed Value</th><td>{{ alert.observed_value }}</td></tr>
+  <tr><th>Threshold</th><td>{{ alert.threshold }}</td></tr>
+  <tr><th>Federation ID</th><td>{{ alert.federation_id }}</td></tr>
+  <tr><th>Channel</th><td>{{ alert.channel }}</td></tr>
+  <tr><th>Message</th><td>{{ alert.message }}</td></tr>
+  <tr><th>Status</th><td>{{ alert.status }}</td></tr>
+  <tr><th>Created At</th><td>{{ alert.created_at[:19] if alert.created_at else "—" }}</td></tr>
+  <tr><th>Acknowledged At</th><td>{{ alert.acknowledged_at[:19] if alert.acknowledged_at else "—" }}</td></tr>
+  <tr><th>Acknowledged By</th><td>{{ alert.acknowledged_by or "—" }}</td></tr>
+  <tr><th>Resolved At</th><td>{{ alert.resolved_at[:19] if alert.resolved_at else "—" }}</td></tr>
+  <tr><th>Resolved By</th><td>{{ alert.resolved_by or "—" }}</td></tr>
+</table>
+
+<h2>Actions</h2>
+{% if alert.status != "resolved" %}
+<form method="post" action="{{ base_path }}/federation/notifications/alerts/{{ alert.alert_id }}/acknowledge" style="display: inline;">
+  <input type="hidden" name="actor_id" value="console_user" />
+  <button type="submit" {% if alert.status == "acknowledged" %}disabled{% endif %}>
+    {% if alert.status == "acknowledged" %}Already Acknowledged{% else %}Acknowledge{% endif %}
+  </button>
+</form>
+<form method="post" action="{{ base_path }}/federation/notifications/alerts/{{ alert.alert_id }}/resolve" style="display: inline; margin-left: 8px;">
+  <input type="hidden" name="actor_id" value="console_user" />
+  <button type="submit" {% if alert.status == "resolved" %}disabled{% endif %}>
+    {% if alert.status == "resolved" %}Already Resolved{% else %}Resolve{% endif %}
+  </button>
+</form>
+{% endif %}
+{% else %}
+<div class="empty-state">
+  <p>Alert not found.</p>
+</div>
+{% endif %}

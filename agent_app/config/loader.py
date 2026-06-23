@@ -1335,6 +1335,21 @@ def build_app(
                 alerts_cfg = getattr(notif_cfg, "alerts", None)
                 if alerts_cfg is not None:
                     app._federation_notification_alert_config = alerts_cfg
+
+                # Phase 53: Alert delivery config
+                alert_delivery_cfg = getattr(notif_cfg, "alert_delivery", None)
+                if alert_delivery_cfg is not None:
+                    app._federation_notification_alert_delivery_config = alert_delivery_cfg
+
+                # Phase 53: Retention config
+                retention_cfg = getattr(notif_cfg, "retention", None)
+                if retention_cfg is not None:
+                    app._federation_notification_retention_config = retention_cfg
+
+                # Phase 53: Rollup config
+                rollup_cfg = getattr(notif_cfg, "rollup", None)
+                if rollup_cfg is not None:
+                    app._federation_notification_rollup_config = rollup_cfg
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 

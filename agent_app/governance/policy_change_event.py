@@ -145,6 +145,14 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_NOTIFICATION_JSONL_EXPORTED = "policy.federation.notification.jsonl.exported"
     FEDERATION_NOTIFICATION_RETENTION_CLEANUP_RAN = "policy.federation.notification.retention.cleanup_ran"
     FEDERATION_NOTIFICATION_ROLLUP_BUILT = "policy.federation.notification.rollup.built"
+    # Phase 54 additions
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_RETRY_RAN = "policy.federation.notification.alert_delivery.retry_ran"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_DLQ_REPLAYED = "policy.federation.notification.alert_delivery.dlq_replayed"
+    FEDERATION_NOTIFICATION_ALERT_DELIVERY_WEBHOOK_SIGNED = "policy.federation.notification.alert_delivery.webhook_signed"
+    FEDERATION_NOTIFICATION_ALERT_DEDUP_PROCESSED = "policy.federation.notification.alert.dedup_processed"
+    FEDERATION_NOTIFICATION_ROLLUP_INCREMENTAL_BUILT = "policy.federation.notification.rollup.incremental_built"
+    FEDERATION_NOTIFICATION_ROLLUP_CHECKPOINT_RECORDED = "policy.federation.notification.rollup.checkpoint_recorded"
+    FEDERATION_NOTIFICATION_RETENTION_ARCHIVES_CLEANED = "policy.federation.notification.retention.archives_cleaned"
 
 
 class PolicyChangeEvent(BaseModel):
