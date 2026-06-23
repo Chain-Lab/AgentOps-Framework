@@ -4979,3 +4979,84 @@ agentapp policy federation notification retention archives cleanup [--older-than
 2. **DLQ replay creates new attempts** — Original DLQ records are preserved for audit. Replay creates a new attempt with incremented attempt number.
 3. **Incremental rollup uses checkpoints** — Checkpoints track the last processed window_end, enabling efficient incremental builds.
 4. **Archive cleanup is pattern-scoped** — Only deletes files matching `notification_*` to avoid accidental deletion of unrelated data.
+
+## Phase 55: Alert Delivery Closed Loop (v0.35)
+
+Phase 55 upgrades Phase 54's alert delivery from "manually executable production ops" to "production-grade closed loop" with 5 new capabilities: retry daemon, priority queue, archive cleanup, change event wiring, and CLI commands.
+
+### Retry Daemon (`AlertDeliveryRetryDaemon`)
+
+The retry daemon runs `NotificationAlertDeliveryService.run_once` on a configurable interval with optional jitter to avoid thundering herd.
+
+- **Location**: `agent_app/runtime/policy_rollout_federation_notification_retry_daemon.py`
+- **Config**: `RolloutFederationNotificationAlertDeliveryConfig.retry_daemon`
+  - `enabled` (bool, default False)
+  - `interval_seconds` (float, default 60.0)
+  - `jitter_seconds` (float, default 5.0)
+  - `batch_limit` (int, default 100)
+  - `stop_on_error` (bool, default False)
+  - `run_immediately` (bool, default True)
+- **Change events**:
+  - `FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED` — daemon loop started
+  - `FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED` — daemon loop stopped
+  - `FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED` — single run completed successfully
+  - `FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED` — single run failed with error
+- **CLI commands**:
+  - `agentapp policy federation notification alert delivery daemon start --config <path> [--interval <s>] [--jitter <s>] [--batch-limit <n>]`
+  - `agentapp policy federation notification alert delivery daemon stop`
+  - `agentapp policy federation notification alert delivery daemon status --config <path>`
+
+### Priority Queue (`AlertPriorityQueue`)
+
+The priority queue wraps an alert delivery store and exposes priority-aware dequeue semantics sorted by priority (higher value = more urgent), then by creation timestamp.
+
+- **Location**: `agent_app/runtime/policy_rollout_federation_notification_alert_priority_queue.py`
+- **Priority mapping**: `severity_to_priority()` maps severity strings to numeric priorities:
+  - `critical` → 100, `error` → 75, `warning` → 50, `info` → 25, unknown → 0
+- **Change events**:
+  - `FEDERATION_NOTIFICATION_PRIORITY_UPDATED` — attempt priority was set/updated
+  - `FEDERATION_NOTIFICATION_PRIORITY_LISTED` — priority listing was performed (from CLI)
+- **CLI commands**:
+  - `agentapp policy federation notification alert delivery priority list --config <path> [--limit <n>]`
+  - `agentapp policy federation notification alert delivery priority update <attempt_id> <priority> --config <path> --yes`
+
+### Archive Cleanup (`ResumableArchiveCleanup`)
+
+Resumable archive cleanup for old rollup data with checkpoint support. Can resume from the last checkpoint if interrupted.
+
+- **Location**: `agent_app/runtime/policy_rollout_federation_notification_archive_cleanup_service.py`
+- **Config**: `RolloutFederationNotificationConfig.archive_cleanup` (`RolloutFederationNotificationArchiveCleanupConfig`)
+  - `enabled` (bool, default False)
+  - `rollup_retention_days` (int, default 30)
+  - `checkpoint_retention_days` (int, default 90)
+  - `archive_dir` (str, default "archives")
+  - `archive_format` (str, default "jsonl")
+  - `batch_size` (int, default 500)
+- **Change events**:
+  - `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED` — batch processing started
+  - `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED` — cleanup completed successfully
+  - `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_FAILED` — cleanup failed with error
+- **CLI commands**:
+  - `agentapp policy federation notification archive-cleanup --config <path> [--dry-run] [--yes]`
+
+### Phase 55 Change Events
+
+| Event Type | When Emitted |
+|---|---|
+| `FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED` | Retry daemon loop started |
+| `FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED` | Retry daemon loop stopped |
+| `FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED` | Single retry run completed |
+| `FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED` | Single retry run failed |
+| `FEDERATION_NOTIFICATION_PRIORITY_UPDATED` | Attempt priority updated |
+| `FEDERATION_NOTIFICATION_PRIORITY_LISTED` | Priority listing performed |
+| `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED` | Archive cleanup batch started |
+| `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED` | Archive cleanup completed |
+| `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_FAILED` | Archive cleanup failed |
+| `FEDERATION_NOTIFICATION_WRITE_ACTION_PERFORMED` | Console write action performed |
+
+### Design Decisions
+
+1. **Change events are best-effort** — Recording failures never break daemon/cleanup/priority flows. Logged at debug level only.
+2. **Both audit_logger and change_event_store** — Services maintain backward compatibility with `audit_logger` (raw strings) while adding `change_event_store` (PolicyChangeEventType enum) for Phase 55 audit/history integration.
+3. **Daemon is process-local** — The retry daemon runs in-process and must be explicitly started. No external process management.
+4. **Archive cleanup is resumable** — Checkpoints track progress and enable resumption from the last processed record after interruption.

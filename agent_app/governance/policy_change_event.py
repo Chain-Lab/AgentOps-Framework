@@ -153,6 +153,17 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_NOTIFICATION_ROLLUP_INCREMENTAL_BUILT = "policy.federation.notification.rollup.incremental_built"
     FEDERATION_NOTIFICATION_ROLLUP_CHECKPOINT_RECORDED = "policy.federation.notification.rollup.checkpoint_recorded"
     FEDERATION_NOTIFICATION_RETENTION_ARCHIVES_CLEANED = "policy.federation.notification.retention.archives_cleaned"
+    # Phase 55 additions
+    FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED = "policy.federation.notification.retry_daemon.started"
+    FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED = "policy.federation.notification.retry_daemon.stopped"
+    FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED = "policy.federation.notification.retry_daemon.run_completed"
+    FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED = "policy.federation.notification.retry_daemon.run_failed"
+    FEDERATION_NOTIFICATION_PRIORITY_UPDATED = "policy.federation.notification.alert_delivery.priority_updated"
+    FEDERATION_NOTIFICATION_PRIORITY_LISTED = "policy.federation.notification.alert_delivery.priority_listed"
+    FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED = "policy.federation.notification.archive_cleanup.started"
+    FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED = "policy.federation.notification.archive_cleanup.completed"
+    FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_FAILED = "policy.federation.notification.archive_cleanup.failed"
+    FEDERATION_NOTIFICATION_WRITE_ACTION_PERFORMED = "policy.federation.notification.alert_delivery.write_action_performed"
 
 
 class PolicyChangeEvent(BaseModel):

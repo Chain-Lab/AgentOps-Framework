@@ -13,6 +13,7 @@ from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_ser
     AlertDeliveryRetryRunResult,
     NotificationAlertDeliveryService,
 )
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 
 
 class FakeScheduler:
@@ -199,6 +200,100 @@ class TestRetryDaemon:
 
         await daemon.stop()
         assert any(e["event_type"] == "retry_daemon_stopped" for e in audit.events)
+
+class FakeChangeEventStore:
+    """Fake change event store for testing."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def record(self, event_type: Any, payload: dict[str, Any]) -> None:
+        self.events.append({"event_type": event_type, "payload": payload})
+
+
+class TestRetryDaemonChangeEvents:
+    @pytest.mark.asyncio
+    async def test_start_records_change_event(self):
+        scheduler = FakeScheduler()
+        store = FakeChangeEventStore()
+        daemon = AlertDeliveryRetryDaemon(
+            scheduler,
+            change_event_store=store,
+        )
+        await daemon.start()
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED
+            for e in store.events
+        )
+        await daemon.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_records_change_event(self):
+        scheduler = FakeScheduler()
+        store = FakeChangeEventStore()
+        daemon = AlertDeliveryRetryDaemon(
+            scheduler,
+            change_event_store=store,
+        )
+        await daemon.start()
+        await daemon.stop()
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED
+            for e in store.events
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_once_records_completed_event(self):
+        scheduler = FakeScheduler()
+        store = FakeChangeEventStore()
+        daemon = AlertDeliveryRetryDaemon(
+            scheduler,
+            change_event_store=store,
+        )
+        await daemon.run_once()
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED
+            for e in store.events
+        )
+        completed_events = [
+            e for e in store.events
+            if e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED
+        ]
+        assert len(completed_events) == 1
+        assert completed_events[0]["payload"]["dry_run"] is False
+
+    @pytest.mark.asyncio
+    async def test_run_once_with_error_records_failed_event(self):
+        scheduler = FakeScheduler(raise_error=True)
+        store = FakeChangeEventStore()
+        daemon = AlertDeliveryRetryDaemon(
+            scheduler,
+            change_event_store=store,
+            config=AlertDeliveryRetryDaemonConfig(stop_on_error=False),
+        )
+        try:
+            await daemon.run_once()
+        except RuntimeError:
+            pass
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED
+            for e in store.events
+        )
+        failed_events = [
+            e for e in store.events
+            if e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED
+        ]
+        assert len(failed_events) == 1
+        assert "error" in failed_events[0]["payload"]
+
+    @pytest.mark.asyncio
+    async def test_change_event_store_none_no_error(self):
+        """Daemon should work fine without a change_event_store."""
+        scheduler = FakeScheduler()
+        daemon = AlertDeliveryRetryDaemon(scheduler, change_event_store=None)
+        await daemon.start()
+        await daemon.stop()
+        assert daemon.is_running is False
 
     @pytest.mark.asyncio
     async def test_audit_logger_records_errors(self):

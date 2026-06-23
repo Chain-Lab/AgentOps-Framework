@@ -22,6 +22,7 @@ from agent_app.runtime.policy_rollout_federation_notification_archive_cleanup_se
 from agent_app.runtime.policy_rollout_federation_notification_rollup import (
     NotificationMetricsRollup,
 )
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +390,97 @@ class TestResumableArchiveCleanup:
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
+
+class FakeChangeEventStore:
+    """Fake change event store for testing."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def record(self, event_type: Any, payload: dict[str, Any]) -> None:
+        self.events.append({"event_type": event_type, "payload": payload})
+
+
+class TestResumableArchiveCleanupChangeEvents:
+    @pytest.mark.asyncio
+    async def test_run_cleanup_records_started_event(self, tmp_path):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "checkpoints.db")
+            store = SQLiteArchiveCheckpointStore(db_path)
+            now = datetime.now(timezone.utc)
+            old_rollups = [
+                _make_rollup(rollup_id="nru_001", window_end=now - timedelta(days=100)),
+            ]
+            fake_rollup_store = FakeRollupStore(old_rollups)
+            change_event_store = FakeChangeEventStore()
+
+            cleanup = ResumableArchiveCleanup(
+                checkpoint_store=store,
+                policy=ArchiveCleanupPolicy(
+                    rollup_retention_days=30,
+                    archive_dir=tmpdir,
+                ),
+                rollup_store=fake_rollup_store,
+                change_event_store=change_event_store,
+            )
+
+            result = await cleanup.run_cleanup(data_type="rollup", dry_run=False, now=now)
+            assert result.records_processed == 1
+            event_types = [e["event_type"] for e in change_event_store.events]
+            assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED in event_types
+            store.close()
+
+    @pytest.mark.asyncio
+    async def test_run_cleanup_records_completed_event(self, tmp_path):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "checkpoints.db")
+            store = SQLiteArchiveCheckpointStore(db_path)
+            now = datetime.now(timezone.utc)
+            old_rollups = [
+                _make_rollup(rollup_id="nru_001", window_end=now - timedelta(days=100)),
+            ]
+            fake_rollup_store = FakeRollupStore(old_rollups)
+            change_event_store = FakeChangeEventStore()
+
+            cleanup = ResumableArchiveCleanup(
+                checkpoint_store=store,
+                policy=ArchiveCleanupPolicy(
+                    rollup_retention_days=30,
+                    archive_dir=tmpdir,
+                ),
+                rollup_store=fake_rollup_store,
+                change_event_store=change_event_store,
+            )
+
+            result = await cleanup.run_cleanup(data_type="rollup", dry_run=False, now=now)
+            assert result.is_complete is True
+            event_types = [e["event_type"] for e in change_event_store.events]
+            assert PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED in event_types
+            completed_events = [
+                e for e in change_event_store.events
+                if e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED
+            ]
+            assert len(completed_events) == 1
+            assert completed_events[0]["payload"]["is_complete"] is True
+            store.close()
+
+    @pytest.mark.asyncio
+    async def test_run_cleanup_without_change_event_store_no_error(self):
+        """Cleanup should work fine without a change_event_store."""
+        store = InMemoryArchiveCheckpointStore()
+        now = datetime.now(timezone.utc)
+        old_rollups = [_make_rollup(window_end=now - timedelta(days=100))]
+        fake_rollup_store = FakeRollupStore(old_rollups)
+
+        cleanup = ResumableArchiveCleanup(
+            checkpoint_store=store,
+            rollup_store=fake_rollup_store,
+            change_event_store=None,
+        )
+
+        result = await cleanup.run_cleanup(data_type="rollup", dry_run=False, now=now)
+        assert result.records_processed == 1
 
 
 class TestFactory:

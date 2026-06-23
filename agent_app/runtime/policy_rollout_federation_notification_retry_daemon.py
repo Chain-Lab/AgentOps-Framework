@@ -18,6 +18,7 @@ from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_ser
 from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
     AlertDeliveryRetryPolicy,
 )
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 
 
 class AlertDeliveryRetryDaemonConfig(BaseModel):
@@ -45,13 +46,31 @@ class AlertDeliveryRetryDaemon:
         scheduler: NotificationAlertDeliveryService,
         config: AlertDeliveryRetryDaemonConfig | None = None,
         audit_logger: Any | None = None,
+        change_event_store: Any | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._config = config or AlertDeliveryRetryDaemonConfig()
         self._audit_logger = audit_logger
+        self._change_event_store = change_event_store
         self._task: asyncio.Task | None = None
         self._running = False
         self._lock = asyncio.Lock()
+
+    def _record_change_event(
+        self,
+        event_type: PolicyChangeEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Best-effort change event recording — never break the caller on failure."""
+        if self._change_event_store is None:
+            return
+        try:
+            self._change_event_store.record(
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
 
     @property
     def is_running(self) -> bool:
@@ -65,6 +84,10 @@ class AlertDeliveryRetryDaemon:
                 return
             self._running = True
             self._task = asyncio.create_task(self._loop())
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED,
+                payload={"interval_seconds": self._config.interval_seconds},
+            )
             if self._audit_logger:
                 try:
                     self._audit_logger(
@@ -88,6 +111,10 @@ class AlertDeliveryRetryDaemon:
                 except asyncio.CancelledError:
                     pass
                 self._task = None
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED,
+                payload={},
+            )
             if self._audit_logger:
                 try:
                     self._audit_logger("retry_daemon_stopped", {})
@@ -105,6 +132,10 @@ class AlertDeliveryRetryDaemon:
                 dry_run=dry_run,
             )
         except Exception as exc:
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED,
+                payload={"error": str(exc)},
+            )
             if self._audit_logger:
                 try:
                     self._audit_logger(
@@ -117,6 +148,17 @@ class AlertDeliveryRetryDaemon:
                 await self.stop()
             raise
 
+        self._record_change_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED,
+            payload={
+                "dry_run": dry_run,
+                "scanned": result.scanned,
+                "delivered": result.delivered,
+                "retry_scheduled": result.retry_scheduled,
+                "dlq": result.dlq,
+                "failed": result.failed,
+            },
+        )
         if self._audit_logger:
             try:
                 self._audit_logger(

@@ -7,8 +7,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
     AlertDeliveryAttempt,
+    AlertDeliveryChannelType,
     AlertDeliveryStatus,
     severity_to_priority,
 )
@@ -23,8 +25,25 @@ class AlertPriorityQueue:
     All public methods are async and delegate to the underlying store.
     """
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: Any, change_event_store: Any = None) -> None:
         self._store = store
+        self._change_event_store = change_event_store
+
+    def _record_change_event(
+        self,
+        event_type: PolicyChangeEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Best-effort change event recording — never break the caller on failure."""
+        if self._change_event_store is None:
+            return
+        try:
+            self._change_event_store.record(
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
 
     async def enqueue(self, attempt: AlertDeliveryAttempt) -> AlertDeliveryAttempt:
         """Record an attempt in the store with priority set.
@@ -35,7 +54,16 @@ class AlertPriorityQueue:
         if attempt.priority == 0:
             # Priority is already 0 — leave it (default)
             pass
-        return await self._store.record_attempt(attempt)
+        result = await self._store.record_attempt(attempt)
+        self._record_change_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_PRIORITY_UPDATED,
+            payload={
+                "attempt_id": result.attempt_id,
+                "alert_id": result.alert_id,
+                "priority": result.priority,
+            },
+        )
+        return result
 
     async def enqueue_from_alert(
         self,

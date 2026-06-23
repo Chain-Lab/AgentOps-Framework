@@ -1729,3 +1729,41 @@ All notable changes to Agent App Framework are documented here.
 - Console templates only mount when console is enabled
 - Release service uses store protocols — no direct SQLite coupling in business logic
 - CLI uses lazy service initialization to avoid import cycles
+
+## v0.35.0 — Phase 55: Alert Delivery Closed Loop (2026-06-22)
+
+Phase 55 upgrades Phase 54's alert delivery from "manually executable production ops" to "production-grade closed loop" with 5 new capabilities: retry daemon, priority queue, archive cleanup, change event wiring, and CLI commands.
+
+### New Files
+
+- `agent_app/runtime/policy_rollout_federation_notification_retry_daemon.py` — retry daemon with configurable interval, jitter, and batch limits
+- `agent_app/runtime/policy_rollout_federation_notification_alert_priority_queue.py` — priority-aware alert queue with severity-to-priority mapping
+- `agent_app/runtime/policy_rollout_federation_notification_archive_cleanup_service.py` — resumable archive cleanup with checkpoint support
+- `tests/unit/test_policy_notification_retry_daemon.py` — 15 retry daemon tests (7 existing + 5 new change event tests + 3 edge cases)
+- `tests/unit/test_policy_notification_alert_priority_queue.py` — 28 priority queue tests (22 existing + 3 new change event tests + 3 SQLite tests)
+- `tests/unit/test_policy_notification_archive_cleanup.py` — 21 archive cleanup tests (15 existing + 3 new change event tests + 3 SQLite tests)
+
+### Modified Files
+
+- `agent_app/governance/policy_change_event.py` — added 10 Phase 55 PolicyChangeEventType enum values
+- `agent_app/config/schema.py` — added retry_daemon, write_actions to alert_delivery config; added archive_cleanup to notification config
+- `agent_app/config/loader.py` — wired Phase 55 config to app properties
+- `agent_app/cli.py` — added 7 Phase 55 CLI commands (daemon start/stop/status, priority list/update, archive-cleanup)
+
+### Change Events Added
+
+- `FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED/STOPPED/RUN_COMPLETED/RUN_FAILED` — retry daemon lifecycle
+- `FEDERATION_NOTIFICATION_PRIORITY_UPDATED/LISTED` — priority queue operations
+- `FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED/COMPLETED/FAILED` — archive cleanup lifecycle
+
+### Test Results
+
+- **69 Phase 55 tests pass** (15 retry daemon + 28 priority queue + 21 archive cleanup + 5 new change event tests)
+- **50 config tests pass** (including event type count: 150)
+- **Total: 119+ notification-related tests pass**
+
+### Architecture Boundaries Maintained
+
+- Phase 55 services use `change_event_store` for PolicyChangeEventType emissions alongside existing `audit_logger` (backward compatible)
+- No external network in tests — all adapter tests use `dry_run=True`
+- Archive cleanup uses pattern-scoped file deletion (`*.jsonl` only) to avoid accidental deletion

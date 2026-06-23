@@ -20,6 +20,7 @@ from agent_app.runtime.policy_rollout_federation_notification_archive_cleanup im
 from agent_app.runtime.policy_rollout_federation_notification_rollup import (
     NotificationMetricsRollup,
 )
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 
 
 class ResumableArchiveCleanup:
@@ -35,11 +36,29 @@ class ResumableArchiveCleanup:
         policy: ArchiveCleanupPolicy | None = None,
         rollup_store: Any = None,
         audit_logger: Any = None,
+        change_event_store: Any = None,
     ) -> None:
         self._checkpoint_store = checkpoint_store
         self._policy = policy or ArchiveCleanupPolicy()
         self._rollup_store = rollup_store
         self._audit_logger = audit_logger
+        self._change_event_store = change_event_store
+
+    def _record_change_event(
+        self,
+        event_type: PolicyChangeEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Best-effort change event recording — never break the caller on failure."""
+        if self._change_event_store is None:
+            return
+        try:
+            self._change_event_store.record(
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
 
     async def run_cleanup(
         self,
@@ -92,6 +111,15 @@ class ResumableArchiveCleanup:
             await self._checkpoint_store.record_checkpoint(existing)
             result.is_complete = True
 
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED,
+                payload={
+                    "data_type": data_type,
+                    "checkpoint_id": result.checkpoint_id,
+                    "records_processed": result.records_processed,
+                    "is_complete": True,
+                },
+            )
             self._audit(f"archive_cleanup_complete", {
                 "data_type": data_type,
                 "checkpoint_id": result.checkpoint_id,
@@ -104,6 +132,14 @@ class ResumableArchiveCleanup:
             existing.last_processed_id = last_id
             existing.last_processed_at = last_at
             await self._checkpoint_store.record_checkpoint(existing)
+            self._record_change_event(
+                event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_FAILED,
+                payload={
+                    "data_type": data_type,
+                    "checkpoint_id": result.checkpoint_id,
+                    "error": str(exc),
+                },
+            )
             self._audit(f"archive_cleanup_error", {
                 "data_type": data_type,
                 "checkpoint_id": result.checkpoint_id,
@@ -161,6 +197,14 @@ class ResumableArchiveCleanup:
         if not dry_run:
             result.records_deleted = len(old_rollups)
 
+        self._record_change_event(
+            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_STARTED,
+            payload={
+                "data_type": "rollup",
+                "batch_size": len(old_rollups),
+                "records_processed": result.records_processed,
+            },
+        )
         self._audit("archive_cleanup_batch", {
             "data_type": "rollup",
             "batch_size": len(old_rollups),

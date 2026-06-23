@@ -20,6 +20,7 @@ from agent_app.runtime.policy_rollout_federation_notification_alert_priority_que
 from agent_app.governance.policy_rollout_federation_notification_observability import (
     NotificationAlertEvent,
 )
+from agent_app.governance.policy_change_event import PolicyChangeEventType
 
 
 def _make_alert(
@@ -299,6 +300,72 @@ class TestAlertPriorityQueue:
 # ---------------------------------------------------------------------------
 # SQLite priority ordering
 # ---------------------------------------------------------------------------
+
+
+class FakeChangeEventStore:
+    """Fake change event store for testing."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def record(self, event_type: Any, payload: dict[str, Any]) -> None:
+        self.events.append({"event_type": event_type, "payload": payload})
+
+
+class TestAlertPriorityQueueChangeEvents:
+    @pytest.mark.asyncio
+    async def test_enqueue_records_priority_updated_event(self):
+        store = InMemoryAlertDeliveryStore()
+        change_event_store = FakeChangeEventStore()
+        queue = AlertPriorityQueue(store, change_event_store=change_event_store)
+
+        attempt = _make_attempt(priority=42)
+        await queue.enqueue(attempt)
+
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_PRIORITY_UPDATED
+            for e in change_event_store.events
+        )
+        updated_events = [
+            e for e in change_event_store.events
+            if e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_PRIORITY_UPDATED
+        ]
+        assert len(updated_events) == 1
+        assert updated_events[0]["payload"]["attempt_id"] == attempt.attempt_id
+        assert updated_events[0]["payload"]["priority"] == 42
+
+    @pytest.mark.asyncio
+    async def test_enqueue_from_alert_records_priority_updated_event(self):
+        store = InMemoryAlertDeliveryStore()
+        change_event_store = FakeChangeEventStore()
+        queue = AlertPriorityQueue(store, change_event_store=change_event_store)
+
+        alert = _make_alert(severity="critical")
+        attempt = await queue.enqueue_from_alert(
+            alert=alert,
+            target_id="ndt_001",
+            channel_type=AlertDeliveryChannelType.WEBHOOK,
+        )
+
+        assert any(
+            e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_PRIORITY_UPDATED
+            for e in change_event_store.events
+        )
+        updated_events = [
+            e for e in change_event_store.events
+            if e["event_type"] == PolicyChangeEventType.FEDERATION_NOTIFICATION_PRIORITY_UPDATED
+        ]
+        assert len(updated_events) == 1
+        assert updated_events[0]["payload"]["priority"] == 100
+
+    @pytest.mark.asyncio
+    async def test_no_change_event_store_no_error(self):
+        """Queue should work fine without a change_event_store."""
+        store = InMemoryAlertDeliveryStore()
+        queue = AlertPriorityQueue(store, change_event_store=None)
+        attempt = _make_attempt(priority=50)
+        result = await queue.enqueue(attempt)
+        assert result.priority == 50
 
 
 class TestSQLitePriorityOrdering:
