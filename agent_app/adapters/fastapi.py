@@ -17,7 +17,7 @@ from agent_app.runtime.streaming import StreamEvent
 
 try:
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import PlainTextResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 except ImportError as e:
@@ -1439,6 +1439,76 @@ def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastA
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=_redact_error(exc))
+
+    @api.get("/federation/notifications/prometheus", response_class=PlainTextResponse)
+    async def get_prometheus_metrics() -> str:
+        """Export notification metrics in Prometheus text exposition format.
+
+        Phase 53: Core notification metrics.
+        Phase 56: Expanded with daemon health, queue depths, dedup counts.
+        """
+        from agent_app.runtime.policy_rollout_federation_notification_prometheus import (
+            export_notification_prometheus_metrics,
+        )
+
+        notification_service = getattr(agent_app, "_federation_notification_service", None)
+        if notification_service is None:
+            return export_notification_prometheus_metrics([], [], [])
+
+        obs_store = getattr(notification_service, "_observability_store", None)
+
+        metrics: list[Any] = []
+        alerts: list[Any] = []
+        if obs_store is not None:
+            try:
+                metrics = await obs_store.aggregate_metrics(window_minutes=60)
+            except Exception:
+                pass
+            try:
+                alerts = await obs_store.list_alerts(limit=1000)
+            except Exception:
+                pass
+
+        # Daemon health
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        daemon_health = daemon.get_health_status() if daemon is not None else None
+
+        # Queue depths
+        retry_queue_depth = 0
+        priority_queue = getattr(agent_app, "_federation_notification_priority_queue", None)
+        if priority_queue is not None:
+            try:
+                retry_queue_depth = await priority_queue.count()
+            except Exception:
+                pass
+
+        dlq_depth = 0
+        dlq_store = getattr(agent_app, "federation_dlq_store", None)
+        if dlq_store is not None:
+            try:
+                dlq_items = await dlq_store.list(limit=10000)
+                dlq_depth = len(dlq_items)
+            except Exception:
+                pass
+
+        dedup_active = 0
+        dedup_store = getattr(agent_app, "_federation_notification_dedup_store", None)
+        if dedup_store is not None:
+            try:
+                dedup_records = dedup_store.list_active(limit=10000)
+                dedup_active = len(dedup_records)
+            except Exception:
+                pass
+
+        return export_notification_prometheus_metrics(
+            metrics=metrics,
+            health=[],
+            alerts=alerts,
+            daemon_health=daemon_health,
+            retry_queue_depth=retry_queue_depth,
+            dlq_depth=dlq_depth,
+            dedup_active=dedup_active,
+        )
 
     return api
 

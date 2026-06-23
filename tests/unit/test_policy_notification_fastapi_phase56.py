@@ -1088,3 +1088,85 @@ class TestOptionalEndpoints:
         # Status endpoints should return graceful defaults
         resp = api_no_services.get("/federation/notifications/retry-daemon/status")
         assert resp.status_code == 200
+
+
+class TestPrometheusEndpoint:
+    """GET /federation/notifications/prometheus — Phase 53 + Phase 56 expansion."""
+
+    def test_prometheus_returns_text(self, api_client):
+        """GET prometheus returns text/plain content type with metrics."""
+        resp = api_client.get("/federation/notifications/prometheus")
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type", "").startswith("text/plain")
+        assert "# HELP" in resp.text
+        assert "# TYPE" in resp.text
+
+    def test_prometheus_includes_core_metrics(self, api_client):
+        """Prometheus output includes Phase 53 core notification metrics."""
+        resp = api_client.get("/federation/notifications/prometheus")
+        assert resp.status_code == 200
+        text = resp.text
+        assert "agentapp_notification_total" in text
+        assert "agentapp_notification_sent_total" in text
+        assert "agentapp_notification_failed_total" in text
+        assert "agentapp_notification_dlq_total" in text
+        assert "agentapp_notification_success_rate" in text
+
+    def test_prometheus_includes_daemon_health(self, api_client):
+        """Prometheus output includes Phase 56 daemon health metrics."""
+        _run_async(api_client._daemon.start())
+        try:
+            resp = api_client.get("/federation/notifications/prometheus")
+            assert resp.status_code == 200
+            text = resp.text
+            assert "agentapp_notification_daemon_state" in text
+            assert "agentapp_notification_daemon_consecutive_failures" in text
+        finally:
+            _run_async(api_client._daemon.stop())
+
+    def test_prometheus_includes_queue_depths(self, api_client):
+        """Prometheus output includes Phase 56 queue depth metrics."""
+        resp = api_client.get("/federation/notifications/prometheus")
+        assert resp.status_code == 200
+        text = resp.text
+        assert "agentapp_notification_retry_queue_depth" in text
+        assert "agentapp_notification_dlq_depth" in text
+        assert "agentapp_notification_dedup_active_active" in text
+
+    def test_prometheus_daemon_state_values(self, api_client):
+        """Daemon state gauge uses correct numeric values per state."""
+        _run_async(api_client._daemon.start())
+        try:
+            # Test healthy (consecutive_failures = 0)
+            resp = api_client.get("/federation/notifications/prometheus")
+            assert resp.status_code == 200
+            assert "agentapp_notification_daemon_state 1" in resp.text
+
+            # Test degraded (consecutive_failures = 2)
+            api_client._daemon._consecutive_failures = 2
+            resp = api_client.get("/federation/notifications/prometheus")
+            assert resp.status_code == 200
+            assert "agentapp_notification_daemon_state 2" in resp.text
+
+            # Test unhealthy (consecutive_failures = 3)
+            api_client._daemon._consecutive_failures = 3
+            resp = api_client.get("/federation/notifications/prometheus")
+            assert resp.status_code == 200
+            assert "agentapp_notification_daemon_state 3" in resp.text
+        finally:
+            _run_async(api_client._daemon.stop())
+
+    def test_prometheus_no_secrets(self, api_client):
+        """Prometheus output does not contain secrets, tokens, or passwords."""
+        resp = api_client.get("/federation/notifications/prometheus")
+        assert resp.status_code == 200
+        text = resp.text.lower()
+        assert "secret" not in text
+        assert "token" not in text
+        assert "password" not in text
+
+    def test_prometheus_no_services(self, api_no_services):
+        """Prometheus endpoint returns valid output when services are absent."""
+        resp = api_no_services.get("/federation/notifications/prometheus")
+        assert resp.status_code == 200
+        assert "# HELP" in resp.text
