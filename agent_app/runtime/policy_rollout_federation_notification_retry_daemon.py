@@ -55,6 +55,10 @@ class AlertDeliveryRetryDaemon:
         self._task: asyncio.Task | None = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._started_at: datetime | None = None
+        self._last_run_at: datetime | None = None
+        self._last_error: str | None = None
+        self._consecutive_failures: int = 0
 
     def _record_change_event(
         self,
@@ -83,6 +87,7 @@ class AlertDeliveryRetryDaemon:
             if self.is_running:
                 return
             self._running = True
+            self._started_at = datetime.now(timezone.utc)
             self._task = asyncio.create_task(self._loop())
             self._record_change_event(
                 event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STARTED,
@@ -111,6 +116,9 @@ class AlertDeliveryRetryDaemon:
                 except asyncio.CancelledError:
                     pass
                 self._task = None
+            self._last_run_at = None
+            self._last_error = None
+            self._consecutive_failures = 0
             self._record_change_event(
                 event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED,
                 payload={},
@@ -132,6 +140,8 @@ class AlertDeliveryRetryDaemon:
                 dry_run=dry_run,
             )
         except Exception as exc:
+            self._last_error = str(exc)
+            self._consecutive_failures += 1
             self._record_change_event(
                 event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_FAILED,
                 payload={"error": str(exc)},
@@ -147,6 +157,9 @@ class AlertDeliveryRetryDaemon:
             if self._config.stop_on_error:
                 await self.stop()
             raise
+
+        self._last_run_at = datetime.now(timezone.utc)
+        self._consecutive_failures = 0
 
         self._record_change_event(
             event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_RUN_COMPLETED,
@@ -176,6 +189,34 @@ class AlertDeliveryRetryDaemon:
                 pass
 
         return result
+
+    def get_health_status(self) -> dict[str, Any]:
+        """Return current daemon health status.
+
+        States:
+        - ``stopped``: daemon is not running
+        - ``healthy``: running, no failures
+        - ``degraded``: running, 1-2 consecutive failures
+        - ``unhealthy``: running, 3+ consecutive failures
+        """
+        if not self.is_running:
+            return {"state": "stopped", "consecutive_failures": self._consecutive_failures}
+
+        if self._consecutive_failures == 0:
+            state = "healthy"
+        elif self._consecutive_failures <= 2:
+            state = "degraded"
+        else:
+            state = "unhealthy"
+
+        return {
+            "state": state,
+            "consecutive_failures": self._consecutive_failures,
+            "last_error": self._last_error,
+            "started_at": self._started_at.isoformat() if self._started_at else None,
+            "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
+            "interval_seconds": self._config.interval_seconds,
+        }
 
     async def _loop(self) -> None:
         """Internal loop — runs run_once at the configured interval."""

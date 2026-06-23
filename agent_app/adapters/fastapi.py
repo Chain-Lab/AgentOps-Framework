@@ -995,6 +995,32 @@ def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastA
         await daemon.stop()
         return {"is_running": daemon._running}
 
+    @api.get("/federation/notifications/retry-daemon/health")
+    async def get_retry_daemon_health() -> dict:
+        """Return daemon health status (healthy/degraded/unhealthy/stopped)."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            return {"state": "stopped", "detail": "Retry daemon is not configured."}
+        return daemon.get_health_status()
+
+    @api.get("/federation/notifications/retry-daemon/ready")
+    async def get_retry_daemon_ready() -> dict:
+        """Readiness probe — 200 when daemon is healthy or degraded, 503 when unhealthy."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            return {"ready": True, "state": "stopped"}
+        health = daemon.get_health_status()
+        is_ready = health["state"] in ("healthy", "degraded", "stopped")
+        return {"ready": is_ready, "state": health["state"]}
+
+    @api.get("/federation/notifications/retry-daemon/live")
+    async def get_retry_daemon_live() -> dict:
+        """Liveness probe — always alive if the daemon is configured."""
+        daemon = getattr(agent_app, "_federation_notification_retry_daemon", None)
+        if daemon is None:
+            return {"alive": True, "state": "stopped"}
+        return {"alive": True, "state": daemon.get_health_status()["state"]}
+
     # -- Retry queue endpoints --
     @api.get("/federation/notifications/retry-queue")
     async def list_retry_queue(

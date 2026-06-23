@@ -460,6 +460,109 @@ class TestRetryDaemonEndpoints:
         )
         assert resp.status_code == 404
 
+    def test_health_stopped(self, api_client):
+        """GET health returns state=stopped when daemon is not running."""
+        resp = api_client.get("/federation/notifications/retry-daemon/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "stopped"
+        assert data["consecutive_failures"] == 0
+
+    def test_health_healthy(self, api_client):
+        """GET health returns state=healthy after successful start."""
+        _run_async(api_client._daemon.start())
+        resp = api_client.get("/federation/notifications/retry-daemon/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "healthy"
+        assert data["consecutive_failures"] == 0
+        assert data["started_at"] is not None
+
+        _run_async(api_client._daemon.stop())
+
+    def test_health_degraded(self, api_client):
+        """GET health returns state=degraded with 1-2 consecutive failures."""
+        _run_async(api_client._daemon.start())
+        api_client._daemon._consecutive_failures = 1
+        api_client._daemon._last_error = "Connection timeout"
+
+        resp = api_client.get("/federation/notifications/retry-daemon/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "degraded"
+        assert data["consecutive_failures"] == 1
+        assert data["last_error"] == "Connection timeout"
+
+        _run_async(api_client._daemon.stop())
+
+    def test_health_unhealthy(self, api_client):
+        """GET health returns state=unhealthy with 3+ consecutive failures."""
+        _run_async(api_client._daemon.start())
+        api_client._daemon._consecutive_failures = 3
+        api_client._daemon._last_error = "Repeated delivery failures"
+
+        resp = api_client.get("/federation/notifications/retry-daemon/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "unhealthy"
+        assert data["consecutive_failures"] == 3
+
+        _run_async(api_client._daemon.stop())
+
+    def test_health_no_daemon(self, api_no_services):
+        """GET health returns graceful response when daemon absent."""
+        resp = api_no_services.get("/federation/notifications/retry-daemon/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "stopped"
+
+    def test_ready_stopped(self, api_client):
+        """GET ready returns ready=true when daemon is stopped."""
+        resp = api_client.get("/federation/notifications/retry-daemon/ready")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ready"] is True
+        assert data["state"] == "stopped"
+
+    def test_ready_running(self, api_client):
+        """GET ready returns ready=true when daemon is healthy."""
+        _run_async(api_client._daemon.start())
+        resp = api_client.get("/federation/notifications/retry-daemon/ready")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ready"] is True
+        assert data["state"] == "healthy"
+
+        _run_async(api_client._daemon.stop())
+
+    def test_ready_unhealthy(self, api_client):
+        """GET ready returns ready=true for degraded but ready=true for stopped."""
+        _run_async(api_client._daemon.start())
+        api_client._daemon._consecutive_failures = 2
+
+        resp = api_client.get("/federation/notifications/retry-daemon/ready")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ready"] is True  # degraded is still ready
+        assert data["state"] == "degraded"
+
+        _run_async(api_client._daemon.stop())
+
+    def test_live_always_alive(self, api_client):
+        """GET live always returns alive=true when daemon is configured."""
+        resp = api_client.get("/federation/notifications/retry-daemon/live")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["alive"] is True
+
+    def test_live_no_daemon(self, api_no_services):
+        """GET live returns alive=true when daemon is absent."""
+        resp = api_no_services.get("/federation/notifications/retry-daemon/live")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["alive"] is True
+        assert data["state"] == "stopped"
+
 
 class TestRetryQueueEndpoints:
     """GET/POST /federation/notifications/retry-queue/*"""
