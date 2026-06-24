@@ -2,6 +2,39 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.43.0 — Phase 57: Alert Delivery Operations Chain — Atomic Priority Queue & Daemon Deep Integration
+
+### Added
+- Atomic priority queue lifecycle: `claim_next` → `acknowledge`/`fail`/`requeue` with worker-id and lease-ttl
+- InMemory and SQLite priority queue stores with priority ordering and status filtering
+- Retry daemon deep integration: claims from priority queue, delivers via adapter, acks/requeues/fails atomically
+- Persistent daemon state store (`AlertDeliveryRetryDaemonState`) with InMemory and SQLite backends
+- Daemon state persistence across restarts (started_at, last_run_at, consecutive_failures, last_error)
+- Webhook signing key rotation with configurable `rotation_interval_hours` and AuditLogStore persistence
+- SQLite concurrency safety: WAL mode, busy_timeout, retry logic for concurrent writers
+- Batch DLQ replay with `batch_replay_dlq` CLI command and `replay_batch` API endpoint
+- Batch replay confirmation support (confirm=True skips dry-run check)
+- Structured error messages for replay entries (enum + detail + reason)
+- 6 new PolicyChangeEventType values for daemon lifecycle and priority queue operations
+- Daemon health/readiness/liveness FastAPI endpoints (GET /admin/operations/daemon/health)
+- Daemon state persistence CLI commands (daemon-state list/show/reset)
+- `claim_lease_seconds` and `reset_expired_leases_on_run` daemon config options
+- `available_at` field on `AlertPriorityQueueItem` for scheduled delivery
+- `AlertDeliveryRetryDaemonRunResult` with priority queue counters (queue_claimed/completed/failed/requeued)
+
+### Changed
+- `AlertPriorityQueueStore` protocol: added `claim_next`, `acknowledge`, `fail`, `requeue`, `reset_expired_leases`
+- `NotificationAlertDeliveryService._run_once` → renamed to `run_once` (public async)
+- Retry daemon: `run_once()` now supports priority queue first, then falls back to scheduler
+- Daemon `get_health_status()`: uses persisted state after restart for visibility
+- Webhook signing: key rotation writes rotation record to AuditLogStore
+- PolicyChangeEventType count: 150 → 156
+- AlertDeliveryStatus enum: added SUPPRESSED, TEMPLATE_FAILED, SIGNATURE_FAILED
+
+### Fixed
+- SQLite priority queue: WAL mode prevents database-locked errors under concurrent access
+- Daemon stop: handles RuntimeError when event loop is already closed
+
 ## v0.41.0 — Phase 53: Federation Notification External Alert Delivery, Prometheus Export, Retention & Rollup
 
 ### Added
