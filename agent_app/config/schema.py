@@ -801,6 +801,14 @@ class RolloutFederationNotificationAlertDeliveryConfig(BaseModel):
         default_factory=dict,
         description="Console write actions configuration (enabled, require_confirmation)",
     )
+    # Phase 56: priority queue store config
+    priority_queue_store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="memory",
+            path=None,
+        ),
+        description="Priority queue store configuration (memory | sqlite)",
+    )
 
 
 class RolloutFederationNotificationRetentionConfig(BaseModel):

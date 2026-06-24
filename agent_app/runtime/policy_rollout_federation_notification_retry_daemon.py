@@ -1,6 +1,7 @@
 """Alert delivery retry daemon.
 
 Phase 55 Task 4: Retry daemon for automatic alert delivery retry.
+Phase 56 Task 730: Priority queue store integration.
 """
 from __future__ import annotations
 
@@ -47,11 +48,13 @@ class AlertDeliveryRetryDaemon:
         config: AlertDeliveryRetryDaemonConfig | None = None,
         audit_logger: Any | None = None,
         change_event_store: Any | None = None,
+        priority_queue_store: Any | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._config = config or AlertDeliveryRetryDaemonConfig()
         self._audit_logger = audit_logger
         self._change_event_store = change_event_store
+        self._priority_queue_store = priority_queue_store
         self._task: asyncio.Task | None = None
         self._running = False
         self._lock = asyncio.Lock()

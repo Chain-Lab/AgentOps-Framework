@@ -1361,6 +1361,10 @@ def build_app(
                     write_actions_cfg = getattr(alert_delivery_cfg, "write_actions", None)
                     if write_actions_cfg is not None:
                         app._federation_notification_write_actions_config = write_actions_cfg
+                    # Phase 56: Wire priority_queue_store config from alert_delivery
+                    priority_queue_store_cfg = getattr(alert_delivery_cfg, "priority_queue_store", None)
+                    if priority_queue_store_cfg is not None:
+                        app._federation_notification_priority_queue_store_config = priority_queue_store_cfg
 
                 # Wire archive_cleanup config from notification top-level
                 archive_cleanup_cfg = getattr(notif_cfg, "archive_cleanup", None)

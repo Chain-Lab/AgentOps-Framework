@@ -10754,6 +10754,23 @@ async def _cmd_policy_federation_notification_alert_dedup_explain(args: argparse
 # ---------------------------------------------------------------------------
 
 
+def _build_priority_queue_store(delivery_cfg: Any) -> Any | None:
+    """Create a priority queue store from alert delivery config.
+
+    Phase 56 Task 730: SQLite Priority Queue Store.
+    """
+    pq_cfg = getattr(delivery_cfg, "priority_queue_store", None)
+    if pq_cfg is None:
+        return None
+    from agent_app.runtime.policy_rollout_federation_notification_alert_priority_queue_store import (
+        create_alert_priority_queue_store,
+    )
+    return create_alert_priority_queue_store(
+        store_type=pq_cfg.type,
+        db_path=pq_cfg.path,
+    )
+
+
 async def _cmd_policy_federation_notification_alert_delivery_daemon_start(args: argparse.Namespace) -> int:
     """Start the alert delivery retry daemon."""
     import signal
@@ -10818,6 +10835,7 @@ async def _cmd_policy_federation_notification_alert_delivery_daemon_start(args: 
         scheduler=service,
         config=daemon_config,
         audit_logger=lambda event, payload: None,
+        priority_queue_store=_build_priority_queue_store(delivery_cfg),
     )
 
     # Handle graceful shutdown
