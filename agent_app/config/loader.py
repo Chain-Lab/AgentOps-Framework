@@ -1365,6 +1365,22 @@ def build_app(
                     priority_queue_store_cfg = getattr(alert_delivery_cfg, "priority_queue_store", None)
                     if priority_queue_store_cfg is not None:
                         app._federation_notification_priority_queue_store_config = priority_queue_store_cfg
+                    # Phase 57: Wire daemon_id from alert_delivery
+                    daemon_id_cfg = getattr(alert_delivery_cfg, "daemon_id", None)
+                    if daemon_id_cfg is not None:
+                        app._federation_notification_retry_daemon_id = daemon_id_cfg
+                    # Phase 57: Wire state_store config from alert_delivery
+                    state_store_cfg = getattr(alert_delivery_cfg, "state_store", None)
+                    if state_store_cfg is not None:
+                        app._federation_notification_retry_daemon_state_store_config = state_store_cfg
+                    # Phase 57: Wire claim_lease_seconds from alert_delivery
+                    claim_lease_cfg = getattr(alert_delivery_cfg, "claim_lease_seconds", None)
+                    if claim_lease_cfg is not None:
+                        app._federation_notification_claim_lease_seconds = claim_lease_cfg
+                    # Phase 57: Wire batch_replay_enqueue_default from alert_delivery
+                    batch_replay_enqueue_cfg = getattr(alert_delivery_cfg, "batch_replay_enqueue_default", None)
+                    if batch_replay_enqueue_cfg is not None:
+                        app._federation_notification_batch_replay_enqueue_default = batch_replay_enqueue_cfg
 
                 # Wire archive_cleanup config from notification top-level
                 archive_cleanup_cfg = getattr(notif_cfg, "archive_cleanup", None)

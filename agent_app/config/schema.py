@@ -642,16 +642,26 @@ class RolloutFederationPreferenceConfig(BaseModel):
 
 
 class RolloutFederationWebhookSigningConfig(BaseModel):
-    """Configuration for webhook signing (Phase 51)."""
+    """Configuration for webhook signing (Phase 51, Phase 57 key rotation)."""
+
     enabled: bool = Field(default=False, description="Enable webhook request signing")
     algorithm: str = Field(default="hmac-sha256", description="Signing algorithm")
     signature_version: str = Field(default="v1", description="Signature version")
     active_key_id: str = Field(default="default", description="Active signing key ID")
-    keys: dict[str, str] = Field(default_factory=dict, description="Signing keys by ID")
+    keys: dict[str, str] = Field(default_factory=dict, description="Signing keys by ID (Phase 57: supports previous keys)")
     timestamp_tolerance_seconds: int = Field(default=300, description="Timestamp tolerance in seconds")
     nonce_ttl_seconds: int = Field(default=600, description="Nonce TTL in seconds")
     nonce_store_backend: str = Field(default="memory", description="Nonce store backend: memory | sqlite")
     nonce_store_path: str = Field(default=".agent_app/federation_webhook_nonces.db", description="Nonce store SQLite path")
+    # Phase 57: secret provider configuration
+    secret_env_prefix: str = Field(
+        default="AGENTAPP_WEBHOOK_SIGNING",
+        description="Environment variable prefix for secret provider",
+    )
+    nonce_replay_protection: bool = Field(
+        default=True,
+        description="Enable nonce-based replay protection",
+    )
 
 
 class RolloutFederationWebhookReplayConfig(BaseModel):
@@ -808,6 +818,33 @@ class RolloutFederationNotificationAlertDeliveryConfig(BaseModel):
             path=None,
         ),
         description="Priority queue store configuration (memory | sqlite)",
+    )
+    # Phase 57: daemon_id for persistent state identification
+    daemon_id: str = Field(
+        default="default",
+        description="Daemon identifier for persistent state store",
+    )
+    # Phase 57: daemon state store config
+    state_store: RolloutFederationStoreConfig = Field(
+        default_factory=lambda: RolloutFederationStoreConfig(
+            type="sqlite",
+            path=".agent_app/federation_notification_retry_daemon_state.db",
+        ),
+        description="Daemon persistent state store configuration (memory | sqlite)",
+    )
+    # Phase 57: priority queue lifecycle config
+    claim_lease_seconds: int = Field(
+        default=300,
+        description="Lease duration for claimed queue items (seconds)",
+    )
+    reset_expired_leases_on_run: bool = Field(
+        default=True,
+        description="Reset expired leases before each daemon run",
+    )
+    # Phase 57: batch replay enqueue default
+    batch_replay_enqueue_default: bool = Field(
+        default=True,
+        description="Whether batch DLQ replay enqueues to priority queue by default",
     )
 
 

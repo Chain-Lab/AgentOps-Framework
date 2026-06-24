@@ -44,6 +44,7 @@ def _make_item(
         status=status,
         priority=priority,
         created_at=now,
+        available_at=now,
     )
 
 
@@ -71,6 +72,7 @@ class TestAlertPriorityQueueItemModel:
                 status=AlertDeliveryStatus.RETRY_SCHEDULED,
                 priority=50,
                 created_at=datetime.now(timezone.utc),
+                available_at=datetime.now(timezone.utc),
             )
 
     def test_naive_datetime_raises(self) -> None:
@@ -83,6 +85,7 @@ class TestAlertPriorityQueueItemModel:
                 status=AlertDeliveryStatus.RETRY_SCHEDULED,
                 priority=50,
                 created_at=datetime(2024, 1, 1),  # naive
+                available_at=datetime.now(timezone.utc),
             )
 
     def test_default_priority_is_zero(self) -> None:
@@ -93,6 +96,7 @@ class TestAlertPriorityQueueItemModel:
             channel_type=AlertDeliveryChannelType.WEBHOOK,
             status=AlertDeliveryStatus.RETRY_SCHEDULED,
             created_at=datetime.now(timezone.utc),
+            available_at=datetime.now(timezone.utc),
         )
         assert item.priority == 0
 

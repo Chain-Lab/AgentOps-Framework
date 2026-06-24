@@ -14,6 +14,9 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from agent_app.runtime.streaming import StreamEvent
+from agent_app.governance.policy_rollout_federation_notification_observability import (
+    NotificationRollupGranularity,
+)
 
 try:
     from fastapi import FastAPI, HTTPException, Request

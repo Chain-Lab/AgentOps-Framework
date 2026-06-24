@@ -102,6 +102,7 @@ class TestRetryDaemonPriorityQueueIntegration:
                     status=AlertDeliveryStatus.RETRY_SCHEDULED,
                     priority=50,
                     created_at=datetime.now(timezone.utc),
+                    available_at=datetime.now(timezone.utc),
                 )
             )
 
@@ -125,6 +126,7 @@ class TestRetryDaemonPriorityQueueIntegration:
                         status=AlertDeliveryStatus.RETRY_SCHEDULED,
                         priority=i * 25,
                         created_at=datetime.now(timezone.utc),
+                        available_at=datetime.now(timezone.utc),
                     )
                 )
 
@@ -138,4 +140,4 @@ class TestRetryDaemonPriorityQueueIntegration:
 
         assert asyncio.run(pq_store.count()) == 3
         counts = asyncio.run(pq_store.count_by_priority())
-        assert counts == {0: 1, 50: 1, 100: 1}
+        assert counts == {0: 1, 25: 1, 50: 1}

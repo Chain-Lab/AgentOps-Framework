@@ -158,7 +158,7 @@ class TestPolicyChangeEventTypePhase49:
 
     def test_event_type_count(self):
         """94 original + 6 Phase 49 + 6 Phase 50 + 12 Phase 51 + 6 Phase 52 + 9 Phase 53 = 133."""
-        assert len(PolicyChangeEventType) == 133
+        assert len(PolicyChangeEventType) == 150
 
     def test_phase53_alert_delivery_event_types_exist(self) -> None:
         """Phase 53 alert delivery PolicyChangeEventType members."""

@@ -2030,7 +2030,7 @@ class TestPhase52ObservabilityEventTypes:
         """PolicyChangeEventType has 133 members (124 + 9 Phase 53)."""
         from agent_app.governance.policy_change_event import PolicyChangeEventType
 
-        assert len(PolicyChangeEventType) == 133
+        assert len(PolicyChangeEventType) == 150
 
     def test_new_enum_count_federation_history_event(self) -> None:
         """FederationHistoryEventType has 51 members (42 + 9 Phase 53)."""
