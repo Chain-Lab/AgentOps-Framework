@@ -5060,3 +5060,57 @@ Resumable archive cleanup for old rollup data with checkpoint support. Can resum
 2. **Both audit_logger and change_event_store** — Services maintain backward compatibility with `audit_logger` (raw strings) while adding `change_event_store` (PolicyChangeEventType enum) for Phase 55 audit/history integration.
 3. **Daemon is process-local** — The retry daemon runs in-process and must be explicitly started. No external process management.
 4. **Archive cleanup is resumable** — Checkpoints track progress and enable resumption from the last processed record after interruption.
+
+## Phase 57: Alert Delivery Operations Chain — Atomic Priority Queue & Daemon Deep Integration (v0.43)
+
+### Overview
+
+Phase 57 fixes production-critical gaps in the alert delivery operations chain identified after Phase 55/56. The focus is on atomic queue semantics, retry daemon deep integration, state persistence, webhook signing key rotation, SQLite concurrency safety, and batch DLQ replay.
+
+### Architecture
+
+1. **Atomic Priority Queue**: The `AlertPriorityQueueStore` protocol gains `claim_next`, `acknowledge`, `fail`, `requeue`, and `reset_expired_leases` methods. The `AlertPriorityQueueItem` model gains an `available_at` field for scheduled delivery. Both InMemory and SQLite implementations support atomic claim/ack/fail/requeue semantics with worker-id and lease-ttl.
+
+2. **Retry Daemon Deep Integration**: The `AlertDeliveryRetryDaemon.run_once()` method now claims items from the priority queue first, delivers via the appropriate adapter, and acknowledges/requeues/fails atomically. Remaining budget falls back to `scheduler.run_once()` for backward compatibility.
+
+3. **Daemon State Persistence**: The `AlertDeliveryRetryDaemonState` model persists daemon runtime state (started_at, last_run_at, consecutive_failures, last_error, last_result) to InMemory or SQLite stores. After restart, `get_health_status()` uses persisted state for visibility.
+
+4. **Webhook Signing Key Rotation**: The `WebhookSigningService` gains `rotate_key()` method with configurable `rotation_interval_hours`. Rotation records are written to the AuditLogStore.
+
+5. **SQLite Concurrency Safety**: SQLite stores use WAL mode, busy_timeout, and retry logic to handle concurrent writers safely.
+
+6. **Batch DLQ Replay**: The `replay_batch` method replays multiple DLQ entries with confirmation support. Structured error messages include enum + detail + reason for each entry.
+
+### New Models
+
+- `AlertDeliveryRetryDaemonState` — persistent daemon runtime state
+- `AlertDeliveryRetryDaemonStateStore` — protocol with InMemory + SQLite
+- `BatchReplayResult` — batch replay outcome with entry-level errors
+- `BatchReplayEntryResult` — individual replay entry result
+- `ReplayErrorCode` — enum for structured replay errors
+
+### New PolicyChangeEventType Values
+
+| Value | Description |
+|-------|-------------|
+| `FEDERATION_NOTIFICATION_DAEMON_STARTED` | Retry daemon started |
+| `FEDERATION_NOTIFICATION_DAEMON_STOPPED` | Retry daemon stopped |
+| `FEDERATION_NOTIFICATION_DAEMON_RUN_STARTED` | Daemon run cycle started |
+| `FEDERATION_NOTIFICATION_DAEMON_RUN_COMPLETED` | Daemon run cycle completed |
+| `FEDERATION_NOTIFICATION_DAEMON_RUN_FAILED` | Daemon run cycle failed |
+| `FEDERATION_NOTIFICATION_QUEUE_CLAIMED` | Item claimed from priority queue |
+| `FEDERATION_NOTIFICATION_QUEUE_ACKED` | Item acknowledged |
+| `FEDERATION_NOTIFICATION_QUEUE_FAILED` | Item failed |
+| `FEDERATION_NOTIFICATION_QUEUE_REQUEUED` | Item requeued |
+| `FEDERATION_NOTIFICATION_SIGNING_KEY_ROTATED` | Webhook signing key rotated |
+| `FEDERATION_NOTIFICATION_BATCH_REPLAY_STARTED` | Batch replay started |
+| `FEDERATION_NOTIFICATION_BATCH_REPLAY_COMPLETED` | Batch replay completed |
+
+### Design Decisions
+
+1. **Atomic claim/ack/fail/requeue** — Each priority queue operation is atomic at the store level. Worker-id and lease-ttl prevent duplicate processing.
+2. **Priority queue first, fallback to scheduler** — The daemon claims from the priority queue first (high-priority items), then falls back to the scheduler's `run_once()` for remaining budget.
+3. **State persistence across restarts** — Daemon state is persisted after each run cycle. After restart, health status reflects the last known state from the store.
+4. **Key rotation with AuditLogStore** — Webhook signing key rotation writes to the AuditLogStore for audit trail, not the notification history store.
+5. **SQLite WAL mode** — WAL mode enables concurrent readers and a single writer without database-locked errors. busy_timeout provides additional safety.
+6. **Batch replay with confirmation** — Batch replay requires explicit confirmation in live mode to prevent accidental mass replay.
