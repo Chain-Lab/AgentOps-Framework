@@ -50,6 +50,9 @@ from agent_app.runtime.policy_rollout_federation_notification_retry_daemon impor
     AlertDeliveryRetryDaemon,
     AlertDeliveryRetryDaemonConfig,
 )
+from agent_app.runtime.policy_rollout_federation_notification_observability_store import (
+    InMemoryNotificationObservabilityStore,
+)
 from agent_app.runtime.policy_rollout_federation_notification_rollup import (
     InMemoryNotificationRollupStore,
     NotificationMetricsRollup,
@@ -268,8 +271,9 @@ def _build_api_with_services():
 
     # --- Rollup service ---
     rollup_store = InMemoryNotificationRollupStore()
+    observability_store = InMemoryNotificationObservabilityStore()
     rollup_service = NotificationRollupService(
-        observability_store=None,
+        observability_store=observability_store,
         rollup_store=rollup_store,
     )
     app._federation_notification_rollup_service = rollup_service
@@ -575,6 +579,7 @@ class TestDLQEndpoints:
             attempt_id="nda_dlq_001",
             status=AlertDeliveryStatus.DLQ,
         )
+        _run_async(delivery_store.create_target(_make_target(target_id="ndt_001")))
         _run_async(delivery_store.record_attempt(dlq_attempt))
 
         resp = api_client.post(
@@ -703,7 +708,7 @@ class TestDedupEndpoints:
         """GET dedup/{key} returns a specific record."""
         store = api_client._dedup_store
         record = _make_dedup_record(dedup_key="dk_test_001")
-        _run_async(store.upsert(record))
+        store.upsert(record)
 
         resp = api_client.get("/federation/notifications/dedup/dk_test_001")
         assert resp.status_code == 200
@@ -739,7 +744,7 @@ class TestDedupEndpoints:
             expires_at=now,
             status="open",
         )
-        _run_async(store.upsert(expired))
+        store.upsert(expired)
 
         resp = api_client.post(
             "/federation/notifications/dedup/prune",

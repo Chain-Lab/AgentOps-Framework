@@ -77,7 +77,7 @@ class AlertPriorityQueueItem(BaseModel):
     claimed_by: str | None = Field(default=None, description="Worker that claimed this item")
     claimed_at: datetime | None = Field(default=None, description="When item was claimed")
     lease_expires_at: datetime | None = Field(default=None, description="When the claim lease expires")
-    available_at: datetime = Field(..., description="When item becomes eligible for claim")
+    available_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When item becomes eligible for claim")
     metadata_json: str = Field(default="{}", description="Serialized metadata")
 
     @field_validator("created_at")

@@ -504,7 +504,7 @@ class TestDaemonStatePersistence:
         assert state.consecutive_failures == 0
 
     def test_run_failure_saves_error(self):
-        """Failed run saves error state."""
+        """Failed run saves error state when stop_on_error=False."""
         scheduler = _make_mock_scheduler()
         pq_store = InMemoryAlertPriorityQueueStore()
 
@@ -520,15 +520,15 @@ class TestDaemonStatePersistence:
             daemon_state_store=state_store,
         )
 
-        # Fallback errors are swallowed by the daemon (best-effort),
-        # so run_once() does not raise. Verify state was persisted.
+        # With stop_on_error=False, run_once() does not raise but saves error state.
         result = asyncio.run(daemon.run_once())
         assert result.fallback_processed == 0
         # is_running is False because start() was never called
         state = state_store.get("test-daemon")
         assert state is not None
         assert state.actual_state == "stopped"
-        assert state.consecutive_failures == 0
+        assert state.consecutive_failures == 1
+        assert state.last_error_message == "test error"
 
     def test_health_uses_persisted_state_when_stopped(self):
         """Health status uses persisted state when daemon is not running."""

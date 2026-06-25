@@ -362,20 +362,17 @@ class AlertDeliveryRetryDaemon:
 
             # Step 4: Fallback to delivery service for remaining budget
             if remaining_budget > 0:
-                try:
-                    fallback_result = await self._scheduler.run_once(
-                        limit=remaining_budget,
-                        dry_run=dry_run,
-                    )
-                    result.fallback_processed = fallback_result.scanned
-                    result.delivered += fallback_result.delivered
-                    result.retry_scheduled += fallback_result.retry_scheduled
-                    result.dlq += fallback_result.dlq
-                    result.failed += fallback_result.failed
-                    result.scanned += fallback_result.scanned
-                    result.attempt_ids.extend(fallback_result.attempt_ids)
-                except Exception:
-                    pass
+                fallback_result = await self._scheduler.run_once(
+                    limit=remaining_budget,
+                    dry_run=dry_run,
+                )
+                result.fallback_processed = fallback_result.scanned
+                result.delivered += fallback_result.delivered
+                result.retry_scheduled += fallback_result.retry_scheduled
+                result.dlq += fallback_result.dlq
+                result.failed += fallback_result.failed
+                result.scanned += fallback_result.scanned
+                result.attempt_ids.extend(fallback_result.attempt_ids)
 
         except Exception as exc:
             self._last_error = str(exc)
@@ -398,9 +395,11 @@ class AlertDeliveryRetryDaemon:
                 last_error_at=datetime.now(timezone.utc),
                 last_error_message=str(exc),
                 consecutive_failures=self._consecutive_failures,
-                actual_state="error",
+                actual_state="error" if self.is_running else "stopped",
             )
-            raise
+            if self._config.stop_on_error:
+                raise
+            return result
 
         self._last_run_at = datetime.now(timezone.utc)
         self._consecutive_failures = 0
@@ -497,6 +496,7 @@ class AlertDeliveryRetryDaemon:
                 await self.run_once()
             except Exception:
                 if self._config.stop_on_error:
+                    self._running = False
                     return
 
         while self._running:
@@ -516,4 +516,5 @@ class AlertDeliveryRetryDaemon:
                 await self.run_once()
             except Exception:
                 if self._config.stop_on_error:
+                    self._running = False
                     break

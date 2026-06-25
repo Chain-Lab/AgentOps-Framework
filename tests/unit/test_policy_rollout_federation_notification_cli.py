@@ -26,6 +26,9 @@ from agent_app.governance.policy_rollout_federation_notification_preference impo
     FederationNotificationPreferenceExplanation,
     FederationNotificationPreferenceSubjectType,
 )
+from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+    AlertDeliveryStatus,
+)
 from agent_app.governance.policy_rollout_federation_webhook import (
     FederationWebhookReplayResult,
     FederationWebhookSignatureResult,
@@ -782,7 +785,7 @@ class TestDlqBatchReplayCLI:
         with patch("agent_app.config.loader.build_app", return_value=app):
             rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
         assert rc == 1
-        output = capsys.readouterr().out
+        output = capsys.readouterr().err
         assert "not configured" in output
 
     def test_batch_replay_dlq_store_not_configured(self, capsys) -> None:
@@ -800,5 +803,5 @@ class TestDlqBatchReplayCLI:
         with patch("agent_app.config.loader.build_app", return_value=app):
             rc = _run(_cmd_policy_federation_notification_dlq_batch_replay(args))
         assert rc == 1
-        output = capsys.readouterr().out
+        output = capsys.readouterr().err
         assert "DLQ store not configured" in output
