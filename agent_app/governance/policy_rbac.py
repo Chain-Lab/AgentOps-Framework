@@ -145,6 +145,21 @@ class PolicyReleasePermission(StrEnum):
     FEDERATION_NOTIFICATION_PREFERENCE_MANAGE = "policy.federation.notification.preference.manage"
     FEDERATION_WEBHOOK_REPLAY = "policy.federation.webhook.replay"
     FEDERATION_WEBHOOK_VERIFY = "policy.federation.webhook.verify"
+    # Phase 59: multi-instance production readiness
+    DLQ_REPLAY_IDEMPOTENCY_VIEW = "policy.federation.dlq.replay.idempotency.view"
+    DLQ_REPLAY_IDEMPOTENCY_MANAGE = "policy.federation.dlq.replay.idempotency.manage"
+    DLQ_REPLAY_RATE_LIMIT_VIEW = "policy.federation.dlq.replay.rate_limit.view"
+    DLQ_REPLAY_RATE_LIMIT_MANAGE = "policy.federation.dlq.replay.rate_limit.manage"
+    DLQ_REPLAY_RUN = "policy.federation.dlq.replay.run"
+    PRIORITY_QUEUE_VIEW = "policy.federation.priority_queue.view"
+    PRIORITY_QUEUE_MANAGE = "policy.federation.priority_queue.manage"
+    DEAD_LETTER_POLICY_VIEW = "policy.federation.dead_letter.view"
+    DEAD_LETTER_POLICY_MANAGE = "policy.federation.dead_letter.manage"
+    DISTRIBUTED_LOCK_VIEW = "policy.federation.distributed_lock.view"
+    DISTRIBUTED_LOCK_MANAGE = "policy.federation.distributed_lock.manage"
+    WEBHOOK_KEY_ROTATION_VIEW = "policy.federation.webhook.key_rotation.view"
+    WEBHOOK_KEY_ROTATION_MANAGE = "policy.federation.webhook.key_rotation.manage"
+    METRICS_VIEW = "policy.federation.metrics.view"
 
 
 _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
@@ -177,6 +192,14 @@ _DEFAULT_ALLOWED: set[PolicyReleasePermission] = {
     PolicyReleasePermission.FEDERATION_DLQ_LIST,
     PolicyReleasePermission.FEDERATION_NOTIFICATION_TEMPLATE_LIST,
     PolicyReleasePermission.FEDERATION_NOTIFICATION_PREFERENCE_VIEW,
+    # Phase 59: default-allowed view permissions
+    PolicyReleasePermission.DLQ_REPLAY_IDEMPOTENCY_VIEW,
+    PolicyReleasePermission.DLQ_REPLAY_RATE_LIMIT_VIEW,
+    PolicyReleasePermission.PRIORITY_QUEUE_VIEW,
+    PolicyReleasePermission.DEAD_LETTER_POLICY_VIEW,
+    PolicyReleasePermission.DISTRIBUTED_LOCK_VIEW,
+    PolicyReleasePermission.WEBHOOK_KEY_ROTATION_VIEW,
+    PolicyReleasePermission.METRICS_VIEW,
 }
 
 

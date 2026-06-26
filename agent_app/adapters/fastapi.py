@@ -1514,6 +1514,255 @@ def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastA
             dedup_active=dedup_active,
         )
 
+    # -----------------------------------------------------------------------
+    # Phase 59: Multi-instance production readiness endpoints
+    # -----------------------------------------------------------------------
+
+    # -- Replay Idempotency --
+    @api.get("/federation/notifications/replay-idempotency/{idempotency_key}")
+    async def get_replay_idempotency(idempotency_key: str) -> dict:
+        """Get a replay idempotency record by key."""
+        store = getattr(agent_app, "replay_idempotency_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Replay idempotency store is not configured.")
+        record = store.get(idempotency_key)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Idempotency record not found.")
+        return {
+            "idempotency_key": record.idempotency_key,
+            "original_attempt_id": record.original_attempt_id,
+            "replay_type": record.replay_type,
+            "status": record.status,
+            "new_attempt_id": record.new_attempt_id,
+            "error_message": record.error_message,
+            "created_at": _dt_iso(record.created_at),
+            "completed_at": _dt_iso(record.completed_at),
+            "expires_at": _dt_iso(record.expires_at),
+        }
+
+    @api.post("/federation/notifications/replay-idempotency/{idempotency_key}/complete")
+    async def complete_replay_idempotency(idempotency_key: str, body: dict) -> dict:
+        """Mark a replay idempotency record as completed."""
+        store = getattr(agent_app, "replay_idempotency_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Replay idempotency store is not configured.")
+        new_attempt_id = body.get("new_attempt_id", "")
+        record = store.complete(idempotency_key, new_attempt_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Idempotency record not found.")
+        return {"status": "completed", "new_attempt_id": record.new_attempt_id}
+
+    @api.post("/federation/notifications/replay-idempotency/{idempotency_key}/fail")
+    async def fail_replay_idempotency(idempotency_key: str, body: dict) -> dict:
+        """Mark a replay idempotency record as failed."""
+        store = getattr(agent_app, "replay_idempotency_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Replay idempotency store is not configured.")
+        error_message = body.get("error_message", "")
+        record = store.fail(idempotency_key, error_message)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Idempotency record not found.")
+        return {"status": "failed", "error_message": record.error_message}
+
+    @api.post("/federation/notifications/replay-idempotency/prune")
+    async def prune_replay_idempotency(body: dict | None = None) -> dict:
+        """Prune expired replay idempotency records."""
+        store = getattr(agent_app, "replay_idempotency_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Replay idempotency store is not configured.")
+        pruned = store.prune_expired()
+        return {"pruned_count": pruned}
+
+    # -- Rate Limiter --
+    @api.post("/federation/notifications/rate-limit/check")
+    async def check_rate_limit(body: dict) -> dict:
+        """Check and record a rate limiter entry."""
+        store = getattr(agent_app, "replay_rate_limiter_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Rate limiter store is not configured.")
+        rate_limit_key = body.get("rate_limit_key", "")
+        max_attempts = body.get("max_attempts", 10)
+        window_seconds = body.get("window_seconds", 60)
+        result = store.check_and_record(rate_limit_key, max_attempts, window_seconds)
+        return {
+            "allowed": result.allowed,
+            "remaining": result.remaining,
+            "reset_at": _dt_iso(result.reset_at),
+            "current_count": result.current_count,
+        }
+
+    @api.post("/federation/notifications/rate-limit/reset")
+    async def reset_rate_limit(body: dict) -> dict:
+        """Reset a rate limiter entry."""
+        store = getattr(agent_app, "replay_rate_limiter_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Rate limiter store is not configured.")
+        rate_limit_key = body.get("rate_limit_key", "")
+        reset = store.reset(rate_limit_key)
+        return {"reset": reset}
+
+    @api.get("/federation/notifications/rate-limit/{rate_limit_key}")
+    async def get_rate_limit(rate_limit_key: str) -> dict:
+        """Get a rate limiter record by key."""
+        store = getattr(agent_app, "replay_rate_limiter_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Rate limiter store is not configured.")
+        record = store.get_record(rate_limit_key)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Rate limiter record not found.")
+        return {
+            "rate_limit_key": record.rate_limit_key,
+            "window_seconds": record.window_seconds,
+            "max_attempts": record.max_attempts,
+            "attempt_count": len(record.attempt_timestamps),
+            "created_at": _dt_iso(record.created_at),
+            "updated_at": _dt_iso(record.updated_at),
+        }
+
+    # -- Dead Letter Policy --
+    @api.post("/federation/notifications/dead-letter/evaluate")
+    async def evaluate_dead_letter(body: dict) -> dict:
+        """Evaluate whether an alert should be marked as dead letter."""
+        store = getattr(agent_app, "dead_letter_policy_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Dead letter policy store is not configured.")
+        from agent_app.runtime.policy_rollout_federation_notification_alert_priority_queue_store import (
+            AlertPriorityQueueItem,
+        )
+        from agent_app.governance.policy_rollout_federation_notification_alert_delivery import (
+            AlertDeliveryChannelType,
+        )
+        item = AlertPriorityQueueItem(
+            attempt_id=body.get("attempt_id", ""),
+            alert_id=body.get("alert_id", ""),
+            target_id=body.get("target_id", ""),
+            channel_type=AlertDeliveryChannelType(body.get("channel_type", "webhook")),
+            status="failed",
+            priority=body.get("priority", 0),
+            created_at=datetime.now(timezone.utc),
+            next_retry_at=datetime.now(timezone.utc),
+            attempt=body.get("attempt_count", 1),
+        )
+        result = store.evaluate(item)
+        return {
+            "is_dead_letter": result.is_dead_letter,
+            "reason": result.reason,
+        }
+
+    @api.get("/federation/notifications/dead-letter")
+    async def list_dead_letters() -> list[dict]:
+        """List all dead letter records."""
+        store = getattr(agent_app, "dead_letter_policy_store", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Dead letter policy store is not configured.")
+        records = store.list_records()
+        return [
+            {
+                "attempt_id": r.attempt_id,
+                "alert_id": r.alert_id,
+                "target_id": r.target_id,
+                "reason": r.reason,
+                "attempt_count": r.attempt_count,
+                "created_at": _dt_iso(r.created_at),
+            }
+            for r in records
+        ]
+
+    # -- Enhanced Metrics --
+    @api.get("/federation/notifications/metrics/snapshot")
+    async def get_metrics_snapshot() -> dict:
+        """Get a snapshot of enhanced Phase 59 metrics."""
+        metrics = getattr(agent_app, "enhanced_metrics", None)
+        if metrics is None:
+            raise HTTPException(status_code=404, detail="Enhanced metrics is not configured.")
+        snapshot = metrics.snapshot()
+        return {
+            "replay": {
+                "attempts": snapshot.replay.attempts,
+                "successes": snapshot.replay.successes,
+                "failures": snapshot.replay.failures,
+                "idempotency_hits": snapshot.replay.idempotency_hits,
+                "rate_limited": snapshot.replay.rate_limited,
+                "dead_lettered": snapshot.replay.dead_lettered,
+            },
+            "rate_limiter": {
+                "checks": snapshot.rate_limiter.checks,
+                "allowed": snapshot.rate_limiter.allowed,
+                "denied": snapshot.rate_limiter.denied,
+                "resets": snapshot.rate_limiter.resets,
+            },
+            "dead_letter": {
+                "evaluated": snapshot.dead_letter.evaluated,
+                "dead_lettered": snapshot.dead_letter.dead_lettered,
+                "passed": snapshot.dead_letter.passed,
+            },
+            "distributed_lock": {
+                "acquire_attempts": snapshot.distributed_lock.acquire_attempts,
+                "acquire_successes": snapshot.distributed_lock.acquire_successes,
+                "acquire_denied": snapshot.distributed_lock.acquire_denied,
+                "renew_attempts": snapshot.distributed_lock.renew_attempts,
+                "renew_successes": snapshot.distributed_lock.renew_successes,
+                "renew_denied": snapshot.distributed_lock.renew_denied,
+                "release_attempts": snapshot.distributed_lock.release_attempts,
+                "release_successes": snapshot.distributed_lock.release_successes,
+            },
+        }
+
+    # -- Webhook Key Rotation --
+    @api.get("/federation/notifications/key-rotation/last")
+    async def get_last_key_rotation() -> dict:
+        """Get the last webhook key rotation record."""
+        store = getattr(agent_app, "webhook_key_rotation_service", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Webhook key rotation service is not configured.")
+        record = store.get_last_rotation()
+        if record is None:
+            raise HTTPException(status_code=404, detail="No key rotations found.")
+        return {
+            "rotation_id": record.rotation_id,
+            "old_key_id": record.old_key_id,
+            "new_key_id": record.new_key_id,
+            "rotated_at": _dt_iso(record.rotated_at),
+            "reason": record.reason,
+            "actor_id": record.actor_id,
+        }
+
+    @api.get("/federation/notifications/key-rotation/history")
+    async def get_key_rotation_history() -> list[dict]:
+        """Get webhook key rotation history."""
+        store = getattr(agent_app, "webhook_key_rotation_service", None)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Webhook key rotation service is not configured.")
+        records = store.list_rotations()
+        return [
+            {
+                "rotation_id": r.rotation_id,
+                "old_key_id": r.old_key_id,
+                "new_key_id": r.new_key_id,
+                "rotated_at": _dt_iso(r.rotated_at),
+                "reason": r.reason,
+                "actor_id": r.actor_id,
+            }
+            for r in records
+        ]
+
+    # -- Distributed Lock --
+    @api.get("/federation/notifications/distributed-lock/{lock_name}/status")
+    async def get_distributed_lock_status(lock_name: str) -> dict:
+        """Get the status of a distributed lock."""
+        store = getattr(agent_app, "_federation_notification_distributed_lock_store", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Distributed lock store is not configured.")
+        status = store.get_status(lock_name)
+        return {
+            "lock_name": status.lock_name,
+            "owner_id": status.owner_id,
+            "acquired": status.acquired,
+            "lease_expires_at": _dt_iso(status.lease_expires_at),
+            "fencing_token": status.fencing_token,
+            "updated_at": _dt_iso(status.updated_at),
+        }
+
     return api
 
 
@@ -1607,6 +1856,13 @@ def _mount_policy_console(api: FastAPI, agent_app: AgentApp, console_config: Any
         federation_notification_alert_delivery_store=getattr(agent_app, "_federation_notification_alert_delivery_store", None),
         federation_notification_retention_service=getattr(agent_app, "_federation_notification_retention_service", None),
         federation_notification_rollup_service=getattr(agent_app, "_federation_notification_rollup_service", None),
+        # Phase 59: multi-instance production readiness
+        replay_idempotency_store=getattr(agent_app, "replay_idempotency_store", None),
+        replay_rate_limiter_store=getattr(agent_app, "replay_rate_limiter_store", None),
+        dead_letter_policy_store=getattr(agent_app, "dead_letter_policy_store", None),
+        enhanced_metrics=getattr(agent_app, "enhanced_metrics", None),
+        webhook_key_rotation_store=getattr(agent_app, "webhook_key_rotation_service", None),
+        distributed_lock_store=getattr(agent_app, "_federation_notification_distributed_lock_store", None),
     )
     base_path = getattr(console_config, "base_path", "/policy-console")
     api.include_router(router, prefix=base_path, tags=["Policy Console"])

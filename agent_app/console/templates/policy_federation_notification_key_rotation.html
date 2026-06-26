@@ -1,0 +1,61 @@
+<h1>Webhook Key Rotation</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Webhook signing key rotation history for secure notification delivery.</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Webhook key rotation store not configured.</p>
+</div>
+{% else %}
+{% if last_rotation %}
+<h2>Last Rotation</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Rotation ID</th>
+      <th>Actor ID</th>
+      <th>Reason</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>{{ last_rotation.rotation_id }}</td>
+      <td>{{ last_rotation.actor_id }}</td>
+      <td>{{ last_rotation.reason }}</td>
+      <td>{{ last_rotation.created_at[:19] if last_rotation.created_at else "—" }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}
+
+{% if history %}
+<h2>Rotation History</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Rotation ID</th>
+      <th>Actor ID</th>
+      <th>Reason</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in history %}
+    <tr>
+      <td>{{ r.rotation_id }}</td>
+      <td>{{ r.actor_id }}</td>
+      <td>{{ r.reason }}</td>
+      <td>{{ r.created_at[:19] if r.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if not last_rotation and not history %}
+<div class="empty-state">
+  <p>No key rotations recorded yet.</p>
+</div>
+{% endif %}
+{% endif %}

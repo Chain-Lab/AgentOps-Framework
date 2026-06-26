@@ -1,0 +1,54 @@
+<h1>Replay Idempotency</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Idempotency records prevent duplicate replay attempts for the same DLQ item.</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Replay idempotency store not configured.</p>
+</div>
+{% elif not records %}
+<div class="empty-state">
+  <p>No idempotency records found. Records are created when DLQ replay is initiated.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Idempotency Key</th>
+      <th>Original Attempt</th>
+      <th>Replay Type</th>
+      <th>Status</th>
+      <th>New Attempt</th>
+      <th>Error</th>
+      <th>Created At</th>
+      <th>Completed At</th>
+      <th>Expires At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in records %}
+    <tr>
+      <td>{{ r.idempotency_key }}</td>
+      <td>{{ r.original_attempt_id }}</td>
+      <td>{{ r.replay_type }}</td>
+      <td>
+        {% if r.status == "completed" %}
+        <span style="color: #2aa198;">{{ r.status }}</span>
+        {% elif r.status == "failed" %}
+        <span style="color: #dc322f;">{{ r.status }}</span>
+        {% elif r.status == "started" %}
+        <span style="color: #b58900;">{{ r.status }}</span>
+        {% else %}
+        {{ r.status }}
+        {% endif %}
+      </td>
+      <td>{{ r.new_attempt_id }}</td>
+      <td>{{ r.error_message }}</td>
+      <td>{{ r.created_at[:19] if r.created_at else "—" }}</td>
+      <td>{{ r.completed_at[:19] if r.completed_at else "—" }}</td>
+      <td>{{ r.expires_at[:19] if r.expires_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

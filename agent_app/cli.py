@@ -1278,6 +1278,99 @@ def main() -> int:
     notifications_rollup_checkpoint_list_parser.add_argument("--config", required=True, help="Config file path")
     notifications_rollup_checkpoint_list_parser.set_defaults(func=_cmd_policy_federation_notification_rollup_checkpoint_list)
 
+    # Phase 59: Multi-instance production readiness — idempotency, rate-limit, dead-letter, metrics, key-rotation
+    # -- Idempotency --
+    notifications_idempotency_parser = federation_notification_sub.add_parser("idempotency", help="DLQ replay idempotency commands (Phase 59)")
+    notifications_idempotency_sub = notifications_idempotency_parser.add_subparsers(dest="federation_notification_idempotency_command")
+
+    idempotency_check_parser = notifications_idempotency_sub.add_parser("check", help="Check if a replay is idempotent (Phase 59)")
+    idempotency_check_parser.add_argument("--config", required=True, help="Config file path")
+    idempotency_check_parser.add_argument("--original-attempt-id", required=True, help="Original DLQ attempt ID")
+    idempotency_check_parser.add_argument("--target-id", required=True, help="Target notification ID")
+    idempotency_check_parser.add_argument("--alert-id", required=True, help="Alert ID")
+    idempotency_check_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    idempotency_check_parser.set_defaults(func=_cmd_policy_federation_notification_idempotency_check)
+
+    idempotency_list_parser = notifications_idempotency_sub.add_parser("list", help="List idempotency records (Phase 59)")
+    idempotency_list_parser.add_argument("--config", required=True, help="Config file path")
+    idempotency_list_parser.add_argument("--limit", type=int, default=20, help="Max records")
+    idempotency_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    idempotency_list_parser.set_defaults(func=_cmd_policy_federation_notification_idempotency_list)
+
+    idempotency_prune_parser = notifications_idempotency_sub.add_parser("prune", help="Prune expired idempotency records (Phase 59)")
+    idempotency_prune_parser.add_argument("--config", required=True, help="Config file path")
+    idempotency_prune_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    idempotency_prune_parser.set_defaults(func=_cmd_policy_federation_notification_idempotency_prune)
+
+    # -- Rate Limit --
+    notifications_rate_limit_parser = federation_notification_sub.add_parser("rate-limit", help="DLQ replay rate limit commands (Phase 59)")
+    notifications_rate_limit_sub = notifications_rate_limit_parser.add_subparsers(dest="federation_notification_rate_limit_command")
+
+    rate_limit_check_parser = notifications_rate_limit_sub.add_parser("check", help="Check rate limit for a target (Phase 59)")
+    rate_limit_check_parser.add_argument("--config", required=True, help="Config file path")
+    rate_limit_check_parser.add_argument("--target-id", required=True, help="Target notification ID")
+    rate_limit_check_parser.add_argument("--max-attempts", type=int, default=None, help="Max attempts in window")
+    rate_limit_check_parser.add_argument("--window-seconds", type=int, default=None, help="Window size in seconds")
+    rate_limit_check_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    rate_limit_check_parser.set_defaults(func=_cmd_policy_federation_notification_rate_limit_check)
+
+    rate_limit_reset_parser = notifications_rate_limit_sub.add_parser("reset", help="Reset rate limit for a target (Phase 59)")
+    rate_limit_reset_parser.add_argument("--config", required=True, help="Config file path")
+    rate_limit_reset_parser.add_argument("--target-id", required=True, help="Target notification ID")
+    rate_limit_reset_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    rate_limit_reset_parser.set_defaults(func=_cmd_policy_federation_notification_rate_limit_reset)
+
+    rate_limit_list_parser = notifications_rate_limit_sub.add_parser("list", help="List rate limit records (Phase 59)")
+    rate_limit_list_parser.add_argument("--config", required=True, help="Config file path")
+    rate_limit_list_parser.add_argument("--limit", type=int, default=20, help="Max records")
+    rate_limit_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    rate_limit_list_parser.set_defaults(func=_cmd_policy_federation_notification_rate_limit_list)
+
+    # -- Dead Letter Policy --
+    notifications_dead_letter_parser = federation_notification_sub.add_parser("dead-letter", help="Dead letter policy commands (Phase 59)")
+    notifications_dead_letter_sub = notifications_dead_letter_parser.add_subparsers(dest="federation_notification_dead_letter_command")
+
+    dead_letter_evaluate_parser = notifications_dead_letter_sub.add_parser("evaluate", help="Evaluate dead letter policy for a notification (Phase 59)")
+    dead_letter_evaluate_parser.add_argument("--config", required=True, help="Config file path")
+    dead_letter_evaluate_parser.add_argument("--pq-item-id", required=True, help="Priority queue item ID")
+    dead_letter_evaluate_parser.add_argument("--attempt-count", type=int, required=True, help="Current attempt count")
+    dead_letter_evaluate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    dead_letter_evaluate_parser.set_defaults(func=_cmd_policy_federation_notification_dead_letter_evaluate)
+
+    dead_letter_list_parser = notifications_dead_letter_sub.add_parser("list", help="List dead letter records (Phase 59)")
+    dead_letter_list_parser.add_argument("--config", required=True, help="Config file path")
+    dead_letter_list_parser.add_argument("--limit", type=int, default=20, help="Max records")
+    dead_letter_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    dead_letter_list_parser.set_defaults(func=_cmd_policy_federation_notification_dead_letter_list)
+
+    # -- Enhanced Metrics --
+    notifications_metrics_parser = federation_notification_sub.add_parser("enhanced-metrics", help="Enhanced Phase 59 metrics snapshot")
+    notifications_metrics_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_metrics_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    notifications_metrics_parser.set_defaults(func=_cmd_policy_federation_notification_metrics_snapshot)
+
+    # -- Webhook Key Rotation --
+    notifications_key_rotation_parser = federation_notification_sub.add_parser("key-rotation", help="Webhook key rotation commands (Phase 59)")
+    notifications_key_rotation_sub = notifications_key_rotation_parser.add_subparsers(dest="federation_notification_key_rotation_command")
+
+    key_rotation_status_parser = notifications_key_rotation_sub.add_parser("status", help="Show current key rotation status (Phase 59)")
+    key_rotation_status_parser.add_argument("--config", required=True, help="Config file path")
+    key_rotation_status_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    key_rotation_status_parser.set_defaults(func=_cmd_policy_federation_notification_key_rotation_status)
+
+    key_rotation_rotate_parser = notifications_key_rotation_sub.add_parser("rotate", help="Force rotate webhook signing key (Phase 59)")
+    key_rotation_rotate_parser.add_argument("--config", required=True, help="Config file path")
+    key_rotation_rotate_parser.add_argument("--actor-id", default=None, help="Operator identity")
+    key_rotation_rotate_parser.add_argument("--reason", default=None, help="Rotation reason")
+    key_rotation_rotate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    key_rotation_rotate_parser.set_defaults(func=_cmd_policy_federation_notification_key_rotation_rotate)
+
+    key_rotation_history_parser = notifications_key_rotation_sub.add_parser("history", help="List key rotation history (Phase 59)")
+    key_rotation_history_parser.add_argument("--config", required=True, help="Config file path")
+    key_rotation_history_parser.add_argument("--limit", type=int, default=20, help="Max records")
+    key_rotation_history_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    key_rotation_history_parser.set_defaults(func=_cmd_policy_federation_notification_key_rotation_history)
+
     federation_escalate_due_parser = federation_sub.add_parser("escalate-due", help="Escalate federation approvals due for escalation")
     federation_escalate_due_parser.add_argument("--config", required=True, help="Config file path")
     federation_escalate_due_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
@@ -11171,6 +11264,318 @@ async def _cmd_policy_federation_notification_rollup_checkpoint_list(args: argpa
     for cp in checkpoints:
         print(f"{cp.checkpoint_id}\t{cp.granularity.value}\t{cp.window_start.isoformat()}\t"
               f"{cp.window_end.isoformat()}\tentries={cp.entry_count}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: Multi-instance production readiness CLI handlers
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_idempotency_check(args: argparse.Namespace) -> int:
+    """Check if a replay attempt is idempotent."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_idempotency_store", None)
+    if store is None:
+        print("Replay idempotency store not configured.", file=sys.stderr)
+        return 1
+
+    key = f"replay:{args.original_attempt_id}:{args.target_id}:{args.alert_id}"
+    record = await store.get(key)
+    if record is None:
+        print(f"NOT_FOUND\t{key}")
+        return 0
+    print(f"{record.status}\t{record.original_attempt_id}\t{record.target_id}\t{record.alert_id}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_idempotency_list(args: argparse.Namespace) -> int:
+    """List idempotency records."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_idempotency_store", None)
+    if store is None:
+        print("Replay idempotency store not configured.", file=sys.stderr)
+        return 1
+
+    # InMemory store: list all keys
+    if hasattr(store, "_records"):
+        records = list(store._records.values())[:args.limit]
+    elif hasattr(store, "_records_by_key"):
+        records = list(store._records_by_key.values())[:args.limit]
+    else:
+        print("Store does not support listing.", file=sys.stderr)
+        return 1
+
+    for r in records:
+        print(f"{r.original_attempt_id}\t{r.target_id}\t{r.alert_id}\t{r.status}")
+    print(f"Total: {len(records)} records")
+    return 0
+
+
+async def _cmd_policy_federation_notification_idempotency_prune(args: argparse.Namespace) -> int:
+    """Prune expired idempotency records."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_idempotency_store", None)
+    if store is None:
+        print("Replay idempotency store not configured.", file=sys.stderr)
+        return 1
+
+    pruned = await store.prune_expired()
+    print(f"Pruned {pruned} expired idempotency records")
+    return 0
+
+
+async def _cmd_policy_federation_notification_rate_limit_check(args: argparse.Namespace) -> int:
+    """Check rate limit for a target."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_rate_limiter_store", None)
+    if store is None:
+        print("Rate limiter store not configured.", file=sys.stderr)
+        return 1
+
+    max_attempts = args.max_attempts or 10
+    window_seconds = args.window_seconds or 60
+    result = await store.check_and_record(
+        target_id=args.target_id,
+        max_attempts=max_attempts,
+        window_seconds=window_seconds,
+    )
+    status = "ALLOWED" if result.allowed else "DENIED"
+    print(f"{status}\ttarget={args.target_id}\tattempts={result.current_count}\tmax={max_attempts}\twindow={window_seconds}s")
+    if result.retry_after_seconds is not None:
+        print(f"Retry after {result.retry_after_seconds}s")
+    return 0
+
+
+async def _cmd_policy_federation_notification_rate_limit_reset(args: argparse.Namespace) -> int:
+    """Reset rate limit for a target."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_rate_limiter_store", None)
+    if store is None:
+        print("Rate limiter store not configured.", file=sys.stderr)
+        return 1
+
+    await store.reset(args.target_id)
+    print(f"Rate limit reset for target={args.target_id}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_rate_limit_list(args: argparse.Namespace) -> int:
+    """List rate limit records."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "replay_rate_limiter_store", None)
+    if store is None:
+        print("Rate limiter store not configured.", file=sys.stderr)
+        return 1
+
+    if hasattr(store, "_records"):
+        records = list(store._records.values())[:args.limit]
+    else:
+        print("Store does not support listing.", file=sys.stderr)
+        return 1
+
+    for r in records:
+        print(f"{r.target_id}\tcount={r.current_count}\tmax={r.max_attempts}\twindow={r.window_seconds}s")
+    print(f"Total: {len(records)} records")
+    return 0
+
+
+async def _cmd_policy_federation_notification_dead_letter_evaluate(args: argparse.Namespace) -> int:
+    """Evaluate dead letter policy for a notification."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "dead_letter_policy_store", None)
+    if store is None:
+        print("Dead letter policy store not configured.", file=sys.stderr)
+        return 1
+
+    from agent_app.runtime.policy_rollout_federation_notification_dead_letter_policy import (
+        DeadLetterPolicyConfig,
+    )
+    dl_cfg = getattr(app, "_federation_notification_dead_letter_policy_config", None)
+    if dl_cfg is None:
+        print("Dead letter policy not configured.", file=sys.stderr)
+        return 1
+
+    result = await store.evaluate(
+        pq_item_id=args.pq_item_id,
+        attempt_count=args.attempt_count,
+        max_retries=dl_cfg.max_retries,
+    )
+    status = "DEAD_LETTER" if result.is_dead_letter else "RETAIN"
+    print(f"{status}\tpq_item={args.pq_item_id}\tattempt={args.attempt_count}\tmax_retries={dl_cfg.max_retries}")
+    if result.reason:
+        print(f"Reason: {result.reason}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_dead_letter_list(args: argparse.Namespace) -> int:
+    """List dead letter records."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "dead_letter_policy_store", None)
+    if store is None:
+        print("Dead letter policy store not configured.", file=sys.stderr)
+        return 1
+
+    if hasattr(store, "_records"):
+        records = list(store._records.values())[:args.limit]
+    else:
+        print("Store does not support listing.", file=sys.stderr)
+        return 1
+
+    for r in records:
+        print(f"{r.pq_item_id}\tattempts={r.attempt_count}\tmax_retries={r.max_retries}\tdead_lettered={r.is_dead_letter}")
+    print(f"Total: {len(records)} records")
+    return 0
+
+
+async def _cmd_policy_federation_notification_metrics_snapshot(args: argparse.Namespace) -> int:
+    """Show enhanced metrics snapshot."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    metrics = getattr(app, "enhanced_metrics", None)
+    if metrics is None:
+        print("Enhanced metrics not configured.", file=sys.stderr)
+        return 1
+
+    snapshot = metrics.snapshot()
+    print(f"Notifications: total={snapshot.notifications.total} sent={snapshot.notifications.sent} failed={snapshot.notifications.failed}")
+    print(f"Replay: total={snapshot.replay.total} succeeded={snapshot.replay.succeeded} failed={snapshot.replay.failed} idempotent_hits={snapshot.replay.idempotent_hits}")
+    print(f"Rate Limiter: total_checks={snapshot.rate_limiter.total_checks} denied={snapshot.rate_limiter.denied}")
+    print(f"Dead Letter: total={snapshot.dead_letter.total} dead_lettered={snapshot.dead_letter.dead_lettered}")
+    print(f"Distributed Lock: acquire_success={snapshot.distributed_lock.acquire_success} acquire_denied={snapshot.distributed_lock.acquire_denied} renew_success={snapshot.distributed_lock.renew_success}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_key_rotation_status(args: argparse.Namespace) -> int:
+    """Show current webhook key rotation status."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "webhook_key_rotation_service", None)
+    if service is None:
+        print("Webhook key rotation service not configured.", file=sys.stderr)
+        return 1
+
+    active = service.get_active()
+    previous = service.get_previous()
+    last_rotation = service.get_last_rotation()
+    active_key_id = active.key_id if active else "N/A"
+    print(f"Active key: {active_key_id}")
+    print(f"Previous keys: {len(previous)}")
+    if last_rotation:
+        print(f"Last rotation: {last_rotation.created_at.isoformat()}")
+        print(f"Rotated by: {last_rotation.rotated_by or 'system'}")
+    else:
+        print("Last rotation: never")
+    return 0
+
+
+async def _cmd_policy_federation_notification_key_rotation_rotate(args: argparse.Namespace) -> int:
+    """Force rotate webhook signing key."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "webhook_key_rotation_service", None)
+    if service is None:
+        print("Webhook key rotation service not configured.", file=sys.stderr)
+        return 1
+
+    record = await service.force_rotate(actor_id=args.actor_id, reason=args.reason)
+    print(f"Rotated: key_id={record.key_id}\tcreated_at={record.created_at.isoformat()}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_key_rotation_history(args: argparse.Namespace) -> int:
+    """List key rotation history."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    service = getattr(app, "webhook_key_rotation_service", None)
+    if service is None:
+        print("Webhook key rotation service not configured.", file=sys.stderr)
+        return 1
+
+    records = await service.list_rotations(limit=args.limit)
+    for r in records:
+        print(f"{r.key_id}\tcreated_at={r.created_at.isoformat()}\trotated_by={r.rotated_by or 'system'}")
+    print(f"Total: {len(records)} rotations")
     return 0
 
 

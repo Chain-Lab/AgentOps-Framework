@@ -1,0 +1,38 @@
+<h1>Dead Letter Policy</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Dead letter policy records track items that have been moved to the dead letter queue.</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Dead letter policy store not configured.</p>
+</div>
+{% elif not records %}
+<div class="empty-state">
+  <p>No dead letter records found. Records are created when items fail policy evaluation.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Attempt ID</th>
+      <th>Alert ID</th>
+      <th>Target ID</th>
+      <th>Reason</th>
+      <th>Attempt Count</th>
+      <th>Created At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in records %}
+    <tr>
+      <td>{{ r.attempt_id }}</td>
+      <td>{{ r.alert_id }}</td>
+      <td>{{ r.target_id }}</td>
+      <td>{{ r.reason }}</td>
+      <td>{{ r.attempt_count }}</td>
+      <td>{{ r.created_at[:19] if r.created_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

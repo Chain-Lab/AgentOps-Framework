@@ -1386,6 +1386,98 @@ def build_app(
                 archive_cleanup_cfg = getattr(notif_cfg, "archive_cleanup", None)
                 if archive_cleanup_cfg is not None:
                     app._federation_notification_archive_cleanup_config = archive_cleanup_cfg
+
+                # Phase 59: Multi-instance production readiness wiring
+                try:
+                    # Priority queue Redis config
+                    pq_redis_cfg = getattr(notif_cfg, "priority_queue_redis", None)
+                    if pq_redis_cfg is not None:
+                        app._federation_notification_priority_queue_redis_config = pq_redis_cfg
+
+                    # Distributed lock config
+                    dist_lock_cfg = getattr(notif_cfg, "distributed_lock", None)
+                    if dist_lock_cfg is not None:
+                        app._federation_notification_distributed_lock_config = dist_lock_cfg
+
+                    # Replay idempotency config and store
+                    replay_idem_cfg = getattr(notif_cfg, "replay_idempotency", None)
+                    if replay_idem_cfg is not None and replay_idem_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_replay_idempotency import (
+                            InMemoryReplayIdempotencyStore,
+                            SQLiteReplayIdempotencyStore,
+                        )
+                        if replay_idem_cfg.type == "sqlite":
+                            replay_idem_store = SQLiteReplayIdempotencyStore(
+                                db_path=replay_idem_cfg.path or ".agent_app/federation_replay_idempotency.db"
+                            )
+                        else:
+                            replay_idem_store = InMemoryReplayIdempotencyStore()
+                        app.replay_idempotency_store = replay_idem_store
+                        app._federation_notification_replay_idempotency_config = replay_idem_cfg
+
+                    # Replay rate limiter config and store
+                    rate_limit_cfg = getattr(notif_cfg, "replay_rate_limiter", None)
+                    if rate_limit_cfg is not None and rate_limit_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_replay_rate_limiter import (
+                            InMemoryReplayRateLimiterStore,
+                            SQLiteReplayRateLimiterStore,
+                        )
+                        if rate_limit_cfg.type == "sqlite":
+                            rate_limit_store = SQLiteReplayRateLimiterStore(
+                                db_path=rate_limit_cfg.path or ".agent_app/federation_replay_rate_limiter.db"
+                            )
+                        else:
+                            rate_limit_store = InMemoryReplayRateLimiterStore()
+                        app.replay_rate_limiter_store = rate_limit_store
+                        app._federation_notification_replay_rate_limiter_config = rate_limit_cfg
+
+                    # Dead letter policy config and store
+                    dl_policy_cfg = getattr(notif_cfg, "dead_letter_policy", None)
+                    if dl_policy_cfg is not None and dl_policy_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_dead_letter_policy import (
+                            InMemoryDeadLetterPolicyStore,
+                            SQLiteDeadLetterPolicyStore,
+                        )
+                        if dl_policy_cfg.type == "sqlite":
+                            dl_policy_store = SQLiteDeadLetterPolicyStore(
+                                db_path=dl_policy_cfg.path or ".agent_app/federation_dead_letter_policy.db"
+                            )
+                        else:
+                            dl_policy_store = InMemoryDeadLetterPolicyStore()
+                        app.dead_letter_policy_store = dl_policy_store
+                        app._federation_notification_dead_letter_policy_config = dl_policy_cfg
+
+                    # Enhanced metrics
+                    enhanced_metrics_cfg = getattr(notif_cfg, "enhanced_metrics", None)
+                    if enhanced_metrics_cfg is not None and enhanced_metrics_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_metrics_enhanced import EnhancedMetrics
+                        app.enhanced_metrics = EnhancedMetrics()
+                        app._federation_notification_enhanced_metrics_config = enhanced_metrics_cfg
+
+                    # Webhook key rotation config and service
+                    key_rotation_cfg = getattr(notif_cfg, "webhook_key_rotation", None)
+                    if key_rotation_cfg is not None and key_rotation_cfg.enabled:
+                        from agent_app.runtime.policy_rollout_federation_notification_webhook_key_rotation import (
+                            WebhookKeyRotationService,
+                            InMemoryWebhookKeyRotationStore,
+                            SQLiteWebhookKeyRotationStore,
+                        )
+                        if key_rotation_cfg.type == "sqlite":
+                            key_rotation_store = SQLiteWebhookKeyRotationStore(
+                                db_path=key_rotation_cfg.path or ".agent_app/federation_webhook_key_rotation.db"
+                            )
+                        else:
+                            key_rotation_store = InMemoryWebhookKeyRotationStore()
+                        key_rotation_service = WebhookKeyRotationService(
+                            store=key_rotation_store,
+                            rotation_interval_hours=key_rotation_cfg.rotation_interval_hours,
+                            keep_previous_count=key_rotation_cfg.keep_previous_count,
+                            key_bits=key_rotation_cfg.key_bits,
+                        )
+                        app.webhook_key_rotation_service = key_rotation_service
+                        app._federation_notification_webhook_key_rotation_config = key_rotation_cfg
+                except Exception:  # noqa: BLE001 — graceful failure
+                    pass
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 

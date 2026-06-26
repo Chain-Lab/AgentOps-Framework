@@ -2,6 +2,26 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.44.0 — Phase 59: Multi-Instance Production Readiness — DLQ Replay Safety & Alert Delivery Observability
+
+### Added
+- DLQ replay idempotency tracking: prevents duplicate replay attempts with configurable TTL expiry
+- DLQ replay rate limiter: per-target rate limiting with sliding window and configurable max attempts
+- Priority queue dead letter policy: automatic DLQ promotion when items exceed max retries
+- Enhanced metrics service: unified snapshot of replay, rate limiter, and dead letter metrics
+- Webhook key rotation service: automatic signing key rotation with configurable interval and history tracking
+- Distributed lock service: multi-instance coordination with TTL-based expiry and fencing tokens
+- Console pages for idempotency, rate limiting, dead letter, metrics, key rotation, and distributed lock
+- CLI commands: idempotency check/prune, rate-limit check/reset, dead-letter evaluate/list, metrics snapshot, key-rotation status/rotate/history
+- FastAPI endpoints for DLQ replay idempotency, rate limiting, enhanced metrics, and key rotation
+- 18 new PolicyChangeEventType values for Phase 59 multi-instance production readiness events
+- Config schema extensions for all Phase 59 services with InMemory and SQLite backends
+
+### Changed
+- PolicyChangeEventType count: 156 → 174
+- Notification delivery pipeline: integrated idempotency, rate limiting, and dead letter policy checks
+- Console router: Phase 59 routes ordered before notification catch-all to prevent URL shadowing
+
 ## v0.43.0 — Phase 57: Alert Delivery Operations Chain — Atomic Priority Queue & Daemon Deep Integration
 
 ### Added

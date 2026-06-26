@@ -1,0 +1,42 @@
+<h1>Replay Rate Limiter</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Rate limiting controls how many replay attempts can be made to a target within a time window.</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Rate limiter store not configured.</p>
+</div>
+{% elif not records %}
+<div class="empty-state">
+  <p>No rate limit records found. Records are created when replay rate limits are checked.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Rate Limit Key</th>
+      <th>Window (s)</th>
+      <th>Max Attempts</th>
+      <th>Current Count</th>
+      <th>Remaining</th>
+      <th>Created At</th>
+      <th>Updated At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in records %}
+    <tr>
+      <td>{{ r.rate_limit_key }}</td>
+      <td>{{ r.window_seconds }}</td>
+      <td>{{ r.max_attempts }}</td>
+      <td>{{ r.current_count }}</td>
+      <td style="color: {% if r.remaining > 0 %}#2aa198{% else %}#dc322f{% endif %};">
+        {{ r.remaining }}
+      </td>
+      <td>{{ r.created_at[:19] if r.created_at else "—" }}</td>
+      <td>{{ r.updated_at[:19] if r.updated_at else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

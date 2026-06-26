@@ -1,0 +1,47 @@
+<h1>Distributed Lock</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Distributed lock status for multi-instance coordination.</p>
+
+<form method="get" action="{{ base_path }}/federation/notifications/distributed-lock/status">
+  <label>Lock Name: <input type="text" name="lock_name" value="{{ lock_name }}"></label>
+  <button type="submit">Check Status</button>
+</form>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Distributed lock store not configured.</p>
+</div>
+{% elif not lock_status %}
+<div class="empty-state">
+  <p>No lock status available for "{{ lock_name }}".</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Lock Name</th>
+      <th>Status</th>
+      <th>Owner ID</th>
+      <th>Acquired At</th>
+      <th>Expires At</th>
+      <th>TTL (s)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>{{ lock_status.lock_name }}</td>
+      <td>
+        {% if lock_status.is_locked %}
+        <span style="color: #dc322f;">Locked</span>
+        {% else %}
+        <span style="color: #2aa198;">Unlocked</span>
+        {% endif %}
+      </td>
+      <td>{{ lock_status.owner_id }}</td>
+      <td>{{ lock_status.acquired_at[:19] if lock_status.acquired_at else "—" }}</td>
+      <td>{{ lock_status.expires_at[:19] if lock_status.expires_at else "—" }}</td>
+      <td>{{ lock_status.ttl_seconds or "—" }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}

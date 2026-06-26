@@ -168,13 +168,31 @@ class TestPolicyChangeEventType:
             "policy.simulation.permission_denied",
             "policy.simulation.replay_run",
             "policy.simulation.validation_run",
+            # Phase 59 additions
+            "policy.federation.dlq.replay.idempotency_checked",
+            "policy.federation.dlq.replay.idempotency_hit",
+            "policy.federation.dlq.replay.rate_limited",
+            "policy.federation.dlq.replay.succeeded",
+            "policy.federation.dlq.replay.failed",
+            "policy.federation.dlq.replay.dead_lettered",
+            "policy.federation.priority_queue.item_claimed",
+            "policy.federation.priority_queue.item_acknowledged",
+            "policy.federation.priority_queue.item_failed",
+            "policy.federation.priority_queue.item_requeued",
+            "policy.federation.priority_queue.lease_expired",
+            "policy.federation.distributed_lock.acquired",
+            "policy.federation.distributed_lock.released",
+            "policy.federation.distributed_lock.renewed",
+            "policy.federation.distributed_lock.denied",
+            "policy.federation.webhook.key_rotated",
+            "policy.federation.webhook.key_rotation.scheduled",
         }
         actual = {member.value for member in PolicyChangeEventType}
         assert actual == expected
 
     def test_enum_member_count(self) -> None:
-        """Exactly 150 enum members defined (133 previous + 17 added across phases)."""
-        assert len(PolicyChangeEventType) == 150
+        """Exactly 167 enum members defined (150 previous + 17 Phase 59 additions)."""
+        assert len(PolicyChangeEventType) == 167
 
     def test_enum_is_str_subclass(self) -> None:
         """Enum values behave as strings."""

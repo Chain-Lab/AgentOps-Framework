@@ -1,0 +1,40 @@
+<h1>Enhanced Metrics</h1>
+<p><a href="{{ base_path }}/federation/notifications">&larr; Back to Notifications</a></p>
+<p>Enhanced metrics provide a snapshot of Phase 59 multi-instance production readiness indicators.</p>
+
+{% if not store_available %}
+<div class="empty-state">
+  <p>Enhanced metrics service not configured.</p>
+</div>
+{% elif not snapshot %}
+<div class="empty-state">
+  <p>No metrics snapshot available.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Replay Idempotency Records</td>
+      <td>{{ snapshot.replay_count }}</td>
+    </tr>
+    <tr>
+      <td>Rate Limiter Keys</td>
+      <td>{{ snapshot.rate_limiter_keys }}</td>
+    </tr>
+    <tr>
+      <td>Dead Letter Records</td>
+      <td>{{ snapshot.dead_letter_count }}</td>
+    </tr>
+    <tr>
+      <td>Snapshot Taken At</td>
+      <td>{{ snapshot.taken_at[:19] if snapshot.taken_at else "—" }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}

@@ -336,6 +336,52 @@ class AgentApp:
     def federation_webhook_nonce_store(self) -> Any:
         return getattr(self, "_federation_webhook_nonce_store", None)
 
+    # Phase 59: Multi-instance production readiness properties
+    @property
+    def replay_idempotency_store(self) -> Any:
+        """Phase 59: Return the DLQ replay idempotency store, if configured."""
+        return getattr(self, "_replay_idempotency_store", None)
+
+    @replay_idempotency_store.setter
+    def replay_idempotency_store(self, value: Any) -> None:
+        self._replay_idempotency_store = value
+
+    @property
+    def replay_rate_limiter_store(self) -> Any:
+        """Phase 59: Return the DLQ replay rate limiter store, if configured."""
+        return getattr(self, "_replay_rate_limiter_store", None)
+
+    @replay_rate_limiter_store.setter
+    def replay_rate_limiter_store(self, value: Any) -> None:
+        self._replay_rate_limiter_store = value
+
+    @property
+    def dead_letter_policy_store(self) -> Any:
+        """Phase 59: Return the dead letter policy store, if configured."""
+        return getattr(self, "_dead_letter_policy_store", None)
+
+    @dead_letter_policy_store.setter
+    def dead_letter_policy_store(self, value: Any) -> None:
+        self._dead_letter_policy_store = value
+
+    @property
+    def enhanced_metrics(self) -> Any:
+        """Phase 59: Return the enhanced metrics instance, if configured."""
+        return getattr(self, "_enhanced_metrics", None)
+
+    @enhanced_metrics.setter
+    def enhanced_metrics(self, value: Any) -> None:
+        self._enhanced_metrics = value
+
+    @property
+    def webhook_key_rotation_service(self) -> Any:
+        """Phase 59: Return the webhook key rotation service, if configured."""
+        return getattr(self, "_webhook_key_rotation_service", None)
+
+    @webhook_key_rotation_service.setter
+    def webhook_key_rotation_service(self, value: Any) -> None:
+        self._webhook_key_rotation_service = value
+
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------

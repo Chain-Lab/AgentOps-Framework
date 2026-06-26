@@ -85,6 +85,13 @@ def build_policy_console_router(
     federation_notification_alert_delivery_store: Any = None,
     federation_notification_retention_service: Any = None,
     federation_notification_rollup_service: Any = None,
+    # Phase 59: multi-instance production readiness
+    replay_idempotency_store: Any = None,
+    replay_rate_limiter_store: Any = None,
+    dead_letter_policy_store: Any = None,
+    enhanced_metrics: Any = None,
+    webhook_key_rotation_store: Any = None,
+    distributed_lock_store: Any = None,
 ) -> APIRouter:
     """Build the policy console FastAPI router.
 
@@ -6291,6 +6298,193 @@ def build_policy_console_router(
             },
         )
 
+    # Phase 59: Multi-instance production readiness console pages
+
+    @router.get("/federation/notifications/replay-idempotency", response_class=HTMLResponse)
+    async def federation_notification_replay_idempotency(request: Request):
+        """Replay idempotency tracking page."""
+        records: list[dict] = []
+        if replay_idempotency_store is not None:
+            try:
+                raw = getattr(replay_idempotency_store, "_records", {})
+                for key, r in raw.items():
+                    records.append({
+                        "idempotency_key": r.idempotency_key,
+                        "original_attempt_id": r.original_attempt_id,
+                        "replay_type": r.replay_type,
+                        "status": r.status,
+                        "new_attempt_id": r.new_attempt_id or "—",
+                        "error_message": r.error_message or "—",
+                        "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                        "completed_at": r.completed_at.isoformat() if r.completed_at and hasattr(r.completed_at, "isoformat") else "",
+                        "expires_at": r.expires_at.isoformat() if r.expires_at and hasattr(r.expires_at, "isoformat") else "",
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_replay_idempotency.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "records": records,
+                "store_available": replay_idempotency_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/rate-limit", response_class=HTMLResponse)
+    async def federation_notification_rate_limit(request: Request):
+        """Rate limiter status page."""
+        records: list[dict] = []
+        if replay_rate_limiter_store is not None:
+            try:
+                raw = getattr(replay_rate_limiter_store, "_records", {})
+                for key, r in raw.items():
+                    records.append({
+                        "rate_limit_key": r.rate_limit_key,
+                        "window_seconds": r.window_seconds,
+                        "max_attempts": r.max_attempts,
+                        "current_count": len(r.attempt_timestamps),
+                        "remaining": max(0, r.max_attempts - len(r.attempt_timestamps)),
+                        "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                        "updated_at": r.updated_at.isoformat() if hasattr(r.updated_at, "isoformat") else str(r.updated_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_rate_limit.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "records": records,
+                "store_available": replay_rate_limiter_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/dead-letter", response_class=HTMLResponse)
+    async def federation_notification_dead_letter(request: Request):
+        """Dead letter policy records page."""
+        records: list[dict] = []
+        if dead_letter_policy_store is not None:
+            try:
+                items = dead_letter_policy_store.list_records()
+                for r in items:
+                    records.append({
+                        "attempt_id": r.attempt_id,
+                        "alert_id": r.alert_id,
+                        "target_id": r.target_id,
+                        "reason": r.reason,
+                        "attempt_count": r.attempt_count,
+                        "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_dead_letter.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "records": records,
+                "store_available": dead_letter_policy_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/enhanced-metrics", response_class=HTMLResponse)
+    async def federation_notification_enhanced_metrics(request: Request):
+        """Enhanced metrics snapshot page."""
+        snapshot_data = None
+        if enhanced_metrics is not None:
+            try:
+                snapshot = enhanced_metrics.snapshot()
+                snapshot_data = {
+                    "replay_count": getattr(snapshot.replay, "total_records", 0) if snapshot.replay else 0,
+                    "rate_limiter_keys": getattr(snapshot.rate_limiter, "total_keys", 0) if snapshot.rate_limiter else 0,
+                    "dead_letter_count": getattr(snapshot.dead_letter, "total_records", 0) if snapshot.dead_letter else 0,
+                    "taken_at": snapshot.taken_at.isoformat() if hasattr(snapshot.taken_at, "isoformat") else str(snapshot.taken_at),
+                }
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_enhanced_metrics.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "snapshot": snapshot_data,
+                "store_available": enhanced_metrics is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/key-rotation", response_class=HTMLResponse)
+    async def federation_notification_key_rotation(request: Request):
+        """Webhook key rotation status page."""
+        last_rotation = None
+        history: list[dict] = []
+        if webhook_key_rotation_store is not None:
+            try:
+                last = webhook_key_rotation_store.get_last_rotation()
+                if last is not None:
+                    last_rotation = {
+                        "rotation_id": last.rotation_id,
+                        "actor_id": last.actor_id,
+                        "reason": last.reason,
+                        "created_at": last.created_at.isoformat() if hasattr(last.created_at, "isoformat") else str(last.created_at),
+                    }
+                rotations = webhook_key_rotation_store.list_rotations(limit=50)
+                for r in rotations:
+                    history.append({
+                        "rotation_id": r.rotation_id,
+                        "actor_id": r.actor_id,
+                        "reason": r.reason,
+                        "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                    })
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_key_rotation.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "last_rotation": last_rotation,
+                "history": history,
+                "store_available": webhook_key_rotation_store is not None,
+            },
+        )
+
+    @router.get("/federation/notifications/distributed-lock/{lock_name}/status", response_class=HTMLResponse)
+    async def federation_notification_distributed_lock_status(request: Request, lock_name: str):
+        """Distributed lock status page."""
+        lock_status = None
+        if distributed_lock_store is not None:
+            try:
+                status = distributed_lock_store.get_status(lock_name)
+                lock_status = {
+                    "lock_name": status.lock_name,
+                    "is_locked": status.is_locked,
+                    "owner_id": status.owner_id or "—",
+                    "acquired_at": status.acquired_at.isoformat() if status.acquired_at and hasattr(status.acquired_at, "isoformat") else "",
+                    "expires_at": status.expires_at.isoformat() if status.expires_at and hasattr(status.expires_at, "isoformat") else "",
+                    "ttl_seconds": status.ttl_seconds,
+                }
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            request,
+            "policy_federation_notification_distributed_lock.html",
+            {
+                "title": title,
+                "base_path": base_path,
+                "lock_name": lock_name,
+                "lock_status": lock_status,
+                "store_available": distributed_lock_store is not None,
+            },
+        )
+
+    return router
+
     @router.get("/federation/notifications/{notification_id}")
     async def federation_notification_detail(notification_id: str, request: Request):
         """Single federation notification detail page."""
@@ -6890,7 +7084,7 @@ def build_policy_console_router(
             },
         )
 
-    return router
+
 
 def _get_templates_dir() -> str:
     """Return the templates directory path."""

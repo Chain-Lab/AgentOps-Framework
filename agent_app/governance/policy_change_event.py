@@ -164,6 +164,24 @@ class PolicyChangeEventType(StrEnum):
     FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_COMPLETED = "policy.federation.notification.archive_cleanup.completed"
     FEDERATION_NOTIFICATION_ARCHIVE_CLEANUP_FAILED = "policy.federation.notification.archive_cleanup.failed"
     FEDERATION_NOTIFICATION_WRITE_ACTION_PERFORMED = "policy.federation.notification.alert_delivery.write_action_performed"
+    # Phase 59 additions
+    DLQ_REPLAY_IDEMPOTENCY_CHECKED = "policy.federation.dlq.replay.idempotency_checked"
+    DLQ_REPLAY_IDEMPOTENCY_HIT = "policy.federation.dlq.replay.idempotency_hit"
+    DLQ_REPLAY_RATE_LIMITED = "policy.federation.dlq.replay.rate_limited"
+    DLQ_REPLAY_SUCCEEDED = "policy.federation.dlq.replay.succeeded"
+    DLQ_REPLAY_FAILED = "policy.federation.dlq.replay.failed"
+    DLQ_REPLAY_DEAD_LETTERED = "policy.federation.dlq.replay.dead_lettered"
+    PRIORITY_QUEUE_ITEM_CLAIMED = "policy.federation.priority_queue.item_claimed"
+    PRIORITY_QUEUE_ITEM_ACKNOWLEDGED = "policy.federation.priority_queue.item_acknowledged"
+    PRIORITY_QUEUE_ITEM_FAILED = "policy.federation.priority_queue.item_failed"
+    PRIORITY_QUEUE_ITEM_REQUEUED = "policy.federation.priority_queue.item_requeued"
+    PRIORITY_QUEUE_LEASE_EXPIRED = "policy.federation.priority_queue.lease_expired"
+    DISTRIBUTED_LOCK_ACQUIRED = "policy.federation.distributed_lock.acquired"
+    DISTRIBUTED_LOCK_RELEASED = "policy.federation.distributed_lock.released"
+    DISTRIBUTED_LOCK_RENEWED = "policy.federation.distributed_lock.renewed"
+    DISTRIBUTED_LOCK_DENIED = "policy.federation.distributed_lock.denied"
+    WEBHOOK_KEY_ROTATED = "policy.federation.webhook.key_rotated"
+    WEBHOOK_KEY_ROTATION_SCHEDULED = "policy.federation.webhook.key_rotation.scheduled"
 
 
 class PolicyChangeEvent(BaseModel):

@@ -891,6 +891,74 @@ class RolloutFederationNotificationArchiveCleanupConfig(BaseModel):
     archive_format: str = Field(default="jsonl", description="Archive file format")
 
 
+# Phase 59: Multi-instance production readiness config models
+# (must be defined before RolloutFederationNotificationConfig which references them)
+
+
+class ReplayIdempotencyConfig(BaseModel):
+    """Configuration for DLQ replay idempotency (Phase 59 Task 734)."""
+
+    enabled: bool = Field(default=False, description="Enable replay idempotency checks")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str | None = Field(default=None, description="SQLite db path")
+    ttl_hours: int = Field(default=24, description="Idempotency record TTL in hours")
+
+
+class ReplayRateLimiterConfig(BaseModel):
+    """Configuration for DLQ replay rate limiting (Phase 59 Task 735)."""
+
+    enabled: bool = Field(default=False, description="Enable replay rate limiting")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str | None = Field(default=None, description="SQLite db path")
+    max_attempts: int = Field(default=10, description="Max replay attempts per window")
+    window_seconds: int = Field(default=60, description="Rate limit window in seconds")
+
+
+class DeadLetterPolicyConfig(BaseModel):
+    """Configuration for priority queue dead letter policy (Phase 59 Task 736)."""
+
+    enabled: bool = Field(default=False, description="Enable dead letter policy evaluation")
+    max_retries: int = Field(default=5, description="Max retries before dead letter")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str | None = Field(default=None, description="SQLite db path")
+
+
+class PriorityQueueRedisConfig(BaseModel):
+    """Configuration for Redis-backed priority queue (Phase 59 Task 732)."""
+
+    enabled: bool = Field(default=False, description="Enable Redis priority queue backend")
+    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
+    key_prefix: str = Field(default="agentapp:notification:pq", description="Redis key prefix")
+    queue_name: str = Field(default="default", description="Default queue name")
+    queue_id: str = Field(default="default", description="Default queue ID")
+
+
+class DistributedLockConfig(BaseModel):
+    """Configuration for distributed lock (Phase 59 Task 733)."""
+
+    enabled: bool = Field(default=False, description="Enable distributed lock")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str | None = Field(default=None, description="SQLite db path")
+    default_lease_seconds: int = Field(default=300, description="Default lease TTL in seconds")
+
+
+class EnhancedMetricsConfig(BaseModel):
+    """Configuration for enhanced Phase 59 metrics (Phase 59 Task 737)."""
+
+    enabled: bool = Field(default=False, description="Enable enhanced metrics collection")
+
+
+class WebhookKeyRotationConfig(BaseModel):
+    """Configuration for webhook key rotation (Phase 59 Task 738)."""
+
+    enabled: bool = Field(default=False, description="Enable automatic webhook key rotation")
+    rotation_interval_hours: int = Field(default=24, description="Hours between rotations")
+    keep_previous_count: int = Field(default=1, description="Number of previous keys to retain")
+    key_bits: int = Field(default=256, description="Entropy bits for generated keys")
+    type: str = Field(default="memory", description="Store type: memory | sqlite")
+    path: str | None = Field(default=None, description="SQLite db path")
+
+
 class RolloutFederationNotificationConfig(BaseModel):
     """Configuration for federation notification (Phase 49)."""
     enabled: bool = Field(default=False, description="Enable federation notification")
@@ -940,6 +1008,41 @@ class RolloutFederationNotificationConfig(BaseModel):
     archive_cleanup: RolloutFederationNotificationArchiveCleanupConfig = Field(
         default_factory=RolloutFederationNotificationArchiveCleanupConfig,
         description="Archive cleanup config (Phase 55)",
+    )
+    # Phase 56: Redis priority queue
+    priority_queue_redis: PriorityQueueRedisConfig = Field(
+        default_factory=PriorityQueueRedisConfig,
+        description="Redis priority queue config (Phase 59)",
+    )
+    # Phase 59: distributed lock for daemon coordination
+    distributed_lock: DistributedLockConfig = Field(
+        default_factory=DistributedLockConfig,
+        description="Distributed lock config (Phase 59)",
+    )
+    # Phase 59: replay idempotency
+    replay_idempotency: ReplayIdempotencyConfig = Field(
+        default_factory=ReplayIdempotencyConfig,
+        description="Replay idempotency config (Phase 59)",
+    )
+    # Phase 59: replay rate limiter
+    replay_rate_limiter: ReplayRateLimiterConfig = Field(
+        default_factory=ReplayRateLimiterConfig,
+        description="Replay rate limiter config (Phase 59)",
+    )
+    # Phase 59: dead letter policy
+    dead_letter_policy: DeadLetterPolicyConfig = Field(
+        default_factory=DeadLetterPolicyConfig,
+        description="Dead letter policy config (Phase 59)",
+    )
+    # Phase 59: enhanced metrics
+    enhanced_metrics: EnhancedMetricsConfig = Field(
+        default_factory=EnhancedMetricsConfig,
+        description="Enhanced metrics config (Phase 59)",
+    )
+    # Phase 59: webhook key rotation
+    webhook_key_rotation: WebhookKeyRotationConfig = Field(
+        default_factory=WebhookKeyRotationConfig,
+        description="Webhook key rotation config (Phase 59)",
     )
 
 
