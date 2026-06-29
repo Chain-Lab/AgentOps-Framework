@@ -20,6 +20,9 @@ from agent_app.cli import (
     _cmd_policy_federation_notification_key_rotation_status,
     _cmd_policy_federation_notification_key_rotation_rotate,
     _cmd_policy_federation_notification_key_rotation_history,
+    # Phase 60: closed-loop CLI commands
+    _cmd_policy_federation_notification_metrics_prometheus,
+    _cmd_policy_federation_notification_alert_delivery_daemon_run_once,
 )
 
 
@@ -182,4 +185,33 @@ class TestKeyRotationCLI:
         config.write_text("runtime:\n  backend: dry_run\n")
         args = _make_args(config=str(config))
         rc = _run(_cmd_policy_federation_notification_key_rotation_history, args)
+        assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 60: Closed-loop CLI commands
+# ---------------------------------------------------------------------------
+
+
+class TestPhase60MetricsPrometheusCLI:
+    """Phase 60: Prometheus metrics CLI command."""
+
+    def test_not_configured(self, tmp_path):
+        """metrics-prometheus returns 1 when enhanced_metrics not configured."""
+        config = tmp_path / "agentapp.yaml"
+        config.write_text("runtime:\n  backend: dry_run\n")
+        args = _make_args(config=str(config))
+        rc = _run(_cmd_policy_federation_notification_metrics_prometheus, args)
+        assert rc == 1
+
+
+class TestPhase60DaemonRunOnceCLI:
+    """Phase 60: Daemon run-once CLI command."""
+
+    def test_not_configured(self, tmp_path):
+        """run-once returns 1 when alert delivery not configured."""
+        config = tmp_path / "agentapp.yaml"
+        config.write_text("runtime:\n  backend: dry_run\n")
+        args = _make_args(config=str(config), dry_run=True)
+        rc = _run(_cmd_policy_federation_notification_alert_delivery_daemon_run_once, args)
         assert rc == 1

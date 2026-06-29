@@ -1186,6 +1186,11 @@ def main() -> int:
     notifications_delivery_daemon_status_parser = notifications_delivery_daemon_sub.add_parser("status", help="Show retry daemon status (Phase 55)")
     notifications_delivery_daemon_status_parser.add_argument("--config", required=True, help="Config file path")
     notifications_delivery_daemon_status_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_status)
+    # Phase 60: run-once command for closed-loop validation
+    notifications_delivery_daemon_run_once_parser = notifications_delivery_daemon_sub.add_parser("run-once", help="Run daemon once with closed-loop integration (Phase 60)")
+    notifications_delivery_daemon_run_once_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_run_once_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
+    notifications_delivery_daemon_run_once_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_run_once)
 
     # Phase 55: alert delivery priority commands
     notifications_delivery_priority_parser = notifications_delivery_sub.add_parser("priority", help="Alert delivery priority commands (Phase 55)")
@@ -1348,6 +1353,10 @@ def main() -> int:
     notifications_metrics_parser.add_argument("--config", required=True, help="Config file path")
     notifications_metrics_parser.add_argument("--json", action="store_true", help="Output as JSON")
     notifications_metrics_parser.set_defaults(func=_cmd_policy_federation_notification_metrics_snapshot)
+
+    notifications_metrics_prometheus_parser = federation_notification_sub.add_parser("metrics-prometheus", help="Enhanced Phase 59 metrics in Prometheus text format")
+    notifications_metrics_prometheus_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_metrics_prometheus_parser.set_defaults(func=_cmd_policy_federation_notification_metrics_prometheus)
 
     # -- Webhook Key Rotation --
     notifications_key_rotation_parser = federation_notification_sub.add_parser("key-rotation", help="Webhook key rotation commands (Phase 59)")
@@ -1965,7 +1974,11 @@ def main() -> int:
                     return asyncio.run(_cmd_policy_federation_notification_events_list(args))
                 notifications_events_parser.print_help()
                 return 1
+            if args.federation_notification_command == "metrics-prometheus":
+                return asyncio.run(_cmd_policy_federation_notification_metrics_prometheus(args))
             if args.federation_notification_command == "metrics":
+                if hasattr(args, "federation_metrics_command") and args.federation_metrics_command == "prometheus":
+                    return asyncio.run(_cmd_policy_federation_notification_metrics_prometheus(args))
                 return asyncio.run(_cmd_policy_federation_notification_metrics(args))
             if args.federation_notification_command == "health":
                 return asyncio.run(_cmd_policy_federation_notification_health(args))
@@ -2057,6 +2070,8 @@ def main() -> int:
                         return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_stop(args))
                     if args.federation_notification_delivery_daemon_command == "status":
                         return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_status(args))
+                    if args.federation_notification_delivery_daemon_command == "run-once":
+                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_run_once(args))
                     notifications_delivery_daemon_parser.print_help()
                     return 1
                 # Phase 55: alert delivery priority subcommands
@@ -10929,6 +10944,13 @@ async def _cmd_policy_federation_notification_alert_delivery_daemon_start(args: 
         config=daemon_config,
         audit_logger=lambda event, payload: None,
         priority_queue_store=_build_priority_queue_store(delivery_cfg),
+        # Phase 60: wire Phase 59 closed-loop stores from app
+        idempotency_store=getattr(app, "replay_idempotency_store", None),
+        rate_limiter_store=getattr(app, "replay_rate_limiter_store", None),
+        dead_letter_policy_store=getattr(app, "dead_letter_policy_store", None),
+        distributed_lock_store=getattr(app, "distributed_lock", None),
+        key_rotation_service=getattr(app, "webhook_key_rotation_service", None),
+        enhanced_metrics=getattr(app, "enhanced_metrics", None),
     )
 
     # Handle graceful shutdown
@@ -10982,6 +11004,20 @@ async def _cmd_policy_federation_notification_alert_delivery_daemon_status(args:
     print(f"interval_seconds={daemon_cfg.get('interval_seconds', 60.0)}")
     print(f"jitter_seconds={daemon_cfg.get('jitter_seconds', 5.0)}")
     print(f"batch_limit={daemon_cfg.get('batch_limit', 100)}")
+    print(f"distributed_lock_enabled={daemon_cfg.get('distributed_lock_enabled', False)}")
+    print(f"lock_name={daemon_cfg.get('lock_name', 'notification-replay-daemon')}")
+    print(f"key_rotation_enabled={daemon_cfg.get('key_rotation_enabled', False)}")
+    print(f"rate_limit_enabled={daemon_cfg.get('rate_limit_enabled', False)}")
+    print(f"idempotency_enabled={daemon_cfg.get('idempotency_enabled', False)}")
+    print(f"dead_letter_enabled={daemon_cfg.get('dead_letter_enabled', False)}")
+
+    # Show Phase 59 store availability
+    print(f"replay_idempotency_store={'available' if getattr(app, 'replay_idempotency_store', None) else 'none'}")
+    print(f"replay_rate_limiter_store={'available' if getattr(app, 'replay_rate_limiter_store', None) else 'none'}")
+    print(f"dead_letter_policy_store={'available' if getattr(app, 'dead_letter_policy_store', None) else 'none'}")
+    print(f"distributed_lock={'available' if getattr(app, 'distributed_lock', None) else 'none'}")
+    print(f"webhook_key_rotation_service={'available' if getattr(app, 'webhook_key_rotation_service', None) else 'none'}")
+    print(f"enhanced_metrics={'available' if getattr(app, 'enhanced_metrics', None) else 'none'}")
     return 0
 
 
@@ -11505,6 +11541,117 @@ async def _cmd_policy_federation_notification_metrics_snapshot(args: argparse.Na
     print(f"Rate Limiter: total_checks={snapshot.rate_limiter.total_checks} denied={snapshot.rate_limiter.denied}")
     print(f"Dead Letter: total={snapshot.dead_letter.total} dead_lettered={snapshot.dead_letter.dead_lettered}")
     print(f"Distributed Lock: acquire_success={snapshot.distributed_lock.acquire_success} acquire_denied={snapshot.distributed_lock.acquire_denied} renew_success={snapshot.distributed_lock.renew_success}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_metrics_prometheus(args: argparse.Namespace) -> int:
+    """Show enhanced metrics in Prometheus text format."""
+    from agent_app.config.loader import build_app
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    metrics = getattr(app, "enhanced_metrics", None)
+    if metrics is None:
+        print("Enhanced metrics not configured.", file=sys.stderr)
+        return 1
+
+    snapshot = metrics.snapshot()
+    print("# HELP notification_replay_attempts_total Total replay attempts")
+    print("# TYPE notification_replay_attempts_total counter")
+    print(f"notification_replay_attempts_total {snapshot.replay.attempts}")
+    print("# HELP notification_replay_success_total Total successful replays")
+    print("# TYPE notification_replay_success_total counter")
+    print(f"notification_replay_success_total {snapshot.replay.successes}")
+    print("# HELP notification_replay_failed_total Total failed replays")
+    print("# TYPE notification_replay_failed_total counter")
+    print(f"notification_replay_failed_total {snapshot.replay.failures}")
+    print("# HELP notification_replay_idempotency_hits_total Total idempotency hits")
+    print("# TYPE notification_replay_idempotency_hits_total counter")
+    print(f"notification_replay_idempotency_hits_total {snapshot.replay.idempotency_hits}")
+    print("# HELP notification_replay_rate_limited_total Total rate-limited replays")
+    print("# TYPE notification_replay_rate_limited_total counter")
+    print(f"notification_replay_rate_limited_total {snapshot.replay.rate_limited}")
+    print("# HELP notification_replay_dead_letter_total Total dead-lettered replays")
+    print("# TYPE notification_replay_dead_letter_total counter")
+    print(f"notification_replay_dead_letter_total {snapshot.replay.dead_lettered}")
+    print("# HELP notification_replay_lock_acquire_total Total lock acquire attempts")
+    print("# TYPE notification_replay_lock_acquire_total counter")
+    print(f"notification_replay_lock_acquire_total {snapshot.distributed_lock.acquire_attempts}")
+    print("# HELP notification_replay_lock_renew_failed_total Total lock renew failures")
+    print("# TYPE notification_replay_lock_renew_failed_total counter")
+    print(f"notification_replay_lock_renew_failed_total {snapshot.distributed_lock.renew_denied}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_alert_delivery_daemon_run_once(args: argparse.Namespace) -> int:
+    """Run the retry daemon once with closed-loop integration."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+        AlertDeliveryRetryDaemonConfig,
+    )
+    from agent_app.runtime.policy_rollout_federation_notification_alert_delivery_service import (
+        NotificationAlertDeliveryService,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg_raw = getattr(app, "_federation_notification_retry_daemon_config", {})
+    if not isinstance(daemon_cfg_raw, dict):
+        daemon_cfg_raw = {}
+
+    delivery_cfg = getattr(app, "alert_delivery", None)
+    if delivery_cfg is None:
+        print("Alert delivery not configured.", file=sys.stderr)
+        return 1
+
+    service = NotificationAlertDeliveryService(
+        store=getattr(app, "alert_delivery_store", None),
+        adapters=_load_adapters(app),
+        policy=AlertDeliveryRetryPolicy(),
+    )
+
+    daemon_config = AlertDeliveryRetryDaemonConfig(
+        enabled=daemon_cfg_raw.get("enabled", True),
+        interval_seconds=daemon_cfg_raw.get("interval_seconds", 60.0),
+        jitter_seconds=daemon_cfg_raw.get("jitter_seconds", 5.0),
+        batch_limit=daemon_cfg_raw.get("batch_limit", 100),
+        # Phase 60: closed-loop config
+        distributed_lock_enabled=daemon_cfg_raw.get("distributed_lock_enabled", False),
+        lock_name=daemon_cfg_raw.get("lock_name", "notification-replay-daemon"),
+        lock_lease_seconds=daemon_cfg_raw.get("lock_lease_seconds", 30),
+        key_rotation_enabled=daemon_cfg_raw.get("key_rotation_enabled", False),
+        rate_limit_enabled=daemon_cfg_raw.get("rate_limit_enabled", False),
+        rate_limit_window_seconds=daemon_cfg_raw.get("rate_limit_window_seconds", 60),
+        rate_limit_max_attempts=daemon_cfg_raw.get("rate_limit_max_attempts", 10),
+        idempotency_enabled=daemon_cfg_raw.get("idempotency_enabled", False),
+        dead_letter_enabled=daemon_cfg_raw.get("dead_letter_enabled", False),
+    )
+
+    daemon = AlertDeliveryRetryDaemon(
+        scheduler=service,
+        config=daemon_config,
+        audit_logger=lambda event, payload: None,
+        priority_queue_store=_build_priority_queue_store(delivery_cfg),
+        idempotency_store=getattr(app, "replay_idempotency_store", None),
+        rate_limiter_store=getattr(app, "replay_rate_limiter_store", None),
+        dead_letter_policy_store=getattr(app, "dead_letter_policy_store", None),
+        distributed_lock_store=getattr(app, "distributed_lock", None),
+        key_rotation_service=getattr(app, "webhook_key_rotation_service", None),
+        enhanced_metrics=getattr(app, "enhanced_metrics", None),
+    )
+
+    print(f"Running daemon once (dry_run={args.dry_run})...")
+    result = await daemon.run_once(dry_run=args.dry_run)
+    print(f"queue_claimed={result.queue_claimed} queue_completed={result.queue_completed} queue_failed={result.queue_failed} queue_requeued={result.queue_requeued} fallback_processed={result.fallback_processed}")
     return 0
 
 

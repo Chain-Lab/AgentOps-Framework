@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-app-framework"
-version = "0.44.0"
+version = "0.45.0"
 description = "A production-oriented application framework built on top of OpenAI Agents SDK."
 readme = "README.md"
 license = "MIT"
@@ -45,6 +45,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.9",
+    "python-multipart",
+    "fakeredis",
 ]
 all = [
     "openai-agents>=0.2.0",

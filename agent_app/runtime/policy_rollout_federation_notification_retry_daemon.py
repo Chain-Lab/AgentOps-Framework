@@ -3,6 +3,7 @@
 Phase 55 Task 4: Retry daemon for automatic alert delivery retry.
 Phase 56 Task 730: Priority queue store integration.
 Phase 57 Task 3: Deep priority queue integration + persistent state store.
+Phase 60 Task 750: Closed-loop integration with Phase 59 stores.
 """
 from __future__ import annotations
 
@@ -32,6 +33,28 @@ from agent_app.runtime.policy_rollout_federation_notification_retry_daemon_state
     AlertDeliveryRetryDaemonStateStore,
     create_retry_daemon_state_store,
     _redact_error_message,
+)
+# Phase 60: Phase 59 closed-loop stores
+from agent_app.runtime.policy_rollout_federation_notification_replay_idempotency import (
+    ReplayIdempotencyStore,
+    ReplayIdempotencyRecord,
+)
+from agent_app.runtime.policy_rollout_federation_notification_replay_rate_limiter import (
+    ReplayRateLimiterStore,
+)
+from agent_app.runtime.policy_rollout_federation_notification_dead_letter_policy import (
+    DeadLetterPolicyStore,
+    DeadLetterPolicyResult,
+)
+from agent_app.runtime.policy_rollout_federation_notification_distributed_lock import (
+    DistributedLockStore,
+    DistributedLockStatus,
+)
+from agent_app.runtime.policy_rollout_federation_notification_webhook_key_rotation import (
+    WebhookKeyRotationService,
+)
+from agent_app.runtime.policy_rollout_federation_notification_metrics_enhanced import (
+    EnhancedMetrics,
 )
 
 
@@ -83,6 +106,20 @@ class AlertDeliveryRetryDaemonConfig(BaseModel):
     reset_expired_leases_on_run: bool = True
     # Phase 57: daemon state store config
     state_store: dict[str, Any] = Field(default_factory=dict)
+    # Phase 60: closed-loop controls
+    distributed_lock_enabled: bool = False
+    lock_name: str = "notification-replay-daemon"
+    lock_lease_seconds: int = 30
+    lock_renew_interval_seconds: int = 10
+    key_rotation_enabled: bool = False
+    rate_limit_enabled: bool = False
+    rate_limit_window_seconds: int = 60
+    rate_limit_max_attempts: int = 10
+    rate_limit_scope: str = "target"
+    idempotency_enabled: bool = False
+    idempotency_ttl_hours: int = 24
+    dead_letter_enabled: bool = False
+    dead_letter_max_retries: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +131,8 @@ class AlertDeliveryRetryDaemon:
     """Automatic retry daemon for alert delivery.
 
     Phase 57: Deep priority queue integration with atomic claim/ack/fail/requeue.
+    Phase 60: Closed-loop integration with Phase 59 stores (idempotency, rate limit,
+    dead letter, distributed lock, key rotation, enhanced metrics).
     """
 
     def __init__(
@@ -104,6 +143,13 @@ class AlertDeliveryRetryDaemon:
         change_event_store: Any | None = None,
         priority_queue_store: AlertPriorityQueueStore | None = None,
         daemon_state_store: AlertDeliveryRetryDaemonStateStore | None = None,
+        # Phase 60: Phase 59 closed-loop stores
+        idempotency_store: ReplayIdempotencyStore | None = None,
+        rate_limiter_store: ReplayRateLimiterStore | None = None,
+        dead_letter_policy_store: DeadLetterPolicyStore | None = None,
+        distributed_lock_store: DistributedLockStore | None = None,
+        key_rotation_service: WebhookKeyRotationService | None = None,
+        enhanced_metrics: EnhancedMetrics | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._config = config or AlertDeliveryRetryDaemonConfig()
@@ -111,6 +157,13 @@ class AlertDeliveryRetryDaemon:
         self._change_event_store = change_event_store
         self._priority_queue_store = priority_queue_store
         self._daemon_state_store = daemon_state_store
+        # Phase 60: Phase 59 stores
+        self._idempotency_store = idempotency_store
+        self._rate_limiter_store = rate_limiter_store
+        self._dead_letter_policy_store = dead_letter_policy_store
+        self._distributed_lock_store = distributed_lock_store
+        self._key_rotation_service = key_rotation_service
+        self._enhanced_metrics = enhanced_metrics
         self._task: asyncio.Task | None = None
         self._running = False
         self._lock = asyncio.Lock()
@@ -118,6 +171,9 @@ class AlertDeliveryRetryDaemon:
         self._last_run_at: datetime | None = None
         self._last_error: str | None = None
         self._consecutive_failures: int = 0
+        # Phase 60: lock tracking
+        self._lock_owner_id: str | None = None
+        self._lock_fencing_token: int | None = None
 
     def _record_change_event(
         self,
@@ -237,10 +293,58 @@ class AlertDeliveryRetryDaemon:
         """Execute a single retry scheduler run with priority queue integration.
 
         Phase 57: Priority queue first, then fallback to delivery service.
+        Phase 60: Closed-loop with distributed lock, rate limit, idempotency,
+        dead letter policy, key rotation, and enhanced metrics.
         """
         result = AlertDeliveryRetryDaemonRunResult(dry_run=dry_run, worker_id=self._config.worker_id)
+        lock_acquired = False
 
         try:
+            # Phase 60: Distributed lock leader election
+            if (
+                self._distributed_lock_store is not None
+                and self._config.distributed_lock_enabled
+            ):
+                try:
+                    lock_status = self._distributed_lock_store.acquire(
+                        lock_name=self._config.lock_name,
+                        owner_id=self._config.worker_id or "default",
+                        lease_seconds=self._config.lock_lease_seconds,
+                    )
+                    if lock_status.acquired:
+                        lock_acquired = True
+                        self._lock_owner_id = lock_status.owner_id
+                        self._lock_fencing_token = lock_status.fencing_token
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_lock_acquire_success()
+                    else:
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_lock_acquire_denied()
+                        # Another instance holds the lock — skip this run
+                        return result
+                except Exception:
+                    if self._enhanced_metrics:
+                        self._enhanced_metrics.record_lock_acquire_exception()
+                    # Proceed without lock on error (fail-open)
+                    pass
+
+            # Phase 60: Scheduled key rotation
+            if (
+                self._key_rotation_service is not None
+                and self._config.key_rotation_enabled
+            ):
+                try:
+                    if self._key_rotation_service.should_rotate():
+                        new_key = self._key_rotation_service.generate_new_key()
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_replay_attempt()  # reuse replay counter for rotation events
+                        self._record_change_event(
+                            event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_WEBHOOK_KEY_ROTATED,
+                            payload={"new_key_id": new_key.key_id, "reason": "scheduled"},
+                        )
+                except Exception:
+                    pass  # Best-effort, never break daemon loop
+
             # Step 1: Reset expired leases
             if (
                 self._priority_queue_store is not None
@@ -266,7 +370,7 @@ class AlertDeliveryRetryDaemon:
 
             result.queue_claimed = len(claimed_items)
 
-            # Step 3: Process claimed queue items
+            # Step 3: Process claimed queue items with closed-loop
             remaining_budget = self._config.batch_limit - len(claimed_items)
             for item in claimed_items:
                 try:
@@ -319,7 +423,73 @@ class AlertDeliveryRetryDaemon:
                         result.attempt_ids.append(item.attempt_id)
                         continue
 
-                    # Deliver
+                    # Phase 60: Closed-loop processing for each item
+                    idempotency_key = f"replay:{item.attempt_id}:{item.target_id}:{item.alert_id}"
+                    rate_limit_key = item.target_id if self._config.rate_limit_scope == "target" else "global"
+                    should_process = True
+
+                    # --- Rate limit check ---
+                    if should_process and self._rate_limiter_store is not None and self._config.rate_limit_enabled:
+                        try:
+                            if self._enhanced_metrics:
+                                self._enhanced_metrics.record_rate_limiter_check()
+                            rl_result = self._rate_limiter_store.check_and_record(
+                                rate_limit_key=rate_limit_key,
+                                window_seconds=self._config.rate_limit_window_seconds,
+                                max_attempts=self._config.rate_limit_max_attempts,
+                            )
+                            if rl_result.allowed:
+                                if self._enhanced_metrics:
+                                    self._enhanced_metrics.record_rate_limiter_allowed()
+                            else:
+                                if self._enhanced_metrics:
+                                    self._enhanced_metrics.record_rate_limiter_denied()
+                                if self._enhanced_metrics:
+                                    self._enhanced_metrics.record_replay_rate_limited()
+                                # Requeue with delay
+                                if self._priority_queue_store is not None:
+                                    await self._priority_queue_store.requeue(
+                                        item.attempt_id,
+                                        reason=f"Rate limited ({rl_result.remaining} remaining)",
+                                    )
+                                result.queue_requeued += 1
+                                should_process = False
+                        except Exception:
+                            pass  # Fail-open on rate limiter errors
+
+                    # --- Idempotency check ---
+                    if should_process and self._idempotency_store is not None and self._config.idempotency_enabled:
+                        try:
+                            idem_record = ReplayIdempotencyRecord(
+                                idempotency_key=idempotency_key,
+                                original_attempt_id=item.attempt_id,
+                                replay_type="single",
+                                status="started",
+                                expires_at=datetime.now(timezone.utc)
+                                + __import__("datetime").timedelta(hours=self._config.idempotency_ttl_hours),
+                            )
+                            existing = self._idempotency_store.begin(idem_record)
+                            if existing.status == "completed":
+                                # Already replayed — acknowledge and skip
+                                if self._priority_queue_store is not None:
+                                    await self._priority_queue_store.acknowledge(
+                                        item.attempt_id,
+                                        worker_id=self._config.worker_id,
+                                    )
+                                result.queue_completed += 1
+                                if self._enhanced_metrics:
+                                    self._enhanced_metrics.record_replay_idempotency_hit()
+                                should_process = False
+                        except Exception:
+                            pass  # Fail-open on idempotency errors
+
+                    if not should_process:
+                        result.attempt_ids.append(item.attempt_id)
+                        continue
+
+                    # --- Deliver ---
+                    if self._enhanced_metrics:
+                        self._enhanced_metrics.record_replay_attempt()
                     payload = {"alert_id": item.alert_id, "retry_of": item.attempt_id}
                     try:
                         adapter_result = adapter.deliver(target, None, payload)  # type: ignore
@@ -332,27 +502,75 @@ class AlertDeliveryRetryDaemon:
                         )
 
                     if adapter_result.success:
+                        # --- Success: complete idempotency + acknowledge ---
+                        if self._idempotency_store is not None and self._config.idempotency_enabled:
+                            try:
+                                new_attempt_id = f"att_{__import__('secrets').token_hex(8)}"
+                                self._idempotency_store.complete(idempotency_key, new_attempt_id)
+                            except Exception:
+                                pass
                         if self._priority_queue_store is not None:
                             await self._priority_queue_store.acknowledge(
                                 item.attempt_id,
                                 worker_id=self._config.worker_id,
                             )
                         result.queue_completed += 1
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_replay_success()
                     elif adapter_result.retryable:
+                        # --- Retryable failure: fail idempotency + requeue ---
+                        if self._idempotency_store is not None and self._config.idempotency_enabled:
+                            try:
+                                self._idempotency_store.fail(idempotency_key, adapter_result.error_message or "retryable")
+                            except Exception:
+                                pass
                         if self._priority_queue_store is not None:
                             await self._priority_queue_store.requeue(
                                 item.attempt_id,
                                 reason=adapter_result.error_message,
                             )
                         result.queue_requeued += 1
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_replay_failure()
                     else:
-                        if self._priority_queue_store is not None:
-                            await self._priority_queue_store.fail(
-                                item.attempt_id,
-                                error=adapter_result.error_message,
-                                worker_id=self._config.worker_id,
-                            )
-                        result.queue_failed += 1
+                        # --- Non-retryable: dead letter evaluation ---
+                        if self._idempotency_store is not None and self._config.idempotency_enabled:
+                            try:
+                                self._idempotency_store.fail(idempotency_key, adapter_result.error_message or "non-retryable")
+                            except Exception:
+                                pass
+                        if self._dead_letter_policy_store is not None and self._config.dead_letter_enabled:
+                            try:
+                                if self._enhanced_metrics:
+                                    self._enhanced_metrics.record_dead_letter_evaluated()
+                                dl_result = self._dead_letter_policy_store.evaluate(item)
+                                if dl_result.is_dead_letter and dl_result.record is not None:
+                                    self._dead_letter_policy_store.record_dead_letter(dl_result.record)
+                                    if self._priority_queue_store is not None:
+                                        await self._priority_queue_store.fail(
+                                            item.attempt_id,
+                                            error=f"Dead letter: {dl_result.reason}",
+                                            worker_id=self._config.worker_id,
+                                        )
+                                    result.queue_failed += 1
+                                    if self._enhanced_metrics:
+                                        self._enhanced_metrics.record_replay_dead_lettered()
+                                        self._enhanced_metrics.record_dead_letter_triggered()
+                                    should_process = False
+                                elif self._enhanced_metrics:
+                                    self._enhanced_metrics.record_dead_letter_passed()
+                            except Exception:
+                                pass
+                        if should_process:
+                            if self._priority_queue_store is not None:
+                                await self._priority_queue_store.fail(
+                                    item.attempt_id,
+                                    error=adapter_result.error_message,
+                                    worker_id=self._config.worker_id,
+                                )
+                            result.queue_failed += 1
+                            if self._enhanced_metrics:
+                                self._enhanced_metrics.record_replay_failure()
 
                     result.attempt_ids.append(item.attempt_id)
 
@@ -401,6 +619,23 @@ class AlertDeliveryRetryDaemon:
                 raise
             return result
 
+        finally:
+            # Phase 60: Release distributed lock
+            if lock_acquired and self._distributed_lock_store is not None and self._config.distributed_lock_enabled:
+                try:
+                    if self._enhanced_metrics:
+                        self._enhanced_metrics.record_lock_release_attempt()
+                    released = self._distributed_lock_store.release(
+                        self._config.lock_name,
+                        self._config.worker_id or "default",
+                    )
+                    if released and self._enhanced_metrics:
+                        self._enhanced_metrics.record_lock_release_success()
+                    self._lock_owner_id = None
+                    self._lock_fencing_token = None
+                except Exception:
+                    pass
+
         self._last_run_at = datetime.now(timezone.utc)
         self._consecutive_failures = 0
 
@@ -413,6 +648,7 @@ class AlertDeliveryRetryDaemon:
                 "queue_failed": result.queue_failed,
                 "queue_requeued": result.queue_requeued,
                 "fallback_processed": result.fallback_processed,
+                "lock_acquired": lock_acquired,
             },
         )
         if self._audit_logger:
@@ -426,6 +662,7 @@ class AlertDeliveryRetryDaemon:
                         "queue_failed": result.queue_failed,
                         "queue_requeued": result.queue_requeued,
                         "fallback_processed": result.fallback_processed,
+                        "lock_acquired": lock_acquired,
                     },
                 )
             except Exception:
@@ -444,6 +681,7 @@ class AlertDeliveryRetryDaemon:
                 "queue_failed": result.queue_failed,
                 "queue_requeued": result.queue_requeued,
                 "fallback_processed": result.fallback_processed,
+                "lock_acquired": lock_acquired,
             },
         )
 
@@ -453,12 +691,13 @@ class AlertDeliveryRetryDaemon:
         """Return current daemon health status.
 
         Phase 57: Combines in-memory state with persisted state for restart visibility.
+        Phase 60: Adds distributed lock and key rotation status.
         """
         # Start with persisted state if available
         persisted = self._get_daemon_state()
         if persisted is not None and not self.is_running:
             # After restart, use persisted state for visibility
-            return {
+            status = {
                 "state": persisted.actual_state,
                 "consecutive_failures": persisted.consecutive_failures,
                 "last_error": _redact_error_message(persisted.last_error_message) if persisted.last_error_message else None,
@@ -468,6 +707,13 @@ class AlertDeliveryRetryDaemon:
                 "interval_seconds": self._config.interval_seconds,
                 "source": "persisted",
             }
+            if self._key_rotation_service is not None and self._config.key_rotation_enabled:
+                try:
+                    last_rot = self._key_rotation_service.get_last_rotation()
+                    status["last_key_rotation"] = last_rot.rotated_at.isoformat() if last_rot else None
+                except Exception:
+                    pass
+            return status
 
         # In-memory state when running
         if not self.is_running:
@@ -479,7 +725,7 @@ class AlertDeliveryRetryDaemon:
         else:
             state = "unhealthy"
 
-        return {
+        status = {
             "state": state,
             "consecutive_failures": self._consecutive_failures,
             "last_error": _redact_error_message(self._last_error) if self._last_error else None,
@@ -488,6 +734,33 @@ class AlertDeliveryRetryDaemon:
             "interval_seconds": self._config.interval_seconds,
             "source": "memory",
         }
+
+        # Phase 60: lock status
+        if self._distributed_lock_store is not None and self._config.distributed_lock_enabled:
+            try:
+                lock_status = self._distributed_lock_store.get_status(self._config.lock_name)
+                status["lock"] = {
+                    "name": lock_status.lock_name,
+                    "acquired": lock_status.acquired,
+                    "owner_id": lock_status.owner_id,
+                    "fencing_token": lock_status.fencing_token,
+                    "lease_expires_at": lock_status.lease_expires_at.isoformat() if lock_status.lease_expires_at else None,
+                }
+            except Exception:
+                pass
+
+        # Phase 60: key rotation status
+        if self._key_rotation_service is not None and self._config.key_rotation_enabled:
+            try:
+                last_rot = self._key_rotation_service.get_last_rotation()
+                status["key_rotation"] = {
+                    "last_rotation": last_rot.rotated_at.isoformat() if last_rot else None,
+                    "rotation_interval_hours": self._config.key_rotation_enabled,
+                }
+            except Exception:
+                pass
+
+        return status
 
     async def _loop(self) -> None:
         """Internal loop — runs run_once at the configured interval."""

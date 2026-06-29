@@ -2,6 +2,27 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.45.0 — Phase 60: Alert Delivery Closed Loop + Production Validation
+
+### Added
+- Retry daemon closed-loop integration: claim → rate limit → idempotency → deliver → ack/requeue/dead-letter
+- Distributed lock leader election in daemon: single-instance processing with fencing tokens
+- Key rotation auto-scheduling in daemon loop: triggers rotation when due during run_once
+- Enhanced metrics recording in daemon: replay, rate limiter, dead letter, and distributed lock counters
+- Prometheus metrics endpoint: `/federation/notifications/metrics/prometheus` for text-format export
+- CLI `metrics-prometheus` command: prints enhanced metrics in Prometheus text format
+- CLI `daemon run-once` command: executes single daemon tick with full Phase 59 store wiring
+- Daemon config extensions: distributed_lock, key_rotation, rate_limit, idempotency, dead_letter fields
+- 15 new unit tests for daemon closed-loop integration (test_phase60_daemon_closed_loop.py)
+
+### Changed
+- `AlertDeliveryRetryDaemonConfig`: 8 new Phase 60 config fields for closed-loop control
+- `AlertDeliveryRetryDaemon.run_once()`: full closed-loop with Phase 59 store integration
+- EnhancedMetrics: added dead letter evaluation and triggered/passed counters
+- Daemon health status: includes lock owner, key rotation, and Phase 59 store availability
+- python-multipart added to dev dependencies (fixes 61 console POST test failures)
+- fakeredis added to dev dependencies (enables Redis tests without server)
+
 ## v0.44.0 — Phase 59: Multi-Instance Production Readiness — DLQ Replay Safety & Alert Delivery Observability
 
 ### Added

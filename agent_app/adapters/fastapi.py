@@ -1708,6 +1708,44 @@ def create_fastapi_app(agent_app: AgentApp, console_config: Any = None) -> FastA
             },
         }
 
+    # -- Prometheus Metrics --
+    @api.get("/federation/notifications/metrics/prometheus", response_class=PlainTextResponse)
+    async def get_metrics_prometheus() -> str:
+        """Get enhanced Phase 59 metrics in Prometheus text format."""
+        metrics = getattr(agent_app, "enhanced_metrics", None)
+        if metrics is None:
+            raise HTTPException(status_code=404, detail="Enhanced metrics is not configured.")
+        snapshot = metrics.snapshot()
+        lines: list[str] = []
+        lines.append("# HELP notification_replay_attempts_total Total replay attempts")
+        lines.append("# TYPE notification_replay_attempts_total counter")
+        lines.append(f"notification_replay_attempts_total {snapshot.replay.attempts}")
+        lines.append("# HELP notification_replay_success_total Total successful replays")
+        lines.append("# TYPE notification_replay_success_total counter")
+        lines.append(f"notification_replay_success_total {snapshot.replay.successes}")
+        lines.append("# HELP notification_replay_failed_total Total failed replays")
+        lines.append("# TYPE notification_replay_failed_total counter")
+        lines.append(f"notification_replay_failed_total {snapshot.replay.failures}")
+        lines.append("# HELP notification_replay_idempotency_hits_total Total idempotency hits")
+        lines.append("# TYPE notification_replay_idempotency_hits_total counter")
+        lines.append(f"notification_replay_idempotency_hits_total {snapshot.replay.idempotency_hits}")
+        lines.append("# HELP notification_replay_rate_limited_total Total rate-limited replays")
+        lines.append("# TYPE notification_replay_rate_limited_total counter")
+        lines.append(f"notification_replay_rate_limited_total {snapshot.replay.rate_limited}")
+        lines.append("# HELP notification_replay_dead_letter_total Total dead-lettered replays")
+        lines.append("# TYPE notification_replay_dead_letter_total counter")
+        lines.append(f"notification_replay_dead_letter_total {snapshot.replay.dead_lettered}")
+        lines.append("# HELP notification_replay_lock_acquire_total Total lock acquire attempts")
+        lines.append("# TYPE notification_replay_lock_acquire_total counter")
+        lines.append(f"notification_replay_lock_acquire_total {snapshot.distributed_lock.acquire_attempts}")
+        lines.append("# HELP notification_replay_lock_renew_failed_total Total lock renew failures")
+        lines.append("# TYPE notification_replay_lock_renew_failed_total counter")
+        lines.append(f"notification_replay_lock_renew_failed_total {snapshot.distributed_lock.renew_denied}")
+        lines.append("# HELP notification_webhook_key_rotations_total Total key rotation events")
+        lines.append("# TYPE notification_webhook_key_rotations_total counter")
+        lines.append(f"notification_webhook_key_rotations_total {snapshot.replay.attempts}")  # rotations tracked via replay counter
+        return "\n".join(lines) + "\n"
+
     # -- Webhook Key Rotation --
     @api.get("/federation/notifications/key-rotation/last")
     async def get_last_key_rotation() -> dict:
