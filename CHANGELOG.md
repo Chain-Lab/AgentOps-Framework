@@ -2,6 +2,48 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.47.0 — Phase 62: Daemon Production Operations Hardening
+
+### Added
+- Graceful drain shutdown: `stop()` marks draining → waits for inflight → timeout cancels remaining
+- In-flight item tracking: `_track_inflight()` context manager + `_create_tracked_task()` with done callback
+- Metrics ring buffer: `MetricsRingBuffer` (deque-based, thread-safe) + `MetricsEvent` model
+- Periodic metrics flush: `_flush_metrics_loop()` runs on background task at `metrics_flush_interval_seconds`
+- Lock lease extension: `_renew_distributed_lock()` called during batch when 80% of `lock_renew_interval_seconds` elapsed
+- Health HTTP server: `HealthHTTPServer` serves `/health` (liveness) and `/ready` (readiness) via stdlib `http.server`
+- Supervisor-friendly runtime: signal handling, exit code 0 on clean shutdown, 1 on error
+- CLI `daemon serve` command: starts daemon as long-running process
+- CLI `daemon health-server` command: starts standalone health HTTP server
+- CLI `daemon drain` command: initiates graceful drain without full stop
+- Config extensions: `graceful_shutdown_enabled`, `drain_timeout_seconds`, `cancel_inflight_on_timeout`, `metrics_buffer_*`, `renew_lock_during_batch`, `lock_renewal_failure_policy`, `health_http_*`
+- 52 new Phase 62 unit tests across 6 test files
+
+### Changed
+- `AlertDeliveryRetryDaemon.stop()`: rewritten with graceful drain pattern replacing immediate shutdown
+- `AlertDeliveryRetryDaemon.run_once()`: wrapped with `_track_inflight()` for inflight tracking
+- `AlertDeliveryRetryDaemon` config: backward-compatible extension with 11 new fields
+
+## v0.46.0 — Phase 61: Daemon Production Runtime Hardening
+
+### Added
+- Continuous daemon loop: `_loop()` runs indefinitely with leader/standby mode switching
+- Daemon start/stop lifecycle: `start()` acquires distributed lock, `stop()` releases and flushes metrics
+- Lock renewal in loop: `_should_renew_lock()` + `_renew_distributed_lock()` every `lock_renew_interval_seconds`
+- Health status model: `get_health_status()` returns stopped/healthy/degraded/unhealthy with Phase 61 fields
+- YAML config support: `AlertDeliveryRetryDaemonConfig` loads from YAML via `dict[str, Any]` pattern
+- Prometheus file metrics exporter: `PrometheusFileMetricsExporter` writes text-format with atomic writes
+- Async dead-letter evaluation: `evaluate_async()` wraps sync `evaluate()` with `asyncio.to_thread()`
+- CLI `daemon health` command: shows daemon health (JSON optional)
+- CLI `daemon validate-config` command: validates daemon configuration
+- CLI `metrics-export` command: exports metrics to Prometheus text file
+- Config defaults: `poll_interval_seconds=1.0`, `idle_sleep_seconds=1.0`, `error_sleep_seconds=5.0`, `max_consecutive_errors=10`, `shutdown_timeout_seconds=10.0`
+- 59 new Phase 61 unit tests across 7 test files
+
+### Changed
+- `AlertDeliveryRetryDaemon`: upgraded from single-run to continuous production runtime
+- CLI dispatch: daemon and priority commands routed through correct `alerts → delivery` hierarchy
+- Error handling: health/validate-config return 0 when daemon not configured (informational)
+
 ## v0.45.0 — Phase 60: Alert Delivery Closed Loop + Production Validation
 
 ### Added

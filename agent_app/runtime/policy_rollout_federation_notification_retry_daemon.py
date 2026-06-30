@@ -4,13 +4,17 @@ Phase 55 Task 4: Retry daemon for automatic alert delivery retry.
 Phase 56 Task 730: Priority queue store integration.
 Phase 57 Task 3: Deep priority queue integration + persistent state store.
 Phase 60 Task 750: Closed-loop integration with Phase 59 stores.
+Phase 62 Task P62: Production operations hardening (graceful drain, metrics buffer,
+    lock lease extension, health HTTP server).
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Coroutine, Generator
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +49,7 @@ from agent_app.runtime.policy_rollout_federation_notification_replay_rate_limite
 from agent_app.runtime.policy_rollout_federation_notification_dead_letter_policy import (
     DeadLetterPolicyStore,
     DeadLetterPolicyResult,
+    evaluate_async,
 )
 from agent_app.runtime.policy_rollout_federation_notification_distributed_lock import (
     DistributedLockStore,
@@ -55,6 +60,10 @@ from agent_app.runtime.policy_rollout_federation_notification_webhook_key_rotati
 )
 from agent_app.runtime.policy_rollout_federation_notification_metrics_enhanced import (
     EnhancedMetrics,
+)
+from agent_app.runtime.policy_rollout_federation_notification_metrics_buffer import (
+    MetricsEvent,
+    MetricsRingBuffer,
 )
 
 
@@ -120,6 +129,29 @@ class AlertDeliveryRetryDaemonConfig(BaseModel):
     idempotency_ttl_hours: int = 24
     dead_letter_enabled: bool = False
     dead_letter_max_retries: int = 5
+    # Phase 61: continuous loop controls
+    poll_interval_seconds: float = 1.0
+    idle_sleep_seconds: float = 1.0
+    error_sleep_seconds: float = 5.0
+    max_consecutive_errors: int = 10
+    shutdown_timeout_seconds: float = 10.0
+    # Phase 62: graceful shutdown / drain
+    graceful_shutdown_enabled: bool = True
+    drain_timeout_seconds: float = 30.0
+    cancel_inflight_on_timeout: bool = True
+    # Phase 62: metrics ring buffer
+    metrics_buffer_enabled: bool = True
+    metrics_buffer_max_size: int = 1000
+    metrics_flush_interval_seconds: float = 10.0
+    flush_metrics_on_stop: bool = True
+    # Phase 62: lock lease extension for long batches
+    renew_lock_during_batch: bool = True
+    lock_renewal_failure_policy: str = "standby"
+    # Phase 62: health HTTP server
+    health_http_enabled: bool = False
+    health_http_host: str = "127.0.0.1"
+    health_http_port: int = 8080
+    ready_requires_leader: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +206,19 @@ class AlertDeliveryRetryDaemon:
         # Phase 60: lock tracking
         self._lock_owner_id: str | None = None
         self._lock_fencing_token: int | None = None
+        # Phase 61: continuous loop state
+        self._leader_mode: bool = False
+        self._last_lock_renew_at: datetime | None = None
+        # Phase 62: graceful shutdown / drain state
+        self._draining: bool = False
+        self._inflight_count: int = 0
+        self._inflight_tasks: set[asyncio.Task] = set()
+        self._shutdown_started_at: datetime | None = None
+        self._last_drain_duration_seconds: float | None = None
+        # Phase 62: metrics buffer (lazy init)
+        self._metrics_buffer: Any = None
+        # Phase 62: health HTTP server (lazy init)
+        self._health_server: Any = None
 
     def _record_change_event(
         self,
@@ -196,6 +241,51 @@ class AlertDeliveryRetryDaemon:
         if self._daemon_state_store is None:
             return None
         return self._daemon_state_store.get(self._config.daemon_id)
+
+    # ------------------------------------------------------------------
+    # Phase 62: In-flight tracking
+    # ------------------------------------------------------------------
+
+    @property
+    def inflight_count(self) -> int:
+        """Number of currently in-flight items."""
+        return self._inflight_count
+
+    @property
+    def draining(self) -> bool:
+        """Whether the daemon is currently draining on shutdown."""
+        return self._draining
+
+    def _create_tracked_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+        """Create an asyncio Task that is tracked for in-flight counting.
+
+        The task is added to the inflight set while it is running and
+        automatically removed when it completes.  This is used for
+        background batch-processing tasks that must be drained on stop.
+        """
+        task = asyncio.ensure_future(coro)
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._inflight_tasks.discard(t)
+
+        self._inflight_tasks.add(task)
+        task.add_done_callback(_on_done)
+        return task
+
+    @contextmanager
+    def _track_inflight(self) -> Generator[None, None, None]:
+        """Context manager that increments/decrements the inflight counter.
+
+        Usage::
+
+            with self._track_inflight():
+                await process_item(item)
+        """
+        self._inflight_count += 1
+        try:
+            yield
+        finally:
+            self._inflight_count = max(0, self._inflight_count - 1)
 
     def _save_daemon_state(self, **kwargs: Any) -> None:
         """Save daemon state to persistent store."""
@@ -227,7 +317,19 @@ class AlertDeliveryRetryDaemon:
                 return
             self._running = True
             self._started_at = datetime.now(timezone.utc)
+            self._consecutive_failures = 0
+            self._last_error = None
+            # Phase 61: Try to acquire distributed lock for leader mode
+            self._leader_mode = self._acquire_distributed_lock()
             self._task = asyncio.create_task(self._loop())
+            # Phase 62: Start health HTTP server if enabled
+            if self._config.health_http_enabled:
+                try:
+                    server = self._ensure_health_server()
+                    if server is not None:
+                        server.start()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
             self._save_daemon_state(
                 desired_state="running",
                 actual_state="running",
@@ -248,7 +350,11 @@ class AlertDeliveryRetryDaemon:
                     pass
 
     async def stop(self) -> None:
-        """Stop the daemon loop. Idempotent."""
+        """Stop the daemon loop with graceful drain.
+
+        Phase 62: If graceful_shutdown_enabled, enters draining state and
+        waits for in-flight items to complete before cancelling the loop.
+        """
         async with self._lock:
             if not self.is_running:
                 self._running = False
@@ -258,20 +364,77 @@ class AlertDeliveryRetryDaemon:
                     stopped_at=datetime.now(timezone.utc),
                 )
                 return
+            # Phase 62: Mark draining BEFORE clearing _running so the loop
+            # can observe draining and wait for in-flight items.
+            self._draining = True
+            self._shutdown_started_at = datetime.now(timezone.utc)
             self._running = False
+            # Phase 62: Wait for in-flight items to drain
+            if self._config.graceful_shutdown_enabled:
+                drain_deadline = datetime.now(timezone.utc).timestamp() + self._config.drain_timeout_seconds
+                while self._inflight_count > 0:
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    remaining = drain_deadline - now_ts
+                    if remaining <= 0:
+                        break
+                    try:
+                        await asyncio.wait_for(
+                            self._wait_inflight_empty(),
+                            timeout=min(remaining, 0.5),
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        continue
+                # Cancel remaining inflight tasks on timeout
+                if (
+                    self._inflight_count > 0
+                    and self._config.cancel_inflight_on_timeout
+                ):
+                    for task in list(self._inflight_tasks):
+                        if not task.done():
+                            task.cancel()
+                    if self._inflight_tasks:
+                        try:
+                            await asyncio.wait(
+                                list(self._inflight_tasks),
+                                timeout=min(self._config.shutdown_timeout_seconds, 2.0),
+                            )
+                        except asyncio.CancelledError:
+                            pass
+            self._draining = False
+            self._last_drain_duration_seconds = (
+                datetime.now(timezone.utc) - self._shutdown_started_at
+            ).total_seconds()
+            self._shutdown_started_at = None
+            # Phase 61: Release distributed lock if we own it
+            self._release_distributed_lock()
+            # Phase 61: Cancel main loop task
             if self._task is not None:
                 try:
                     self._task.cancel()
-                    await self._task
-                except (asyncio.CancelledError, RuntimeError):
-                    # RuntimeError: event loop is closed (e.g., when stop()
-                    # is called from a different event loop than the one
-                    # that created the background task).
+                    await asyncio.wait_for(
+                        self._task,
+                        timeout=self._config.shutdown_timeout_seconds,
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError, RuntimeError):
+                    # RuntimeError: event loop is closed
                     pass
                 self._task = None
+            # Phase 62: Stop health HTTP server
+            if self._health_server is not None:
+                try:
+                    self._health_server.stop()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                self._health_server = None
+            # Phase 62: Flush metrics on shutdown
+            if self._config.flush_metrics_on_stop:
+                self._flush_metrics()
             self._last_run_at = None
             self._last_error = None
             self._consecutive_failures = 0
+            self._inflight_count = 0
+            self._inflight_tasks.clear()
             self._save_daemon_state(
                 desired_state="stopped",
                 actual_state="stopped",
@@ -281,15 +444,44 @@ class AlertDeliveryRetryDaemon:
             )
             self._record_change_event(
                 event_type=PolicyChangeEventType.FEDERATION_NOTIFICATION_RETRY_DAEMON_STOPPED,
-                payload={},
+                payload={
+                    "drain_duration_seconds": self._last_drain_duration_seconds,
+                },
             )
             if self._audit_logger:
                 try:
-                    self._audit_logger("retry_daemon_stopped", {})
+                    self._audit_logger(
+                        "retry_daemon_stopped",
+                        {
+                            "drain_duration_seconds": self._last_drain_duration_seconds,
+                        },
+                    )
                 except Exception:
                     pass
 
-    async def run_once(self, dry_run: bool = False) -> AlertDeliveryRetryDaemonRunResult:
+    async def _wait_inflight_empty(self) -> None:
+        """Wait until inflight_count reaches zero.
+
+        Polls every event-loop iteration.  Exits early if the drain deadline
+        has passed so the caller can cancel remaining tasks.
+        """
+        while self._inflight_count > 0:
+            if self._shutdown_started_at is not None:
+                elapsed = datetime.now(timezone.utc).timestamp() - self._shutdown_started_at.timestamp()
+                if elapsed >= self._config.drain_timeout_seconds:
+                    # Deadline passed — exit and let caller cancel tasks
+                    break
+            await asyncio.sleep(0)
+
+    async def _run_once_continuous(self) -> AlertDeliveryRetryDaemonRunResult:
+        """Run once in leader mode — skips lock acquire/release.
+
+        Phase 61: Used by the continuous loop when the daemon already
+        holds the distributed lock.
+        """
+        return await self.run_once(dry_run=False, _leader_mode=True)
+
+    async def run_once(self, dry_run: bool = False, _leader_mode: bool = False) -> AlertDeliveryRetryDaemonRunResult:
         """Execute a single retry scheduler run with priority queue integration.
 
         Phase 57: Priority queue first, then fallback to delivery service.
@@ -300,33 +492,38 @@ class AlertDeliveryRetryDaemon:
         lock_acquired = False
 
         try:
-            # Phase 60: Distributed lock leader election
-            if (
-                self._distributed_lock_store is not None
-                and self._config.distributed_lock_enabled
-            ):
-                try:
-                    lock_status = self._distributed_lock_store.acquire(
-                        lock_name=self._config.lock_name,
-                        owner_id=self._config.worker_id or "default",
-                        lease_seconds=self._config.lock_lease_seconds,
-                    )
-                    if lock_status.acquired:
-                        lock_acquired = True
-                        self._lock_owner_id = lock_status.owner_id
-                        self._lock_fencing_token = lock_status.fencing_token
+            # Phase 61: Skip lock management when called from continuous loop
+            # (lock is already held by the loop's leader mode)
+            if not _leader_mode:
+                # Phase 60: Distributed lock leader election (standalone run_once)
+                if (
+                    self._distributed_lock_store is not None
+                    and self._config.distributed_lock_enabled
+                ):
+                    try:
+                        lock_status = self._distributed_lock_store.acquire(
+                            lock_name=self._config.lock_name,
+                            owner_id=self._config.worker_id or "default",
+                            lease_seconds=self._config.lock_lease_seconds,
+                        )
+                        if lock_status.acquired:
+                            lock_acquired = True
+                            self._lock_owner_id = lock_status.owner_id
+                            self._lock_fencing_token = lock_status.fencing_token
+                            if self._enhanced_metrics:
+                                self._enhanced_metrics.record_lock_acquire_success()
+                        else:
+                            if self._enhanced_metrics:
+                                self._enhanced_metrics.record_lock_acquire_denied()
+                            # Another instance holds the lock — skip this run
+                            return result
+                    except Exception:
                         if self._enhanced_metrics:
-                            self._enhanced_metrics.record_lock_acquire_success()
-                    else:
-                        if self._enhanced_metrics:
-                            self._enhanced_metrics.record_lock_acquire_denied()
-                        # Another instance holds the lock — skip this run
-                        return result
-                except Exception:
-                    if self._enhanced_metrics:
-                        self._enhanced_metrics.record_lock_acquire_exception()
-                    # Proceed without lock on error (fail-open)
-                    pass
+                            self._enhanced_metrics.record_lock_acquire_exception()
+                        # Proceed without lock on error (fail-open)
+                        pass
+            else:
+                lock_acquired = True  # Loop already holds the lock
 
             # Phase 60: Scheduled key rotation
             if (
@@ -345,17 +542,30 @@ class AlertDeliveryRetryDaemon:
                 except Exception:
                     pass  # Best-effort, never break daemon loop
 
-            # Step 1: Reset expired leases
-            if (
-                self._priority_queue_store is not None
-                and self._config.reset_expired_leases_on_run
-            ):
-                try:
-                    await self._priority_queue_store.reset_expired_leases()
-                except Exception:
-                    pass
+            with self._track_inflight():
+                # Phase 62: Renew lock during long batch if needed
+                if (
+                    self._config.renew_lock_during_batch
+                    and self._leader_mode
+                    and self._should_renew_lock()
+                ):
+                    renewed = self._renew_distributed_lock()
+                    if not renewed:
+                        self._leader_mode = False
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_lock_renew_failed()
 
-            # Step 2: Claim priority queue items
+                # Step 1: Reset expired leases
+                if (
+                    self._priority_queue_store is not None
+                    and self._config.reset_expired_leases_on_run
+                ):
+                    try:
+                        await self._priority_queue_store.reset_expired_leases()
+                    except Exception:
+                        pass
+
+                # Step 2: Claim priority queue items
             claimed_items: list[AlertPriorityQueueItem] = []
             if self._priority_queue_store is not None:
                 try:
@@ -543,7 +753,7 @@ class AlertDeliveryRetryDaemon:
                             try:
                                 if self._enhanced_metrics:
                                     self._enhanced_metrics.record_dead_letter_evaluated()
-                                dl_result = self._dead_letter_policy_store.evaluate(item)
+                                dl_result = await evaluate_async(self._dead_letter_policy_store, item)
                                 if dl_result.is_dead_letter and dl_result.record is not None:
                                     self._dead_letter_policy_store.record_dead_letter(dl_result.record)
                                     if self._priority_queue_store is not None:
@@ -620,21 +830,23 @@ class AlertDeliveryRetryDaemon:
             return result
 
         finally:
-            # Phase 60: Release distributed lock
-            if lock_acquired and self._distributed_lock_store is not None and self._config.distributed_lock_enabled:
-                try:
-                    if self._enhanced_metrics:
-                        self._enhanced_metrics.record_lock_release_attempt()
-                    released = self._distributed_lock_store.release(
-                        self._config.lock_name,
-                        self._config.worker_id or "default",
-                    )
-                    if released and self._enhanced_metrics:
-                        self._enhanced_metrics.record_lock_release_success()
-                    self._lock_owner_id = None
-                    self._lock_fencing_token = None
-                except Exception:
-                    pass
+            # Phase 61: Skip lock release when in continuous leader mode
+            # (lock is managed by the loop, released on stop)
+            if lock_acquired and not _leader_mode:
+                if self._distributed_lock_store is not None and self._config.distributed_lock_enabled:
+                    try:
+                        if self._enhanced_metrics:
+                            self._enhanced_metrics.record_lock_release_attempt()
+                        released = self._distributed_lock_store.release(
+                            self._config.lock_name,
+                            self._config.worker_id or "default",
+                        )
+                        if released and self._enhanced_metrics:
+                            self._enhanced_metrics.record_lock_release_success()
+                        self._lock_owner_id = None
+                        self._lock_fencing_token = None
+                    except Exception:
+                        pass
 
         self._last_run_at = datetime.now(timezone.utc)
         self._consecutive_failures = 0
@@ -687,6 +899,178 @@ class AlertDeliveryRetryDaemon:
 
         return result
 
+    def _acquire_distributed_lock(self) -> bool:
+        """Try to acquire the distributed lock. Returns True on success."""
+        if (
+            self._distributed_lock_store is None
+            or not self._config.distributed_lock_enabled
+        ):
+            return True  # No lock configured — treat as always acquired
+        try:
+            status = self._distributed_lock_store.acquire(
+                lock_name=self._config.lock_name,
+                owner_id=self._config.worker_id or "default",
+                lease_seconds=self._config.lock_lease_seconds,
+            )
+            if status.acquired:
+                self._lock_owner_id = status.owner_id
+                self._lock_fencing_token = status.fencing_token
+                self._last_lock_renew_at = datetime.now(timezone.utc)
+                if self._enhanced_metrics:
+                    self._enhanced_metrics.record_lock_acquire_success()
+                return True
+            else:
+                if self._enhanced_metrics:
+                    self._enhanced_metrics.record_lock_acquire_denied()
+                self._lock_owner_id = None
+                self._lock_fencing_token = None
+                return False
+        except Exception:
+            if self._enhanced_metrics:
+                self._enhanced_metrics.record_lock_acquire_exception()
+            return False
+
+    def _renew_distributed_lock(self) -> bool:
+        """Renew the distributed lock if needed. Returns True on success."""
+        if (
+            self._distributed_lock_store is None
+            or not self._config.distributed_lock_enabled
+            or self._lock_owner_id is None
+        ):
+            return True
+        try:
+            status = self._distributed_lock_store.renew(
+                lock_name=self._config.lock_name,
+                owner_id=self._lock_owner_id,
+                lease_seconds=self._config.lock_lease_seconds,
+            )
+            if status.acquired:
+                self._lock_fencing_token = status.fencing_token
+                self._last_lock_renew_at = datetime.now(timezone.utc)
+                if self._enhanced_metrics:
+                    self._enhanced_metrics.record_lock_renew_success()
+                return True
+            else:
+                if self._enhanced_metrics:
+                    self._enhanced_metrics.record_lock_renew_failed()
+                self._lock_owner_id = None
+                self._lock_fencing_token = None
+                self._leader_mode = False
+                return False
+        except Exception:
+            if self._enhanced_metrics:
+                self._enhanced_metrics.record_lock_renew_failed()
+            self._lock_owner_id = None
+            self._lock_fencing_token = None
+            self._leader_mode = False
+            return False
+
+    def _release_distributed_lock(self) -> None:
+        """Release the distributed lock if we own it."""
+        if (
+            self._distributed_lock_store is None
+            or not self._config.distributed_lock_enabled
+            or self._lock_owner_id is None
+        ):
+            return
+        try:
+            if self._enhanced_metrics:
+                self._enhanced_metrics.record_lock_release_attempt()
+            released = self._distributed_lock_store.release(
+                self._config.lock_name,
+                self._lock_owner_id,
+            )
+            if released and self._enhanced_metrics:
+                self._enhanced_metrics.record_lock_release_success()
+        except Exception:
+            pass
+        finally:
+            self._lock_owner_id = None
+            self._lock_fencing_token = None
+            self._leader_mode = False
+
+    def _should_renew_lock(self) -> bool:
+        """Whether the lock should be renewed now."""
+        if self._last_lock_renew_at is None:
+            return True
+        elapsed = (datetime.now(timezone.utc) - self._last_lock_renew_at).total_seconds()
+        return elapsed >= (self._config.lock_renew_interval_seconds * 0.8)
+
+    def _flush_metrics(self) -> None:
+        """Flush metrics buffer to exporter if configured. Best-effort."""
+        if not self._config.metrics_buffer_enabled:
+            return
+        buffer = self._ensure_metrics_buffer()
+        if buffer is None:
+            return
+        exporter = self._enhanced_metrics
+        if exporter is None:
+            return
+        try:
+            from agent_app.runtime.policy_rollout_federation_notification_metrics_exporter import (
+                PrometheusFileMetricsExporter,
+            )
+            # Try to find the output path from the existing exporter or config
+            path = getattr(exporter, "_path", None) or getattr(
+                self._config, "metrics_export_path", "/tmp/agent_daemon_metrics.prom"
+            )
+            prom_exporter = PrometheusFileMetricsExporter(path=path)
+            buffer.flush_to_exporter(prom_exporter)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    def _ensure_metrics_buffer(self) -> Any:
+        """Lazily create the metrics ring buffer if enabled."""
+        if not self._config.metrics_buffer_enabled:
+            return None
+        if self._metrics_buffer is None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_metrics_buffer import (
+                    MetricsRingBuffer,
+                )
+                self._metrics_buffer = MetricsRingBuffer(
+                    max_size=self._config.metrics_buffer_max_size,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                return None
+        return self._metrics_buffer
+
+    def record_metric(
+        self,
+        name: str,
+        value: float | int,
+        labels: dict[str, str] | None = None,
+    ) -> None:
+        """Record a metric event to the ring buffer. Best-effort."""
+        buffer = self._ensure_metrics_buffer()
+        if buffer is None:
+            return
+        try:
+            buffer.append(
+                MetricsEvent(name=name, value=value, labels=labels or {})
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    def _ensure_health_server(self) -> Any:
+        """Lazily create the health HTTP server if enabled."""
+        if not self._config.health_http_enabled:
+            return None
+        if self._health_server is None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_health_server import (
+                    HealthHTTPServer,
+                )
+                self._health_server = HealthHTTPServer(
+                    host=self._config.health_http_host,
+                    port=self._config.health_http_port,
+                    health_fn=self.get_health_status,
+                    ready_fn=self.get_health_status,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                return None
+        return self._health_server
+
     def get_health_status(self) -> dict[str, Any]:
         """Return current daemon health status.
 
@@ -727,12 +1111,19 @@ class AlertDeliveryRetryDaemon:
 
         status = {
             "state": state,
+            "running": self.is_running,
+            "leader": self._leader_mode,
             "consecutive_failures": self._consecutive_failures,
             "last_error": _redact_error_message(self._last_error) if self._last_error else None,
             "started_at": self._started_at.isoformat() if self._started_at else None,
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "interval_seconds": self._config.interval_seconds,
             "source": "memory",
+            # Phase 62: drain / inflight fields
+            "draining": self._draining,
+            "inflight_count": self._inflight_count,
+            "shutdown_started_at": self._shutdown_started_at.isoformat() if self._shutdown_started_at else None,
+            "last_drain_duration_seconds": self._last_drain_duration_seconds,
         }
 
         # Phase 60: lock status
@@ -763,31 +1154,72 @@ class AlertDeliveryRetryDaemon:
         return status
 
     async def _loop(self) -> None:
-        """Internal loop — runs run_once at the configured interval."""
-        if self._config.run_immediately:
+        """Internal continuous loop with leader/standby lock management.
+
+        Phase 61: Supports distributed lock acquisition, renewal, standby mode,
+        idle sleep on empty queue, and max consecutive error handling.
+        """
+        # Phase 61: Initial run if leader and run_immediately
+        if self._config.run_immediately and self._leader_mode:
             try:
-                await self.run_once()
+                await self._run_once_continuous()
             except Exception:
                 if self._config.stop_on_error:
                     self._running = False
                     return
 
         while self._running:
-            # Calculate sleep with jitter
-            jitter = random.uniform(0, self._config.jitter_seconds)
-            sleep_time = self._config.interval_seconds + jitter
+            if not self._leader_mode:
+                # --- Standby mode: retry lock acquisition ---
+                try:
+                    await asyncio.sleep(self._config.poll_interval_seconds)
+                except asyncio.CancelledError:
+                    break
+                if not self._running:
+                    break
+                if self._acquire_distributed_lock():
+                    self._leader_mode = True
+                    self._consecutive_failures = 0
+                continue
 
+            # --- Leader mode: renew lock if needed ---
+            if self._should_renew_lock() and not self._renew_distributed_lock():
+                # Renew failed — lost leadership, enter standby
+                self._leader_mode = False
+                continue
+
+            # --- Run one iteration ---
             try:
-                await asyncio.sleep(sleep_time)
+                await self._run_once_continuous()
+                self._consecutive_failures = 0
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self._config.max_consecutive_errors:
+                    # Too many errors — enter standby to avoid split-brain
+                    self._leader_mode = False
+                    self._release_distributed_lock()
+                    continue
+                await asyncio.sleep(self._config.error_sleep_seconds)
+                continue
+
+            # --- Idle sleep between iterations ---
+            try:
+                await asyncio.sleep(self._config.idle_sleep_seconds)
             except asyncio.CancelledError:
                 break
 
-            if not self._running:
-                break
+    async def run_forever(self) -> None:
+        """Run the daemon loop in the current task (blocking).
 
-            try:
-                await self.run_once()
-            except Exception:
-                if self._config.stop_on_error:
-                    self._running = False
-                    break
+        Useful for CLI ``daemon start``. Caller should handle signals for
+        graceful shutdown.
+        """
+        self._running = True
+        try:
+            await self._loop()
+        finally:
+            self._running = False
+            self._release_distributed_lock()
+            self._flush_metrics()

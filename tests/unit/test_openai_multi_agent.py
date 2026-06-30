@@ -388,6 +388,7 @@ class TestHandoffWorkflow:
         tool_registry: ToolRegistry, run_context: RunContext,
     ) -> None:
         """SDK exception during handoff returns failed result."""
+        pytest.importorskip("agents")
         import agents as real_agents
 
         class FailingRunner:

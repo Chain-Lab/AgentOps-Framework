@@ -1192,6 +1192,33 @@ def main() -> int:
     notifications_delivery_daemon_run_once_parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
     notifications_delivery_daemon_run_once_parser.set_defaults(func=_cmd_policy_federation_notification_alert_delivery_daemon_run_once)
 
+    # Phase 61: daemon health command
+    notifications_delivery_daemon_health_parser = notifications_delivery_daemon_sub.add_parser("health", help="Show daemon health status (Phase 61)")
+    notifications_delivery_daemon_health_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_health_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    notifications_delivery_daemon_health_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_health)
+
+    # Phase 61: daemon validate-config command
+    notifications_delivery_daemon_validate_parser = notifications_delivery_daemon_sub.add_parser("validate-config", help="Validate daemon configuration (Phase 61)")
+    notifications_delivery_daemon_validate_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_validate_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_validate_config)
+
+    # Phase 62: daemon serve command (foreground run)
+    notifications_delivery_daemon_serve_parser = notifications_delivery_daemon_sub.add_parser("serve", help="Run daemon in foreground (Phase 62)")
+    notifications_delivery_daemon_serve_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_serve_parser.add_argument("--interval", type=float, default=None, help="Override interval seconds")
+    notifications_delivery_daemon_serve_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_serve)
+
+    # Phase 62: daemon health-server command
+    notifications_delivery_daemon_hs_parser = notifications_delivery_daemon_sub.add_parser("health-server", help="Start health HTTP server (Phase 62)")
+    notifications_delivery_daemon_hs_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_hs_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_health_server)
+
+    # Phase 62: daemon drain command
+    notifications_delivery_daemon_drain_parser = notifications_delivery_daemon_sub.add_parser("drain", help="Trigger graceful drain (Phase 62)")
+    notifications_delivery_daemon_drain_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_daemon_drain_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_drain)
+
     # Phase 55: alert delivery priority commands
     notifications_delivery_priority_parser = notifications_delivery_sub.add_parser("priority", help="Alert delivery priority commands (Phase 55)")
     notifications_delivery_priority_sub = notifications_delivery_priority_parser.add_subparsers(dest="federation_notification_delivery_priority_command")
@@ -1357,6 +1384,12 @@ def main() -> int:
     notifications_metrics_prometheus_parser = federation_notification_sub.add_parser("metrics-prometheus", help="Enhanced Phase 59 metrics in Prometheus text format")
     notifications_metrics_prometheus_parser.add_argument("--config", required=True, help="Config file path")
     notifications_metrics_prometheus_parser.set_defaults(func=_cmd_policy_federation_notification_metrics_prometheus)
+
+    # Phase 61: metrics file export
+    notifications_metrics_export_parser = federation_notification_sub.add_parser("metrics-export", help="Export metrics to Prometheus text file (Phase 61)")
+    notifications_metrics_export_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_metrics_export_parser.add_argument("--output", required=True, help="Output file path")
+    notifications_metrics_export_parser.set_defaults(func=_cmd_policy_federation_notification_metrics_export)
 
     # -- Webhook Key Rotation --
     notifications_key_rotation_parser = federation_notification_sub.add_parser("key-rotation", help="Webhook key rotation commands (Phase 59)")
@@ -2019,6 +2052,37 @@ def main() -> int:
                             return asyncio.run(_cmd_policy_federation_notification_alert_delivery_dlq_replay(args))
                         notifications_delivery_dlq_parser.print_help()
                         return 1
+                    # Phase 55: alert delivery daemon subcommands
+                    if args.federation_notification_delivery_command == "daemon":
+                        if args.federation_notification_delivery_daemon_command == "start":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_start(args))
+                        if args.federation_notification_delivery_daemon_command == "stop":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_stop(args))
+                        if args.federation_notification_delivery_daemon_command == "status":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_status(args))
+                        if args.federation_notification_delivery_daemon_command == "run-once":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_run_once(args))
+                        if args.federation_notification_delivery_daemon_command == "health":
+                            return asyncio.run(_cmd_policy_federation_notification_daemon_health(args))
+                        if args.federation_notification_delivery_daemon_command == "validate-config":
+                            return asyncio.run(_cmd_policy_federation_notification_daemon_validate_config(args))
+                        # Phase 62: daemon serve / health-server / drain
+                        if args.federation_notification_delivery_daemon_command == "serve":
+                            return asyncio.run(_cmd_policy_federation_notification_daemon_serve(args))
+                        if args.federation_notification_delivery_daemon_command == "health-server":
+                            return asyncio.run(_cmd_policy_federation_notification_daemon_health_server(args))
+                        if args.federation_notification_delivery_daemon_command == "drain":
+                            return asyncio.run(_cmd_policy_federation_notification_daemon_drain(args))
+                        notifications_delivery_daemon_parser.print_help()
+                        return 1
+                    # Phase 55: alert delivery priority subcommands
+                    if args.federation_notification_delivery_command == "priority":
+                        if args.federation_notification_delivery_priority_command == "list":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_list(args))
+                        if args.federation_notification_delivery_priority_command == "update":
+                            return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_update(args))
+                        notifications_delivery_priority_parser.print_help()
+                        return 1
                     notifications_delivery_parser.print_help()
                     return 1
                 notifications_alerts_parser.print_help()
@@ -2061,27 +2125,9 @@ def main() -> int:
             # Phase 54: federation notification alert dedup
             if args.federation_notification_command == "dedup":
                 return asyncio.run(_cmd_policy_federation_notification_alert_dedup_explain(args))
-            # Phase 55: alert delivery daemon subcommands
-            if args.federation_notification_command == "delivery":
-                if args.federation_notification_delivery_command == "daemon":
-                    if args.federation_notification_delivery_daemon_command == "start":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_start(args))
-                    if args.federation_notification_delivery_daemon_command == "stop":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_stop(args))
-                    if args.federation_notification_delivery_daemon_command == "status":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_status(args))
-                    if args.federation_notification_delivery_daemon_command == "run-once":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_daemon_run_once(args))
-                    notifications_delivery_daemon_parser.print_help()
-                    return 1
-                # Phase 55: alert delivery priority subcommands
-                if args.federation_notification_delivery_command == "priority":
-                    if args.federation_notification_delivery_priority_command == "list":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_list(args))
-                    if args.federation_notification_delivery_priority_command == "update":
-                        return asyncio.run(_cmd_policy_federation_notification_alert_delivery_priority_update(args))
-                    notifications_delivery_priority_parser.print_help()
-                    return 1
+            # Phase 61: metrics-export subcommand
+            if args.federation_notification_command == "metrics-export":
+                return asyncio.run(_cmd_policy_federation_notification_metrics_export(args))
             # Phase 55: archive cleanup
             if args.federation_notification_command == "archive-cleanup":
                 return asyncio.run(_cmd_policy_federation_notification_archive_cleanup(args))
@@ -11723,6 +11769,280 @@ async def _cmd_policy_federation_notification_key_rotation_history(args: argpars
     for r in records:
         print(f"{r.key_id}\tcreated_at={r.created_at.isoformat()}\trotated_by={r.rotated_by or 'system'}")
     print(f"Total: {len(records)} rotations")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 61: Daemon health, validate-config, and metrics export
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_policy_federation_notification_daemon_health(args: argparse.Namespace) -> int:
+    """Show retry daemon health status."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", {})
+    if not daemon_cfg:
+        print("Retry daemon not configured.", file=sys.stderr)
+        return 0
+
+    # Build a temporary daemon to get health status without starting
+    store = getattr(app, "alert_delivery_store", None)
+    lock = getattr(app, "distributed_lock", None)
+    metrics = getattr(app, "enhanced_metrics", None)
+
+    if store is None:
+        print("Alert delivery store not configured.", file=sys.stderr)
+        return 0
+
+    daemon = AlertDeliveryRetryDaemon(
+        config=daemon_cfg,
+        store=store,
+        distributed_lock=lock,
+        metrics=metrics,
+    )
+    health = daemon.get_health_status()
+
+    if args.json:
+        print(json.dumps(health, indent=2, default=str))
+    else:
+        for key, value in health.items():
+            print(f"{key}={value}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_daemon_validate_config(args: argparse.Namespace) -> int:
+    """Validate daemon configuration without starting."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemonConfig,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", {})
+    if not daemon_cfg:
+        print("Retry daemon not configured.", file=sys.stderr)
+        return 0
+
+    try:
+        validated = AlertDeliveryRetryDaemonConfig(**daemon_cfg)
+        print("Daemon configuration is valid.")
+        print(f"enabled={validated.enabled}")
+        print(f"interval_seconds={validated.interval_seconds}")
+        print(f"batch_limit={validated.batch_limit}")
+        print(f"poll_interval_seconds={validated.poll_interval_seconds}")
+        print(f"idle_sleep_seconds={validated.idle_sleep_seconds}")
+        print(f"max_consecutive_errors={validated.max_consecutive_errors}")
+        return 0
+    except Exception as exc:
+        print(f"Invalid daemon configuration: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_policy_federation_notification_metrics_export(args: argparse.Namespace) -> int:
+    """Export metrics to a Prometheus text-format file."""
+    import os
+
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_metrics_exporter import (
+        PrometheusFileMetricsExporter,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    metrics = getattr(app, "enhanced_metrics", None)
+    if metrics is None:
+        print("Enhanced metrics not configured.", file=sys.stderr)
+        return 1
+
+    try:
+        snapshot = metrics.snapshot()
+        exporter = PrometheusFileMetricsExporter(path=args.output)
+        await exporter.export(snapshot)
+        print(f"Metrics exported to {args.output}")
+        return 0
+    except Exception as exc:
+        print(f"Error exporting metrics: {exc}", file=sys.stderr)
+        return 1
+
+
+# Phase 62: daemon serve (foreground run)
+async def _cmd_policy_federation_notification_daemon_serve(args: argparse.Namespace) -> int:
+    """Run the retry daemon in the foreground."""
+    import signal
+
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", None)
+    if daemon_cfg is None:
+        print("Retry daemon not configured.", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "alert_delivery_store", None)
+    lock = getattr(app, "distributed_lock", None)
+    daemon_metrics = getattr(app, "enhanced_metrics", None)
+
+    daemon = AlertDeliveryRetryDaemon(
+        config=daemon_cfg,
+        store=store,
+        distributed_lock=lock,
+        metrics=daemon_metrics,
+    )
+
+    # Simple signal handling for graceful shutdown
+    stop_requested = False
+
+    def _on_signal(signum: int, _frame: Any) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        print(f"\nSignal {signum} received — stopping daemon...")
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    await daemon.start()
+    print(f"Daemon started (interval={daemon_cfg.interval_seconds}s, leader={daemon._leader_mode})")
+
+    try:
+        while daemon.is_running and not stop_requested:
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        print("Stopping daemon...")
+        await daemon.stop()
+        drain_dur = daemon._last_drain_duration_seconds
+        if drain_dur is not None:
+            print(f"Drain completed in {drain_dur:.2f}s")
+        print("Daemon stopped.")
+    return 0
+
+
+# Phase 62: daemon health-server (start HTTP health endpoint)
+async def _cmd_policy_federation_notification_daemon_health_server(args: argparse.Namespace) -> int:
+    """Start the health HTTP server for local testing."""
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", None)
+    if daemon_cfg is None:
+        print("Retry daemon not configured.", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "alert_delivery_store", None)
+    lock = getattr(app, "distributed_lock", None)
+    daemon_metrics = getattr(app, "enhanced_metrics", None)
+
+    daemon = AlertDeliveryRetryDaemon(
+        config=daemon_cfg,
+        store=store,
+        distributed_lock=lock,
+        metrics=daemon_metrics,
+    )
+
+    # Override config to enable health server
+    daemon._config.health_http_enabled = True
+    server = daemon._ensure_health_server()
+    if server is None:
+        print("Failed to create health server.", file=sys.stderr)
+        return 1
+
+    server.start()
+    host = daemon_cfg.health_http_host
+    port = daemon_cfg.health_http_port
+    print(f"Health server listening on http://{host}:{port}")
+    print("  GET /health — liveness probe")
+    print("  GET /ready  — readiness probe")
+    print("Press Ctrl+C to stop.")
+
+    try:
+        while server.running:
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+        print("Health server stopped.")
+    return 0
+
+
+# Phase 62: daemon drain (local drain simulation)
+async def _cmd_policy_federation_notification_daemon_drain(args: argparse.Namespace) -> int:
+    """Trigger graceful drain on a running daemon.
+
+    Phase 62: Without a control endpoint this performs a local drain
+    simulation.  A future phase will add cross-process drain control.
+    """
+    from agent_app.config.loader import build_app
+    from agent_app.runtime.policy_rollout_federation_notification_retry_daemon import (
+        AlertDeliveryRetryDaemon,
+    )
+
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return 1
+
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", None)
+    if daemon_cfg is None:
+        print("Retry daemon not configured.", file=sys.stderr)
+        return 1
+
+    store = getattr(app, "alert_delivery_store", None)
+    lock = getattr(app, "distributed_lock", None)
+    daemon_metrics = getattr(app, "enhanced_metrics", None)
+
+    daemon = AlertDeliveryRetryDaemon(
+        config=daemon_cfg,
+        store=store,
+        distributed_lock=lock,
+        metrics=daemon_metrics,
+    )
+
+    if not daemon.is_running:
+        print("Daemon is not running. Start it first.", file=sys.stderr)
+        return 1
+
+    print(f"Daemon is running (inflight={daemon.inflight_count}, draining={daemon.draining})")
+    print("Drain requires a running control endpoint. This will be implemented in a future phase.")
     return 0
 
 

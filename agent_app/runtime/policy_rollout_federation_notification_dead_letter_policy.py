@@ -291,3 +291,22 @@ def create_dead_letter_policy_store(
         f"Unknown dead letter policy store type '{store_type}'. "
         "Supported: 'memory', 'sqlite'."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 61: Async wrapper
+# ---------------------------------------------------------------------------
+
+
+async def evaluate_async(
+    store: DeadLetterPolicyStore,
+    item: AlertPriorityQueueItem,
+) -> DeadLetterPolicyResult:
+    """Async wrapper for DeadLetterPolicyStore.evaluate().
+
+    Uses asyncio.to_thread to avoid blocking the event loop for
+    potentially slow store implementations (e.g., SQLite).
+    """
+    import asyncio
+
+    return await asyncio.to_thread(store.evaluate, item)

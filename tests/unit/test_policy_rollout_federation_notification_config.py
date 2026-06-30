@@ -157,8 +157,8 @@ class TestPolicyChangeEventTypePhase49:
         assert PolicyChangeEventType.FEDERATION_APPROVAL_ESCALATION_LOCK_SKIPPED == "policy.federation.approval.escalation_lock_skipped"
 
     def test_event_type_count(self):
-        """94 original + 6 Phase 49 + 6 Phase 50 + 12 Phase 51 + 6 Phase 52 + 9 Phase 53 = 133."""
-        assert len(PolicyChangeEventType) == 150
+        """167 total: 94 original + 73 Phases 49-60."""
+        assert len(PolicyChangeEventType) == 167
 
     def test_phase53_alert_delivery_event_types_exist(self) -> None:
         """Phase 53 alert delivery PolicyChangeEventType members."""

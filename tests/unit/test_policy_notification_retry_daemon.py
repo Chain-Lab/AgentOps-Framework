@@ -135,6 +135,7 @@ class TestRetryDaemon:
                 jitter_seconds=0,
                 run_immediately=False,
                 stop_on_error=False,
+                idle_sleep_seconds=0.01,
             ),
         )
         await daemon.start()

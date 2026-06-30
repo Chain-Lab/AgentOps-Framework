@@ -2027,10 +2027,10 @@ class TestPhase52ObservabilityEventTypes:
             "notification.observability.report_exported"
 
     def test_new_enum_count_policy_change_event(self) -> None:
-        """PolicyChangeEventType has 133 members (124 + 9 Phase 53)."""
+        """PolicyChangeEventType has 167 members (124 + 43 Phases 54-60)."""
         from agent_app.governance.policy_change_event import PolicyChangeEventType
 
-        assert len(PolicyChangeEventType) == 150
+        assert len(PolicyChangeEventType) == 167
 
     def test_new_enum_count_federation_history_event(self) -> None:
         """FederationHistoryEventType has 51 members (42 + 9 Phase 53)."""

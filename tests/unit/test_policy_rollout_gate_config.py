@@ -207,9 +207,9 @@ class TestRolloutGateChangeEvents:
         assert PolicyChangeEventType.ROLLOUT_GATE_PERMISSION_DENIED == "policy.rollout.gate.permission_denied"
 
     def test_total_event_type_count(self) -> None:
-        """48 original + 7 Phase 43 + 10 Phase 44 + 7 Phase 45 + 9 Phase 46 + 7 Phase 47 + 6 Phase 48 + 6 Phase 49 + 6 Phase 50 + 12 Phase 51 + 6 Phase 52 + 9 Phase 53 = 133 total."""
+        """167 total: 48 original + 119 Phases 43-60."""
         from agent_app.governance.policy_change_event import PolicyChangeEventType
-        assert len(PolicyChangeEventType) == 150
+        assert len(PolicyChangeEventType) == 167
 
 
 # ---------------------------------------------------------------------------

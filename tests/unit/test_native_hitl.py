@@ -678,6 +678,7 @@ class TestRunStateSerialization:
 
     def test_deserialize_success(self) -> None:
         """Deserialization delegates to SDK from_json with valid data."""
+        pytest.importorskip("agents")
         from agent_app.adapters.openai_agents import _deserialize_run_state
 
         class FakeAgent:
