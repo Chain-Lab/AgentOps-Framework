@@ -1219,6 +1219,43 @@ def main() -> int:
     notifications_delivery_daemon_drain_parser.add_argument("--config", required=True, help="Config file path")
     notifications_delivery_daemon_drain_parser.set_defaults(func=_cmd_policy_federation_notification_daemon_drain)
 
+    # Phase 63: control-plane commands
+    notifications_delivery_control_parser = notifications_delivery_daemon_sub.add_parser("control", help="Control plane commands (Phase 63)")
+    notifications_delivery_control_sub = notifications_delivery_control_parser.add_subparsers(dest="federation_notification_delivery_control_command")
+    # control status
+    notifications_delivery_control_status_parser = notifications_delivery_control_sub.add_parser("status", help="Show control plane status (Phase 63)")
+    notifications_delivery_control_status_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_control_status_parser.add_argument("--host", default=None, help="Control server host (default: from config)")
+    notifications_delivery_control_status_parser.add_argument("--port", type=int, default=None, help="Control server port (default: from config)")
+    notifications_delivery_control_status_parser.add_argument("--token", default=None, help="Bearer token (default: AGENT_APP_CONTROL_TOKEN env)")
+    notifications_delivery_control_status_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    notifications_delivery_control_status_parser.set_defaults(func=_cmd_policy_federation_notification_control_status)
+    # control commands list
+    notifications_delivery_control_list_parser = notifications_delivery_control_sub.add_parser("commands", help="List control commands (Phase 63)")
+    notifications_delivery_control_list_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_control_list_parser.add_argument("--host", default=None, help="Control server host")
+    notifications_delivery_control_list_parser.add_argument("--port", type=int, default=None, help="Control server port")
+    notifications_delivery_control_list_parser.add_argument("--token", default=None, help="Bearer token")
+    notifications_delivery_control_list_parser.add_argument("--status", default=None, help="Filter by command status")
+    notifications_delivery_control_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    notifications_delivery_control_list_parser.set_defaults(func=_cmd_policy_federation_notification_control_commands_list)
+    # control commands send
+    notifications_delivery_control_send_parser = notifications_delivery_control_sub.add_parser("send", help="Send a control command (Phase 63)")
+    notifications_delivery_control_send_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_control_send_parser.add_argument("--host", default=None, help="Control server host")
+    notifications_delivery_control_send_parser.add_argument("--port", type=int, default=None, help="Control server port")
+    notifications_delivery_control_send_parser.add_argument("--token", default=None, help="Bearer token")
+    notifications_delivery_control_send_parser.add_argument("command_type", choices=["pause", "resume", "drain", "shutdown", "flush_metrics", "release_lock", "health_snapshot"], help="Control command type")
+    notifications_delivery_control_send_parser.set_defaults(func=_cmd_policy_federation_notification_control_send)
+    # control commands get
+    notifications_delivery_control_get_parser = notifications_delivery_control_sub.add_parser("get", help="Get a control command (Phase 63)")
+    notifications_delivery_control_get_parser.add_argument("--config", required=True, help="Config file path")
+    notifications_delivery_control_get_parser.add_argument("--host", default=None, help="Control server host")
+    notifications_delivery_control_get_parser.add_argument("--port", type=int, default=None, help="Control server port")
+    notifications_delivery_control_get_parser.add_argument("--token", default=None, help="Bearer token")
+    notifications_delivery_control_get_parser.add_argument("command_id", help="Command ID to retrieve")
+    notifications_delivery_control_get_parser.set_defaults(func=_cmd_policy_federation_notification_control_get)
+
     # Phase 55: alert delivery priority commands
     notifications_delivery_priority_parser = notifications_delivery_sub.add_parser("priority", help="Alert delivery priority commands (Phase 55)")
     notifications_delivery_priority_sub = notifications_delivery_priority_parser.add_subparsers(dest="federation_notification_delivery_priority_command")
@@ -2073,6 +2110,19 @@ def main() -> int:
                             return asyncio.run(_cmd_policy_federation_notification_daemon_health_server(args))
                         if args.federation_notification_delivery_daemon_command == "drain":
                             return asyncio.run(_cmd_policy_federation_notification_daemon_drain(args))
+                        # Phase 63: control-plane commands
+                        if args.federation_notification_delivery_daemon_command == "control":
+                            ctrl_cmd = getattr(args, "federation_notification_delivery_control_command", None)
+                            if ctrl_cmd == "status":
+                                return asyncio.run(_cmd_policy_federation_notification_control_status(args))
+                            if ctrl_cmd == "commands":
+                                return asyncio.run(_cmd_policy_federation_notification_control_commands_list(args))
+                            if ctrl_cmd == "send":
+                                return asyncio.run(_cmd_policy_federation_notification_control_send(args))
+                            if ctrl_cmd == "get":
+                                return asyncio.run(_cmd_policy_federation_notification_control_get(args))
+                            notifications_delivery_control_parser.print_help()
+                            return 1
                         notifications_delivery_daemon_parser.print_help()
                         return 1
                     # Phase 55: alert delivery priority subcommands
@@ -12044,6 +12094,122 @@ async def _cmd_policy_federation_notification_daemon_drain(args: argparse.Namesp
     print(f"Daemon is running (inflight={daemon.inflight_count}, draining={daemon.draining})")
     print("Drain requires a running control endpoint. This will be implemented in a future phase.")
     return 0
+
+
+# Phase 63: control plane CLI commands
+def _control_http_base(args: argparse.Namespace) -> tuple[str, int, str | None]:
+    """Extract control server host, port, and token from args or config."""
+    from agent_app.config.loader import build_app
+    try:
+        app = build_app(args.config)
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    daemon_cfg = getattr(app, "_federation_notification_retry_daemon_config", {}) or {}
+    host = args.host or daemon_cfg.get("control_http_host", "127.0.0.1")
+    port = args.port or daemon_cfg.get("control_http_port", 8090)
+    token = args.token or daemon_cfg.get("control_http_token") or os.environ.get("AGENT_APP_CONTROL_TOKEN")
+    return host, port, token
+
+
+def _control_http_request(host: str, port: int, path: str, token: str | None, method: str = "GET", body: dict | None = None) -> tuple[int, dict]:
+    """Make an HTTP request to the control server."""
+    import http.client
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    conn = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        if body is not None:
+            conn.request(method, path, body=json.dumps(body, default=str), headers=headers)
+        else:
+            conn.request(method, path, headers=headers)
+        resp = conn.getresponse()
+        resp_body = resp.read().decode()
+        return resp.status, json.loads(resp_body) if resp_body else {}
+    finally:
+        conn.close()
+
+
+async def _cmd_policy_federation_notification_control_status(args: argparse.Namespace) -> int:
+    """Show control plane status via HTTP API."""
+    host, port, token = _control_http_base(args)
+    try:
+        status, data = _control_http_request(host, port, "/control/status", token)
+    except Exception as exc:
+        print(f"Cannot reach control server at {host}:{port}: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        for key, value in data.items():
+            print(f"{key}={value}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_control_commands_list(args: argparse.Namespace) -> int:
+    """List control commands via HTTP API."""
+    host, port, token = _control_http_base(args)
+    try:
+        status, data = _control_http_request(host, port, "/control/commands", token)
+    except Exception as exc:
+        print(f"Cannot reach control server at {host}:{port}: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        if not data:
+            print("No control commands found.")
+            return 0
+        print(f"{'ID':<20} {'Type':<15} {'Status':<12} {'Created'}")
+        print("-" * 70)
+        for cmd in data if isinstance(data, list) else [data]:
+            cmd_id = cmd.get("command_id", "")
+            cmd_type = cmd.get("command_type", "")
+            cmd_status = cmd.get("status", "")
+            created = cmd.get("created_at", "")[:19] if cmd.get("created_at") else ""
+            print(f"{cmd_id:<20} {cmd_type:<15} {cmd_status:<12} {created}")
+    return 0
+
+
+async def _cmd_policy_federation_notification_control_send(args: argparse.Namespace) -> int:
+    """Send a control command via HTTP API."""
+    import uuid
+    host, port, token = _control_http_base(args)
+    command_type = args.command_type.upper()
+    command_id = f"cmd_{uuid.uuid4().hex[:8]}"
+    body = {"command_id": command_id, "command_type": command_type}
+    try:
+        status, data = _control_http_request(host, port, "/control/commands", token, method="POST", body=body)
+    except Exception as exc:
+        print(f"Cannot reach control server at {host}:{port}: {exc}", file=sys.stderr)
+        return 1
+    if status in (200, 201):
+        print(f"Control command sent: {command_id} ({command_type})")
+        if args.json:
+            print(json.dumps(data, indent=2, default=str))
+        return 0
+    print(f"Error sending control command: {data}", file=sys.stderr)
+    return 1
+
+
+async def _cmd_policy_federation_notification_control_get(args: argparse.Namespace) -> int:
+    """Get a specific control command via HTTP API."""
+    host, port, token = _control_http_base(args)
+    try:
+        status, data = _control_http_request(host, port, f"/control/commands/{args.command_id}", token)
+    except Exception as exc:
+        print(f"Cannot reach control server at {host}:{port}: {exc}", file=sys.stderr)
+        return 1
+    if status == 200:
+        if args.json:
+            print(json.dumps(data, indent=2, default=str))
+        else:
+            for key, value in data.items():
+                print(f"{key}={value}")
+        return 0
+    print(f"Command not found: {args.command_id}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

@@ -65,6 +65,10 @@ from agent_app.runtime.policy_rollout_federation_notification_metrics_buffer imp
     MetricsEvent,
     MetricsRingBuffer,
 )
+# Phase 63: control plane
+from agent_app.runtime.policy_rollout_federation_notification_control_plane import (
+    ControlCommandType,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +156,16 @@ class AlertDeliveryRetryDaemonConfig(BaseModel):
     health_http_host: str = "127.0.0.1"
     health_http_port: int = 8080
     ready_requires_leader: bool = False
+    # Phase 63: persistent control plane
+    control_plane_enabled: bool = False
+    control_plane_db_path: str = ".agent_app/control_plane.db"
+    control_command_poll_interval_seconds: float = 1.0
+    control_command_max_age_seconds: int = 86400
+    control_http_enabled: bool = False
+    control_http_host: str = "127.0.0.1"
+    control_http_port: int = 8090
+    control_http_token: str | None = None
+    control_http_token_env: str | None = "AGENT_APP_CONTROL_TOKEN"
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +233,15 @@ class AlertDeliveryRetryDaemon:
         self._metrics_buffer: Any = None
         # Phase 62: health HTTP server (lazy init)
         self._health_server: Any = None
+        # Phase 63: persistent control plane
+        self._control_paused: bool = False
+        self._control_plane_store: Any = None
+        self._approval_store: Any = None
+        self._audit_store: Any = None
+        self._control_poll_task: asyncio.Task | None = None
+        self._control_http_server: Any = None
+        self._last_control_command_id: str | None = None
+        self._last_control_error: str | None = None
 
     def _record_change_event(
         self,
@@ -330,6 +353,22 @@ class AlertDeliveryRetryDaemon:
                         server.start()
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
+            # Phase 63: Start control plane if enabled
+            if self._config.control_plane_enabled:
+                try:
+                    self._ensure_control_plane_store()
+                    self._ensure_approval_store()
+                    self._ensure_audit_store()
+                    self._control_poll_task = asyncio.create_task(
+                        self._control_poll_loop()
+                    )
+                    if self._config.control_http_enabled:
+                        server = self._ensure_control_http_server()
+                        if server is not None:
+                            self._control_http_server = server
+                            server.start()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
             self._save_daemon_state(
                 desired_state="running",
                 actual_state="running",
@@ -427,6 +466,29 @@ class AlertDeliveryRetryDaemon:
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
                 self._health_server = None
+            # Phase 63: Stop control HTTP server
+            if self._control_http_server is not None:
+                try:
+                    self._control_http_server.stop()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                self._control_http_server = None
+            # Phase 63: Cancel control poll task
+            if self._control_poll_task is not None:
+                try:
+                    self._control_poll_task.cancel()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                self._control_poll_task = None
+            # Phase 63: Close control plane stores
+            for store_attr in ("_control_plane_store", "_approval_store", "_audit_store"):
+                store = getattr(self, store_attr, None)
+                if store is not None:
+                    try:
+                        store.close()
+                    except Exception:  # noqa: BLE001 — best-effort
+                        pass
+                    setattr(self, store_attr, None)
             # Phase 62: Flush metrics on shutdown
             if self._config.flush_metrics_on_stop:
                 self._flush_metrics()
@@ -1071,6 +1133,295 @@ class AlertDeliveryRetryDaemon:
                 return None
         return self._health_server
 
+    # ------------------------------------------------------------------
+    # Phase 63: Persistent Control Plane
+    # ------------------------------------------------------------------
+
+    def _ensure_control_plane_store(self) -> Any:
+        """Lazily create the control plane store if enabled."""
+        if not self._config.control_plane_enabled:
+            return None
+        if self._control_plane_store is None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_control_plane import (
+                    ControlPlaneStore,
+                )
+                self._control_plane_store = ControlPlaneStore(
+                    self._config.control_plane_db_path,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                return None
+        return self._control_plane_store
+
+    def _ensure_approval_store(self) -> Any:
+        """Lazily create the approval store if control plane is enabled."""
+        if not self._config.control_plane_enabled:
+            return None
+        if self._approval_store is None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_approval_store import (
+                    PersistentApprovalStore,
+                )
+                self._approval_store = PersistentApprovalStore(
+                    self._config.control_plane_db_path,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                return None
+        return self._approval_store
+
+    def _ensure_audit_store(self) -> Any:
+        """Lazily create the audit store if control plane is enabled."""
+        if not self._config.control_plane_enabled:
+            return None
+        if self._audit_store is None:
+            try:
+                from agent_app.runtime.policy_rollout_federation_notification_audit_store import (
+                    PersistentAuditStore,
+                )
+                self._audit_store = PersistentAuditStore(
+                    self._config.control_plane_db_path,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                return None
+        return self._audit_store
+
+    def _execute_control_command(self, cmd: Any) -> None:
+        """Execute a control command and update daemon state.
+
+        Handles: pause, resume, drain, shutdown, flush_metrics,
+        release_lock, health_snapshot.
+        """
+        command_type = cmd.command_type
+        if command_type == ControlCommandType.PAUSE:
+            self._control_paused = True
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.RESUME:
+            self._control_paused = False
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.DRAIN:
+            self._control_paused = False
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.SHUTDOWN:
+            self._control_paused = False
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.FLUSH_METRICS:
+            self._flush_metrics()
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.RELEASE_LOCK:
+            if self._leader_mode:
+                self._release_distributed_lock()
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+        elif command_type == ControlCommandType.HEALTH_SNAPSHOT:
+            self._last_control_command_id = cmd.command_id
+            self._last_control_error = None
+
+    async def _control_poll_loop(self) -> None:
+        """Background loop that polls for pending control commands."""
+        while self._running:
+            store = self._control_plane_store
+            if store is None:
+                await asyncio.sleep(self._config.control_command_poll_interval_seconds)
+                continue
+            try:
+                pending = store.list_pending_commands(limit=100)
+                for cmd in pending:
+                    if not self._running:
+                        break
+                    try:
+                        store.mark_accepted(cmd.command_id)
+                        store.mark_running(cmd.command_id)
+                        self._execute_control_command(cmd)
+                        store.mark_completed(cmd.command_id)
+                        # Audit event
+                        audit = self._ensure_audit_store()
+                        if audit is not None:
+                            try:
+                                audit.append(
+                                    event_id=f"evt_{cmd.command_id}_completed",
+                                    event_type="control.command.completed",
+                                    command_id=cmd.command_id,
+                                    daemon_id=self._config.daemon_id,
+                                    actor=cmd.requested_by,
+                                    data={"command_type": cmd.command_type.value},
+                                )
+                            except Exception:
+                                pass
+                    except Exception as exc:
+                        store.mark_failed(cmd.command_id, {"error": str(exc)})
+                        self._last_control_error = str(exc)
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(self._config.control_command_poll_interval_seconds)
+            except asyncio.CancelledError:
+                break
+
+    def _ensure_control_http_server(self) -> Any:
+        """Lazily create the control HTTP server if enabled."""
+        if not self._config.control_http_enabled:
+            return None
+        try:
+            from agent_app.runtime.policy_rollout_federation_notification_control_server import (
+                _ControlHTTPServer,
+            )
+            server = _ControlHTTPServer(
+                host=self._config.control_http_host,
+                port=self._config.control_http_port,
+                auth_token=self._config.control_http_token,
+                status_fn=self.get_health_status,
+                create_command_fn=self._http_create_command,
+                list_commands_fn=self._http_list_commands,
+                get_command_fn=self._http_get_command,
+                list_approvals_fn=self._http_list_approvals,
+                approve_fn=self._http_approve,
+                reject_fn=self._http_reject,
+                audit_fn=self._http_audit_events,
+            )
+            return server
+        except Exception:  # noqa: BLE001 — best-effort
+            return None
+
+    def _http_create_command(self, body: dict[str, Any]) -> dict[str, Any]:
+        store = self._ensure_control_plane_store()
+        if store is None:
+            raise RuntimeError("Control plane not enabled")
+        cmd_type = body.get("command_type")
+        if cmd_type is None:
+            raise ValueError("command_type is required")
+        try:
+            command_type = ControlCommandType(cmd_type)
+        except ValueError:
+            raise ValueError(f"Invalid command_type: {cmd_type}")
+        cmd = store.create_command(
+            command_id=f"cmd_{__import__('secrets').token_hex(8)}",
+            command_type=command_type,
+            requested_by=body.get("requested_by"),
+            reason=body.get("reason"),
+            payload=body.get("payload", {}),
+        )
+        return {
+            "command_id": cmd.command_id,
+            "command_type": cmd.command_type.value,
+            "status": cmd.status.value,
+            "requested_by": cmd.requested_by,
+            "reason": cmd.reason,
+            "payload": cmd.payload,
+        }
+
+    def _http_list_commands(self) -> list[dict[str, Any]]:
+        store = self._control_plane_store
+        if store is None:
+            return []
+        commands = store.list_commands(limit=100)
+        return [
+            {
+                "command_id": c.command_id,
+                "command_type": c.command_type.value,
+                "status": c.status.value,
+                "requested_by": c.requested_by,
+                "reason": c.reason,
+                "payload": c.payload,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in commands
+        ]
+
+    def _http_get_command(self, command_id: str) -> dict[str, Any] | None:
+        store = self._control_plane_store
+        if store is None:
+            return None
+        cmd = store.get_command(command_id)
+        if cmd is None:
+            return None
+        return {
+            "command_id": cmd.command_id,
+            "command_type": cmd.command_type.value,
+            "status": cmd.status.value,
+            "requested_by": cmd.requested_by,
+            "reason": cmd.reason,
+            "payload": cmd.payload,
+            "error": cmd.error,
+            "created_at": cmd.created_at.isoformat(),
+            "accepted_at": cmd.accepted_at.isoformat() if cmd.accepted_at else None,
+            "completed_at": cmd.completed_at.isoformat() if cmd.completed_at else None,
+        }
+
+    def _http_list_approvals(self) -> list[dict[str, Any]]:
+        store = self._ensure_approval_store()
+        if store is None:
+            return []
+        approvals = store.list_pending(limit=100)
+        return [
+            {
+                "approval_id": a.approval_id,
+                "approval_type": a.approval_type,
+                "status": a.status.value,
+                "requested_by": a.requested_by,
+                "resolved_by": a.resolved_by,
+                "reason": a.reason,
+                "daemon_id": a.daemon_id,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in approvals
+        ]
+
+    def _http_approve(self, approval_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        store = self._ensure_approval_store()
+        if store is None:
+            raise RuntimeError("Approval store not enabled")
+        approval = store.approve(
+            approval_id=approval_id,
+            approved_by=body.get("resolved_by", "unknown"),
+            reason=body.get("reason"),
+        )
+        return {
+            "approval_id": approval.approval_id,
+            "status": approval.status.value,
+            "resolved_by": approval.resolved_by,
+            "reason": approval.reason,
+        }
+
+    def _http_reject(self, approval_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        store = self._ensure_approval_store()
+        if store is None:
+            raise RuntimeError("Approval store not enabled")
+        approval = store.reject(
+            approval_id=approval_id,
+            rejected_by=body.get("resolved_by", "unknown"),
+            reason=body.get("reason"),
+        )
+        return {
+            "approval_id": approval.approval_id,
+            "status": approval.status.value,
+            "resolved_by": approval.resolved_by,
+            "reason": approval.reason,
+        }
+
+    def _http_audit_events(self) -> list[dict[str, Any]]:
+        store = self._ensure_audit_store()
+        if store is None:
+            return []
+        events = store.list_recent(limit=100)
+        return [
+            {
+                "event_id": e.event_id,
+                "event_type": e.event_type,
+                "command_id": e.command_id,
+                "approval_id": e.approval_id,
+                "daemon_id": e.daemon_id,
+                "actor": e.actor,
+                "data": e.data,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in events
+        ]
+
     def get_health_status(self) -> dict[str, Any]:
         """Return current daemon health status.
 
@@ -1124,7 +1475,32 @@ class AlertDeliveryRetryDaemon:
             "inflight_count": self._inflight_count,
             "shutdown_started_at": self._shutdown_started_at.isoformat() if self._shutdown_started_at else None,
             "last_drain_duration_seconds": self._last_drain_duration_seconds,
+            # Phase 63: control plane fields
+            "control_plane_enabled": self._config.control_plane_enabled,
+            "control_paused": self._control_paused,
+            "control_db_path": self._config.control_plane_db_path,
+            "last_control_command_id": self._last_control_command_id,
+            "last_control_error": self._last_control_error,
+            "pending_control_commands": 0,
+            "pending_approvals": 0,
         }
+
+        # Phase 63: control plane counts
+        if self._config.control_plane_enabled:
+            try:
+                store = self._control_plane_store
+                if store is not None:
+                    pending_cmds = store.list_pending_commands(limit=100)
+                    status["pending_control_commands"] = len(pending_cmds)
+            except Exception:
+                pass
+            try:
+                approval_store = self._ensure_approval_store()
+                if approval_store is not None:
+                    pending_approvals = approval_store.list_pending(limit=100)
+                    status["pending_approvals"] = len(pending_approvals)
+            except Exception:
+                pass
 
         # Phase 60: lock status
         if self._distributed_lock_store is not None and self._config.distributed_lock_enabled:
@@ -1186,6 +1562,14 @@ class AlertDeliveryRetryDaemon:
             if self._should_renew_lock() and not self._renew_distributed_lock():
                 # Renew failed — lost leadership, enter standby
                 self._leader_mode = False
+                continue
+
+            # Phase 63: skip batch if paused
+            if self._control_paused:
+                try:
+                    await asyncio.sleep(self._config.idle_sleep_seconds)
+                except asyncio.CancelledError:
+                    break
                 continue
 
             # --- Run one iteration ---
