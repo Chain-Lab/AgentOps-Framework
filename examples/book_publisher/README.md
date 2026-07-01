@@ -11,8 +11,9 @@ Given a book brief (title/summary/key points/tags), this example:
    workflow of tool-free agent nodes.
 2. Publishes each variant to a set of mock platforms
    (wechat_mp/zhihu/juejin/csdn by default) through the framework's real
-   governance pipeline — low-risk platforms auto-publish, high-risk
-   platforms pause for human approval.
+   governance pipeline — each platform's `risk_level` and `requires_approval`
+   (see `platforms/*.yaml`) together decide whether it auto-publishes or
+   pauses for human approval via `app.approve()`.
 
 ## Run it
 
