@@ -59,6 +59,7 @@ examples/book_publisher/
     │   ├── base.py
     │   └── mock.py
     ├── tools.py
+    ├── pipeline.py
     └── build_app.py
 
 evals/book_publisher.yaml               # under examples/book_publisher/evals/
@@ -180,49 +181,108 @@ This reuses the framework's existing governance pipeline as-is — no new
 mechanism needed. Risk level and approval requirement come straight from the
 platform's YAML.
 
-## Orchestration — DAG workflow, built programmatically
+## Orchestration
 
-Personas and platforms are dynamic-length (extensible via YAML directories),
-so the DAG is **constructed in Python at `build_app()` time**, not hand-written
-in `agentapp.yaml`. This uses `Workflow.dag(name=..., nodes=[...],
+### Content generation — DAG workflow, built programmatically
+
+Personas are dynamic-length (extensible via YAML directory), so the DAG is
+**constructed in Python at `build_app()` time**, not hand-written in
+`agentapp.yaml`. This uses `Workflow.dag(name=..., nodes=[...],
 execution_mode="parallel", max_concurrency=...)` (`agent_app/config/loader.py`
 builds DAG workflows the same way from parsed YAML — constructing the same
 object in Python directly is an equally supported path, not a workaround).
 
 For each persona `p`:
 - one `agent` node `write_{p.name}` — `type=agent, ref=book_writer__{p.name}`,
-  `input={"input": book.to_prompt_text()}`, no `depends_on` (all generate in
-  parallel).
+  no `input` override and no `depends_on` (all generate in parallel).
 
-For each persona `p` × each platform `pl` in `p.target_platforms or all_platforms`:
-- one `tool` node `publish_{p.name}_{pl.name}` — `type=tool,
-  ref=publish_{pl.name}`, `depends_on=[write_{p.name}]`,
-  `input` mapping the tool's `content` argument to
-  `nodes.write_{p.name}.output` (the persona agent's `final_output` string)
-  plus static `persona`/`book_title` values.
+The DAG contains **only agent nodes**. `app.register_workflow(wf)`; the demo
+runs `result = await app.run(workflow="book_generation",
+input=book.to_prompt_text())`. Every node receives the same book-text input
+(the framework resolves each node's input by starting from the top-level
+`app.run(input=...)` string — confirmed via `DagExecutor._build_node_input`,
+`agent_app/workflows/dag.py`); the persona identity comes from which
+`AgentSpec` (`book_writer__<persona.name>`) the node's `ref` points to, so
+`MockPersonaBackend.run()` picks tone/reading-level/etc. off `agent_spec.name`.
+Generated text per persona is read back from
+`result.node_results` (`list[dict]`, one entry per node, each with
+`node_id`/`status`/`output`):
 
-`app.register_workflow(wf)`; the demo runs
-`app.run(workflow="book_publishing", input=book.to_prompt_text())`.
+```python
+generated = {
+    nr["node_id"].removeprefix("write_"): nr["output"]
+    for nr in result.node_results
+    if nr["node_id"].startswith("write_") and nr["status"] == "completed"
+}
+```
+
+**Why not put publishing in the same DAG as `tool` nodes:** the framework's
+`DagExecutor._execute_tool_node` (`agent_app/workflows/dag.py`) lazily builds
+its own internal `ToolExecutor` wired to a throwaway `_NoOpApprovalStore` —
+never the `approval_store` passed into `AgentApp`. Approvals created this way
+can never be resolved through the public `app.approve()` API (the no-op
+store's `.get()` unconditionally raises `KeyError`), and
+`AppRunResult.interruptions` is never populated for DAG runs either
+(`WorkflowExecutor._run_dag`, `agent_app/runtime/workflow_executor.py`). This
+is a framework gap, not a design choice, and per this example's non-goal of
+zero `agent_app/` core changes, the example works around it rather than
+patching the framework: publishing uses a directly-constructed `ToolExecutor`
+instead of DAG tool nodes (below).
+
+### Publishing — direct governed tool calls, no DAG
+
+`book_publisher/pipeline.py` provides `async def publish_all(app, tool_executor,
+book, personas, platforms, generated) -> PublishingReport`. For each persona
+`p` and each platform `pl` in `p.target_platforms or all_platforms`, it calls:
+
+```python
+result = await tool_executor.execute(
+    tool_name=f"publish_{pl.name}",
+    arguments={"content": generated[p.name], "persona": p.name, "book_title": book.title},
+    context=RunContext(run_id=..., user_id="demo", tenant_id="default"),
+)
+```
+
+`tool_executor` is the framework's real, unmodified `ToolExecutor`
+(`agent_app/runtime/tool_executor.py`), constructed once in `build_app.py` and
+wired to the app's real `approval_store`/`audit_logger`/`trace_collector`/
+`tool_registry` — this reuses the framework's existing governance pipeline
+exactly as designed; no new mechanism, no bypass. Low-risk platforms
+(`requires_approval=False`) execute immediately and return
+`ToolExecutionResult(status="completed", output=<PublishReceipt-shaped dict>)`.
+High-risk platforms return `status="interrupted"` with a real, persisted
+`ApprovalRequest` (`result.approval_request.approval_id`) — because this
+`ToolExecutor` is the same one used by the app's real `approval_store`, that
+approval **can** be resolved via `app.approve()`.
+
+`publish_all` maps each `ToolExecutionResult` to a `PublishReceipt`
+(`status="published"` / `"approval_required"` / `"failed"`) and returns the
+assembled `PublishingReport`.
 
 ### Handling the approval interruption
 
-DAG-level tool node interruption already surfaces through the workflow trace
-(existing `WorkflowStep`/`NodeExecutionResult` machinery — no new code needed).
 `main.py`'s demo:
 
-1. Runs the workflow.
-2. Prints a `PublishingReport` built by walking `result.workflow_trace.steps`
-   for `tool` steps: `completed` → build a `PublishReceipt(status="published")`
-   from the tool's mock output; `interrupted` → `PublishReceipt(status=
-   "approval_required", approval_id=...)`.
-3. For any `approval_required` receipt, demonstrates the resume path by
-   calling `app.approve(approval_id, approver="demo-editor")` then re-running
-   / resuming, and re-prints the updated report.
-
-This is the one place the demo script does non-trivial result-shaping, since
-DAG tool-node results aren't auto-aggregated into a single top-level object —
-consistent with how `docs/dag_snapshot.md` / existing DAG examples already
-expect callers to read `workflow_trace`.
+1. Runs `book_generation`, builds `generated`, calls `publish_all(...)`,
+   prints the resulting `PublishingReport` (some receipts
+   `approval_required`).
+2. For each `approval_required` receipt, calls
+   `app.approve(receipt.approval_id, approved_by="demo-editor")` — this is
+   the framework's real, public, working approval API (`AgentApp.approve`,
+   `agent_app/core/app.py`), backed by the same `approval_store` the
+   `ToolExecutor` used.
+3. After approval, since the framework has no public "resume this exact
+   governed tool call" API outside of the OpenAI-native-SDK HITL marker path
+   (which is reserved for that integration and not usable here), the
+   orchestration code completes the publish itself by invoking the tool's
+   underlying callable directly through the registry's public accessor:
+   `fn = app.tool_registry.get_fn(f"publish_{pl.name}"); receipt_dict =
+   await fn(content=..., persona=..., book_title=...)`. This is a legitimate,
+   publicly-exposed `ToolRegistry` method (`get_fn`, `agent_app/registry/
+   tool_registry.py`), not a private/internal reach-around, and the tool
+   function itself is identical to the one `ToolExecutor` would have called
+   had the gate not fired.
+4. Re-prints the updated `PublishingReport` with the now-`published` receipts.
 
 ## `agentapp.yaml`
 
@@ -250,29 +310,50 @@ reaching into `AgentApp._runner` internals. Instead, `build_app()` constructs
 `AgentApp` directly:
 
 ```python
+approval_store = InMemoryApprovalStore()
+audit_logger = InMemoryAuditLogger()
+trace_collector = InMemoryTraceCollector()
+
 app = AgentApp(
     backend=MockPersonaBackend(),
-    approval_store=InMemoryApprovalStore(),
-    audit_logger=InMemoryAuditLogger(),
-    trace_collector=InMemoryTraceCollector(),
+    approval_store=approval_store,
+    audit_logger=audit_logger,
+    trace_collector=trace_collector,
+)
+
+tool_executor = ToolExecutor(
+    tool_registry=app.tool_registry,
+    approval_store=approval_store,
+    permission_checker=DefaultPermissionChecker(),
+    audit_logger=audit_logger,
+    trace_collector=trace_collector,
 )
 ```
 
-then registers the dynamically-built persona agents, platform tools, and DAG
-workflow onto it via the existing public `register_agent` / `register_tool` /
-`register_workflow` methods. This keeps every wiring decision explicit and
-avoids touching any private attribute. Swapping to a real backend later
-(e.g. LMStudio) is exactly one line: replace the `backend=MockPersonaBackend()`
-argument.
+then registers the dynamically-built persona agents, platform tools, and
+content-generation DAG workflow onto `app` via the existing public
+`register_agent` / `register_tool` / `register_workflow` methods, and returns
+both `app` and `tool_executor` (as a small `BookPublisherApp` namedtuple/
+dataclass) so `main.py` can pass `tool_executor` into `publish_all(...)`. This
+keeps every wiring decision explicit and avoids touching any private
+attribute — `ToolExecutor` and `DefaultPermissionChecker` are the framework's
+own public classes (`agent_app/runtime/tool_executor.py`,
+`agent_app/governance/permission.py`), constructed the same way `AppRunner`
+constructs its internal one. Swapping to a real backend later (e.g. LMStudio)
+is exactly one line: replace the `backend=MockPersonaBackend()` argument.
 
 ## Evals (`examples/book_publisher/evals/book_publisher.yaml`)
 
 Following `docs/evals.md` conventions:
-- Case: run the full workflow with all default personas/platforms →
-  assert `status: completed` for the low-risk platform's tool step and
-  `workflow_steps` includes `tool` steps for every persona×platform pair.
-- Case: assert the `wechat_mp` publish step produces an `interrupted` status
-  (approval gate fires) and `approve_and_resume` flow completes it.
+- Case: run `book_generation` with all default personas → assert `status:
+  completed` and one `write_*` node per persona in `result.node_results`.
+- Case: run `publish_all` for the low-risk `csdn` platform → assert the
+  returned `PublishReceipt.status == "published"`.
+- Case: run `publish_all` for the high-risk `wechat_mp` platform → assert
+  `PublishReceipt.status == "approval_required"`, then call
+  `app.approve(receipt.approval_id, approved_by=...)` followed by
+  `tool_registry.get_fn("publish_wechat_mp")(...)` and assert the follow-up
+  call succeeds.
 - Case: add a throwaway extra persona YAML fixture to prove a new persona
   needs zero pipeline code changes (loaded via a test-local personas dir).
 
@@ -287,10 +368,11 @@ Following `docs/evals.md` conventions:
 - `test_book_publisher_publishers.py` — `MockPublisher` truncates to
   `max_length`, writes a JSONL record, returns a well-formed `PublishReceipt`.
 - `test_book_publisher_pipeline.py` — integration: `build_app()` +
-  `app.run(workflow="book_publishing", ...)` produces one `write_*` node per
-  persona and one `publish_*_*` node per persona×platform, low-risk platform
-  completes, high-risk platform interrupts and is resumable via
-  `app.approve()`.
+  `app.run(workflow="book_generation", ...)` produces one `write_*` node per
+  persona; `publish_all(app, tool_executor, ...)` produces one
+  `PublishReceipt` per persona×platform pair, low-risk platform completes
+  immediately, high-risk platform returns `approval_required` and is
+  completed after `app.approve()` + `tool_registry.get_fn(...)`.
 
 ## README (`examples/book_publisher/README.md`)
 
@@ -309,6 +391,19 @@ backend-swap note from the "Content generation" section above.
   decision), matching the framework's existing declarative style.
 - **Book input**: structured text/summary only, no file parsing (user
   decision).
-- **Framework core**: zero changes — the DAG `Workflow.dag()` + `ToolExecutor`
-  governance pipeline + `AgentBackend` Protocol already provide every
-  primitive this example needs.
+- **Framework core**: zero changes — `Workflow.dag()` (content generation),
+  the real `ToolExecutor` governance pipeline (publishing), and the
+  `AgentBackend` Protocol already provide every primitive this example needs.
+- **DAG tool nodes for publishing (rejected during plan verification)**:
+  initially designed, but `DagExecutor._execute_tool_node`
+  (`agent_app/workflows/dag.py`) always executes against an internal,
+  ephemeral `_NoOpApprovalStore` rather than the app's configured
+  `approval_store`, so approvals it creates can never be resolved via
+  `app.approve()`, and DAG runs never populate `AppRunResult.interruptions`.
+  This is a framework gap (confirmed by reading `DagExecutor`,
+  `WorkflowExecutor._run_dag`, and `ToolExecutor`'s `approved_tool_call`
+  marker, which is reserved for OpenAI-native-SDK HITL only). Per the
+  no-core-changes non-goal, the example avoids DAG tool nodes for publishing
+  entirely and instead drives the real `ToolExecutor` directly from
+  orchestration code (`book_publisher/pipeline.py`) — the DAG is used only
+  for the parallel, tool-free content-generation step.
