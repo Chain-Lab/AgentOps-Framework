@@ -71,6 +71,7 @@ class PolicyReleaseService:
         strict: bool = False,
         release_gate_automation_service: Any = None,
         require_simulation_gate_for_promotion: bool = False,
+        require_promotion_approval: bool = True,
         simulation_gate_max_age_seconds: int | None = None,
     ) -> None:
         self._bundle_store = bundle_store
@@ -97,6 +98,7 @@ class PolicyReleaseService:
         self._strict = strict
         self._release_gate_automation_service = release_gate_automation_service
         self._require_simulation_gate_for_promotion = require_simulation_gate_for_promotion
+        self._require_promotion_approval = require_promotion_approval
         self._simulation_gate_max_age_seconds = simulation_gate_max_age_seconds
 
     async def _check_permission(
@@ -617,7 +619,7 @@ class PolicyReleaseService:
                 f"Promotion request '{promotion_id}' not found in promotion store."
             )
 
-        if request.status != PromotionRequestStatus.APPROVED:
+        if self._require_promotion_approval and request.status != PromotionRequestStatus.APPROVED:
             raise ValueError(
                 f"Cannot execute promotion '{promotion_id}': "
                 f"request status is '{request.status}', must be approved."

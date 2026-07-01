@@ -551,6 +551,7 @@ def build_app(
             gate_store=gate_store,
             promotion_store=promotion_store,
             allow_gate_bypass=getattr(release_config, "allow_gate_bypass", False),
+            require_promotion_approval=getattr(release_config, "require_promotion_approval", True),
             activation_store=activation_store,
             policy_resolver=policy_resolver,
             environment_store=environment_store,

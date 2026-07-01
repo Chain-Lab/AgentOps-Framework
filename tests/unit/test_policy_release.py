@@ -452,6 +452,35 @@ class TestPolicyReleaseServiceRBAC:
         result = await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
         assert result.status == PolicyBundleStatus.ACTIVE
 
+    async def test_execute_pending_succeeds_when_approval_not_required(self):
+        service = PolicyReleaseService(
+            bundle_store=InMemoryPolicyBundleStore(),
+            replay_runner=_make_mock_replay_runner(),
+            replay_store=_make_mock_replay_store(),
+            gate_evaluator=_make_default_evaluator(),
+            gate_store=InMemoryPolicyGateStore(),
+            promotion_store=InMemoryPromotionRequestStore(),
+            permission_checker=PolicyReleasePermissionChecker(),
+            require_promotion_approval=False,
+        )
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        await service.run_gate(bundle_id=bundle.bundle_id, created_by="admin")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        # req.status is PENDING here — no approve_promotion() call.
+        result = await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+        assert result.status == PolicyBundleStatus.ACTIVE
+
+    async def test_execute_pending_still_fails_by_default(self):
+        # Regression guard: default behavior (require_promotion_approval=True,
+        # the implicit default before this test existed) must be unchanged.
+        service = self._make_service()
+        bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
+        ctx = _make_context(permissions=["policy.promotion.request", "policy.promotion.execute"])
+        req = await service.request_promotion(bundle_id=bundle.bundle_id, requested_by="alice", context=ctx)
+        with pytest.raises(ValueError, match="must be approved"):
+            await service.execute_promotion(promotion_id=req.promotion_id, executed_by="rm", context=ctx)
+
     async def test_execute_requires_permission(self):
         service = self._make_service()
         bundle = await service.create_bundle(name="test", version="1.0.0", config_path="test.yaml")
