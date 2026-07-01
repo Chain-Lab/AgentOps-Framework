@@ -583,10 +583,12 @@ class PolicyReleaseService:
         environment: str = "prod",
         reason: str | None = None,
     ) -> Any:
-        """Execute an approved promotion request.
+        """Execute a promotion request.
 
-        Validates the request is APPROVED, checks gate results,
-        optionally allows gate bypass, then activates the bundle.
+        Validates the request is APPROVED (unless require_promotion_approval
+        was set to False at construction time, in which case any status is
+        accepted), checks gate results, optionally allows gate bypass, then
+        activates the bundle.
 
         Args:
             promotion_id: The promotion request to execute.
@@ -600,7 +602,8 @@ class PolicyReleaseService:
 
         Raises:
             PolicyReleasePermissionError: If the context lacks PROMOTION_EXECUTE or BYPASS_GATE.
-            ValueError: If request is not APPROVED, or if gate failed without bypass.
+            ValueError: If request is not APPROVED and require_promotion_approval is True
+                (the default), or if gate failed without bypass.
             KeyError: If promotion_id or bundle_id not found.
         """
         await self._check_permission(
