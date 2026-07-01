@@ -20,6 +20,9 @@ class MockPublisher:
     async def publish(
         self, *, content: GeneratedContent, platform: PlatformSpec
     ) -> PublishReceipt:
+        # max_length bounds the book description itself, not the post as a
+        # whole — hashtags are appended after truncation and are not counted
+        # against it, since they're metadata rather than prose content.
         text = content.text
         if platform.max_length is not None:
             text = text[: platform.max_length]
