@@ -1285,29 +1285,33 @@ def build_app(
                 # Webhook signature service and nonce store
                 signing_cfg = getattr(notif_cfg, "webhook_signing", None)
                 if signing_cfg is not None and signing_cfg.enabled:
-                    from agent_app.runtime.policy_rollout_federation_notification_webhook_signature import FederationWebhookSignatureService
-                    from agent_app.runtime.policy_rollout_federation_notification_nonce_store import create_federation_webhook_nonce_store
+                    try:
+                        from agent_app.runtime.policy_rollout_federation_webhook_signature import FederationWebhookSignatureService
+                        from agent_app.runtime.policy_rollout_federation_webhook_nonce_store import create_federation_webhook_nonce_store
 
-                    nonce_store = create_federation_webhook_nonce_store(
-                        store_type=signing_cfg.nonce_store_backend,
-                        db_path=signing_cfg.nonce_store_path,
-                    )
-                    signature_service = FederationWebhookSignatureService(
-                        algorithm=signing_cfg.algorithm,
-                        signature_version=signing_cfg.signature_version,
-                        active_key_id=signing_cfg.active_key_id,
-                        keys=signing_cfg.keys,
-                        timestamp_tolerance_seconds=signing_cfg.timestamp_tolerance_seconds,
-                        nonce_store=nonce_store,
-                        nonce_ttl_seconds=signing_cfg.nonce_ttl_seconds,
-                    )
-                    app._federation_webhook_signature_service = signature_service
-                    app._federation_webhook_nonce_store = nonce_store
+                        nonce_store = create_federation_webhook_nonce_store(
+                            store_type=signing_cfg.nonce_store_backend,
+                            db_path=signing_cfg.nonce_store_path,
+                        )
+                        signature_service = FederationWebhookSignatureService(
+                            active_key_id=signing_cfg.active_key_id,
+                            keys=signing_cfg.keys,
+                            signature_version=signing_cfg.signature_version,
+                            timestamp_tolerance_seconds=signing_cfg.timestamp_tolerance_seconds,
+                        )
+                        app._federation_webhook_signature_service = signature_service
+                        app._federation_webhook_nonce_store = nonce_store
+                        app._federation_webhook_nonce_replay_protection = signing_cfg.nonce_replay_protection
 
-                    # Attach signature service to notification service if it exists
-                    ns = getattr(app, "_federation_notification_service", None)
-                    if ns is not None:
-                        ns._signature_service = signature_service
+                        # Attach signature service to notification service if it exists
+                        ns = getattr(app, "_federation_notification_service", None)
+                        if ns is not None:
+                            ns._signature_service = signature_service
+                    except Exception as exc:  # noqa: BLE001 — best-effort, but visible
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "Failed to initialize federation webhook signature service: %s", exc
+                        )
         except Exception:  # noqa: BLE001 — graceful failure
             pass
 

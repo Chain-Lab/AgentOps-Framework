@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from agent_app.config.loader import load_config
+from agent_app.config.loader import build_app, load_config
 from agent_app.config.schema import AppConfig
 
 
@@ -116,3 +116,36 @@ workflows:
         cfg = load_config(str(p))
         assert "customer_support" in cfg.workflows
         assert cfg.workflows["customer_support"]["type"] == "handoff"
+
+
+def test_build_app_wires_webhook_signature_service(tmp_path):
+    """Regression test: webhook_signing.enabled=true must actually construct
+    a working FederationWebhookSignatureService, not silently no-op.
+
+    Prior to the Phase 65 fix, this raised ModuleNotFoundError (wrong import
+    path) then TypeError (invalid constructor kwargs), both swallowed by a
+    bare `except Exception: pass` in loader.py.
+    """
+    config_path = tmp_path / "agentapp.yaml"
+    config_path.write_text("""
+app:
+  name: test-app
+governance:
+  policy_release:
+    rollout_federation:
+      enabled: true
+      notifications:
+        enabled: true
+        webhook_signing:
+          enabled: true
+          active_key_id: test-key
+          keys:
+            test-key: test-secret-value
+          timestamp_tolerance_seconds: 300
+""")
+    app = build_app(str(config_path))
+    service = app.federation_webhook_signature_service
+    assert service is not None
+    headers = service.sign("test-body")
+    assert headers["X-AgentApp-Signature"].startswith("v1=")
+    assert headers["X-AgentApp-Key-ID"] == "test-key"
