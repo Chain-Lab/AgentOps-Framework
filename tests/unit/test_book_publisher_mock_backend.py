@@ -52,24 +52,30 @@ async def test_run_output_differs_by_persona_traits():
     context = RunContext(run_id="r1", user_id="u1", tenant_id="t1")
     input_text = "Title: Deep Echo\nSummary: A crew finds an ancient signal."
 
-    children_spec = _agent_spec("book_writer__children", tone="playful", max_length=60)
-    adult_spec = _agent_spec("book_writer__adult", tone="measured", max_length=200)
+    children_spec = _agent_spec("book_writer__children", tone="playful")
+    adult_spec = _agent_spec("book_writer__adult", tone="measured")
 
     children_result = await backend.run(children_spec, input_text, context)
     adult_result = await backend.run(adult_spec, input_text, context)
 
     assert children_result.final_output != adult_result.final_output
-    assert len(children_result.final_output) <= 60
-    assert len(adult_result.final_output) <= 200
+    assert "playful" in children_result.final_output
+    assert "measured" in adult_result.final_output
 
 
 async def test_run_respects_max_length_truncation():
     backend = MockPersonaBackend()
-    spec = _agent_spec("book_writer__children", max_length=20)
     context = RunContext(run_id="r1", user_id="u1", tenant_id="t1")
+    long_input = "Title: Deep Echo\nSummary: " + ("x" * 500)
 
-    result = await backend.run(spec, "Title: Deep Echo\nSummary: " + ("x" * 500), context)
-    assert len(result.final_output) <= 20
+    truncated_spec = _agent_spec("book_writer__children", max_length=20)
+    untruncated_spec = _agent_spec("book_writer__children", max_length=10_000)
+
+    truncated_result = await backend.run(truncated_spec, long_input, context)
+    full_result = await backend.run(untruncated_spec, long_input, context)
+
+    assert len(truncated_result.final_output) == 20
+    assert full_result.final_output.startswith(truncated_result.final_output)
 
 
 async def test_stream_yields_run_started_and_completed_events():

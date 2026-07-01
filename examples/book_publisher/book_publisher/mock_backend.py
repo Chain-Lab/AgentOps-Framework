@@ -22,6 +22,10 @@ class MockPersonaBackend:
     """Renders persona-flavored book descriptions with zero network calls."""
 
     def _render(self, agent_spec: AgentSpec, input: str) -> str:
+        """Stable output shape `[reading_level | tone] book_text (extra)`, sliced to max_length.
+
+        Tests assert against this exact shape — changing it is a breaking change.
+        """
         meta = agent_spec.metadata
         tone = meta.get("tone", "")
         reading_level = meta.get("reading_level", "")
