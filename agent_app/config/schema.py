@@ -235,12 +235,30 @@ class PermissionConfig(BaseModel):
 class TracingConfig(BaseModel):
     """Observability tracing configuration."""
 
-    type: str = Field(default="memory", description="Tracer type: noop | memory | jsonl")
+    type: str = Field(default="memory", description="Tracer type: noop | memory | jsonl | otel")
     path: str | None = Field(default=None, description="Path for jsonl tracer")
     include_inputs: bool = Field(default=False, description="Include inputs in events")
     include_outputs: bool = Field(default=False, description="Include outputs in events")
     max_traces: int | None = Field(default=None, description="Max traces to retain in memory")
     max_events_per_trace: int | None = Field(default=None, description="Max events per trace in memory")
+    # Phase 65: OpenTelemetry exporter options
+    otel_service_name: str = Field(default="agent-app", description="OTel resource service.name")
+    otel_exporter: str = Field(default="console", description="OTel span exporter: console | otlp")
+    otel_otlp_endpoint: str | None = Field(default=None, description="OTLP HTTP endpoint (required when otel_exporter=otlp)")
+
+    @field_validator("type")
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
+        if v not in ("noop", "memory", "jsonl", "otel"):
+            raise ValueError(f"Invalid tracer type '{v}'. Must be: noop, memory, jsonl, otel")
+        return v
+
+    @field_validator("otel_exporter")
+    @classmethod
+    def _validate_otel_exporter(cls, v: str) -> str:
+        if v not in ("console", "otlp"):
+            raise ValueError(f"Invalid otel_exporter '{v}'. Must be: console, otlp")
+        return v
 
 
 # ---------------------------------------------------------------------------

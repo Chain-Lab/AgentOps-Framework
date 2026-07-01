@@ -1192,6 +1192,25 @@ class TestTracingConfigRetention:
         assert app.trace_collector._max_traces == 10
         assert app.trace_collector._max_events_per_trace == 5
 
+    def test_accepts_otel_type(self) -> None:
+        from agent_app.config.schema import TracingConfig
+        cfg = TracingConfig(type="otel")
+        assert cfg.type == "otel"
+        assert cfg.otel_service_name == "agent-app"
+        assert cfg.otel_exporter == "console"
+
+    def test_rejects_invalid_type(self) -> None:
+        from agent_app.config.schema import TracingConfig
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            TracingConfig(type="invalid")
+
+    def test_rejects_invalid_otel_exporter(self) -> None:
+        from agent_app.config.schema import TracingConfig
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            TracingConfig(otel_exporter="invalid")
+
 
 # ---------------------------------------------------------------------------
 # Phase 12 Step 6: OpenTelemetry bridge stub
