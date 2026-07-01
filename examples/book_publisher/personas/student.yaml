@@ -1,0 +1,6 @@
+name: student
+display_name: "Student"
+tone: "energetic, relatable, emphasizes growth and exploration"
+reading_level: "middle to high school"
+max_length: 500
+extra_instructions: "highlight teamwork and cross-disciplinary themes"

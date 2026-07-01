@@ -1,0 +1,6 @@
+name: adult
+display_name: "Adult"
+tone: "measured, restrained, balances literary voice with information density"
+reading_level: "high school and above"
+max_length: 800
+extra_instructions: "some suspense is fine, but do not spoil the ending"
