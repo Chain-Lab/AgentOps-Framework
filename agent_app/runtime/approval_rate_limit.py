@@ -100,6 +100,132 @@ class InMemoryApprovalRateLimiter(ApprovalRateLimiter):
             pass
 
 
+class SQLiteApprovalRateLimiter(ApprovalRateLimiter):
+    """SQLite-backed sliding-window rate limiter for approval creation.
+
+    Unlike InMemoryApprovalRateLimiter, state survives process restarts
+    and can be shared across multiple daemon/API instances pointed at the
+    same database file.
+    """
+
+    def __init__(
+        self,
+        max_requests: int = 10,
+        window_seconds: int = 60,
+        db_path: str = ".agent_app/approval_rate_limit.db",
+        audit_logger: AuditLogger | None = None,
+    ) -> None:
+        import sqlite3
+
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+        self._audit_logger = audit_logger
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._init_tables()
+
+    def _init_tables(self) -> None:
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS approval_rate_limit_hits (
+                key TEXT NOT NULL,
+                hit_time REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_arl_key_time
+                ON approval_rate_limit_hits(key, hit_time);
+        """)
+        self._conn.commit()
+
+    def _key(self, tenant_id: str | None, user_id: str | None, tool_name: str) -> str:
+        parts = [str(tenant_id or "_anon"), str(user_id or "_anon"), tool_name]
+        return "|".join(parts)
+
+    async def check_allowed(
+        self,
+        tenant_id: str | None,
+        user_id: str | None,
+        tool_name: str,
+    ) -> bool:
+        import time
+
+        key = self._key(tenant_id, user_id, tool_name)
+        now = time.time()
+        cutoff = now - self._window_seconds
+
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM approval_rate_limit_hits WHERE key=? AND hit_time<?",
+                (key, cutoff),
+            )
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS cnt FROM approval_rate_limit_hits WHERE key=?",
+                (key,),
+            ).fetchone()
+            count = row["cnt"] if row is not None else 0
+
+            if count >= self._max_requests:
+                await self._log_rate_limited(tenant_id, user_id, tool_name)
+                return False
+
+            self._conn.execute(
+                "INSERT INTO approval_rate_limit_hits (key, hit_time) VALUES (?, ?)",
+                (key, now),
+            )
+        return True
+
+    async def _log_rate_limited(
+        self,
+        tenant_id: str | None,
+        user_id: str | None,
+        tool_name: str,
+    ) -> None:
+        if self._audit_logger is None:
+            return
+        try:
+            await self._audit_logger.log(AuditEvent(
+                event_id=_make_event_id(),
+                run_id=None,
+                event_type="approval.rate_limited",
+                user_id=user_id,
+                tenant_id=tenant_id,
+                tool_name=tool_name,
+                data={
+                    "max_requests": self._max_requests,
+                    "window_seconds": self._window_seconds,
+                },
+            ))
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def create_approval_rate_limiter(
+    backend: str = "memory",
+    max_requests: int = 10,
+    window_seconds: int = 60,
+    db_path: str | None = None,
+    audit_logger: AuditLogger | None = None,
+) -> ApprovalRateLimiter:
+    """Factory for creating an ApprovalRateLimiter backend."""
+    if backend == "memory":
+        return InMemoryApprovalRateLimiter(
+            max_requests=max_requests,
+            window_seconds=window_seconds,
+            audit_logger=audit_logger,
+        )
+    if backend == "sqlite":
+        return SQLiteApprovalRateLimiter(
+            max_requests=max_requests,
+            window_seconds=window_seconds,
+            db_path=db_path or ".agent_app/approval_rate_limit.db",
+            audit_logger=audit_logger,
+        )
+    raise ValueError(f"Unknown rate limiter backend '{backend}'. Supported: 'memory', 'sqlite'.")
+
+
 def _make_event_id() -> str:
     import uuid
     return str(uuid.uuid4())
