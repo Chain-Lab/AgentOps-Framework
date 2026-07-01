@@ -665,6 +665,85 @@ class TestFederationWebhookCLI:
         finally:
             Path(body_path).unlink(missing_ok=True)
 
+    def test_webhook_verify_passes_nonce_store_when_replay_protection_enabled(self, capsys) -> None:
+        """Regression test: verify() must receive nonce_store when
+        nonce_replay_protection is enabled. Before the Task 2 fix,
+        nonce_store was never passed regardless of this config value."""
+        from agent_app.cli import _cmd_policy_federation_webhook_verify
+
+        sig_result = FederationWebhookSignatureResult(
+            valid=True,
+            matched_key_id="key_001",
+            signature_version="v1",
+            timestamp_valid=True,
+            nonce_valid=True,
+        )
+        service = MagicMock()
+        service.verify = MagicMock(return_value=sig_result)
+        nonce_store = MagicMock()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write('{"test": "payload"}')
+            body_path = f.name
+        try:
+            args = argparse.Namespace(
+                config="agentapp.yaml",
+                body_file=body_path,
+                signature="v1=abc123",
+                timestamp="2026-01-01T00:00:00Z",
+                nonce="nonce123",
+            )
+            app = MagicMock()
+            app.federation_webhook_signature_service = service
+            app.federation_webhook_nonce_store = nonce_store
+            app._federation_webhook_nonce_replay_protection = True
+            with patch("agent_app.config.loader.build_app", return_value=app):
+                rc = _run(_cmd_policy_federation_webhook_verify(args))
+            assert rc == 0
+            service.verify.assert_called_once()
+            call_kwargs = service.verify.call_args.kwargs
+            assert call_kwargs["nonce_store"] is nonce_store
+        finally:
+            Path(body_path).unlink(missing_ok=True)
+
+    def test_webhook_verify_skips_nonce_store_when_replay_protection_disabled(self, capsys) -> None:
+        """When nonce_replay_protection=False, nonce_store must NOT be
+        passed (explicit opt-out preserved)."""
+        from agent_app.cli import _cmd_policy_federation_webhook_verify
+
+        sig_result = FederationWebhookSignatureResult(
+            valid=True,
+            matched_key_id="key_001",
+            signature_version="v1",
+            timestamp_valid=True,
+            nonce_valid=None,
+        )
+        service = MagicMock()
+        service.verify = MagicMock(return_value=sig_result)
+        nonce_store = MagicMock()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write('{"test": "payload"}')
+            body_path = f.name
+        try:
+            args = argparse.Namespace(
+                config="agentapp.yaml",
+                body_file=body_path,
+                signature="v1=abc123",
+                timestamp="2026-01-01T00:00:00Z",
+                nonce="nonce123",
+            )
+            app = MagicMock()
+            app.federation_webhook_signature_service = service
+            app.federation_webhook_nonce_store = nonce_store
+            app._federation_webhook_nonce_replay_protection = False
+            with patch("agent_app.config.loader.build_app", return_value=app):
+                rc = _run(_cmd_policy_federation_webhook_verify(args))
+            assert rc == 0
+            service.verify.assert_called_once()
+            call_kwargs = service.verify.call_args.kwargs
+            assert call_kwargs["nonce_store"] is None
+        finally:
+            Path(body_path).unlink(missing_ok=True)
+
     def test_dlq_replay_original_non_webhook_rejected(self, capsys) -> None:
         """Replaying a non-webhook DLQ entry should show an error."""
         from agent_app.cli import _cmd_policy_federation_notification_dlq_replay_original

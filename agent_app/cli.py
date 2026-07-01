@@ -9859,12 +9859,16 @@ async def _cmd_policy_federation_webhook_verify(args: argparse.Namespace) -> int
         print(f"Error reading body file: {exc}", file=sys.stderr)
         return 1
 
+    nonce_store = getattr(app, "federation_webhook_nonce_store", None)
+    replay_protection = getattr(app, "_federation_webhook_nonce_replay_protection", True)
+
     try:
         result = signature_service.verify(
             body=body,
             signature=args.signature,
             timestamp_str=args.timestamp,
             nonce=args.nonce,
+            nonce_store=nonce_store if replay_protection else None,
         )
     except Exception as exc:
         print(f"Error verifying signature: {exc}", file=sys.stderr)
