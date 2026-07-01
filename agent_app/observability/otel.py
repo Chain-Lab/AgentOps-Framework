@@ -15,6 +15,7 @@ collector service — those are planned for a future phase.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from agent_app.observability.events import RunEvent
@@ -122,15 +123,7 @@ class OpenTelemetryTraceExporter:
 
 def _otel_trace_id_from_string(s: str) -> int:
     """Deterministically derive a 128-bit OTel trace ID from a RunEvent.trace_id string."""
-    import hashlib
     digest = hashlib.md5(s.encode("utf-8")).hexdigest()
-    return int(digest, 16)
-
-
-def _otel_span_id_from_string(s: str) -> int:
-    """Deterministically derive a 64-bit OTel span ID from a RunEvent.event_id string."""
-    import hashlib
-    digest = hashlib.md5(s.encode("utf-8")).hexdigest()[:16]
     return int(digest, 16)
 
 
@@ -215,40 +208,52 @@ class OtelTraceCollector:
 
         event_type = str(event.event_type.value if hasattr(event.event_type, "value") else event.event_type)
         trace_id = _otel_trace_id_from_string(event.trace_id)
-        span_id = _otel_span_id_from_string(event.event_id)
 
+        # The parent SpanContext requires a nonzero span_id, but there is no
+        # real parent span for these synthetic per-event spans — this is a
+        # fixed placeholder, not a meaningful identifier. Only trace_id is
+        # deterministic/meaningful here (it's what correlates all events
+        # sharing the same RunEvent.trace_id into one OTel trace); the
+        # exported span's own span_id is assigned by the SDK as usual.
+        _placeholder_parent_span_id = int.from_bytes(b"\x01" * 8, "big")
         parent_context = _trace.set_span_in_context(
             NonRecordingSpan(SpanContext(
                 trace_id=trace_id,
-                span_id=span_id,
+                span_id=_placeholder_parent_span_id,
                 is_remote=False,
                 trace_flags=TraceFlags(TraceFlags.SAMPLED),
             ))
         )
 
-        with self._tracer.start_as_current_span(event_type, context=parent_context) as span:
-            span.set_attribute("agent_app.trace_id", event.trace_id)
-            span.set_attribute("agent_app.event_id", event.event_id)
-            if event.run_id:
-                span.set_attribute("agent_app.run_id", event.run_id)
-            if event.user_id:
-                span.set_attribute("agent_app.user_id", event.user_id)
-            if event.tenant_id:
-                span.set_attribute("agent_app.tenant_id", event.tenant_id)
-            if event.workflow_name:
-                span.set_attribute("agent_app.workflow_name", event.workflow_name)
-            if event.agent_name:
-                span.set_attribute("agent_app.agent_name", event.agent_name)
-            if event.tool_name:
-                span.set_attribute("agent_app.tool_name", event.tool_name)
-            if event.status:
-                span.set_attribute("agent_app.status", event.status)
-            if event.error:
-                span.set_attribute("agent_app.error_type", event.error.get("type", ""))
-                span.record_exception(Exception(event.error.get("message", "")))
-            for k, v in event.data.items():
-                if isinstance(v, (str, int, float, bool)):
-                    span.set_attribute(f"agent_app.data.{k}", v)
+        start_time_ns = int(event.timestamp.timestamp() * 1_000_000_000)
+        end_time_ns = start_time_ns
+        if event.duration_ms is not None:
+            end_time_ns = start_time_ns + (event.duration_ms * 1_000_000)
+
+        span = self._tracer.start_span(event_type, context=parent_context, start_time=start_time_ns)
+        span.set_attribute("agent_app.trace_id", event.trace_id)
+        span.set_attribute("agent_app.event_id", event.event_id)
+        if event.run_id:
+            span.set_attribute("agent_app.run_id", event.run_id)
+        if event.user_id:
+            span.set_attribute("agent_app.user_id", event.user_id)
+        if event.tenant_id:
+            span.set_attribute("agent_app.tenant_id", event.tenant_id)
+        if event.workflow_name:
+            span.set_attribute("agent_app.workflow_name", event.workflow_name)
+        if event.agent_name:
+            span.set_attribute("agent_app.agent_name", event.agent_name)
+        if event.tool_name:
+            span.set_attribute("agent_app.tool_name", event.tool_name)
+        if event.status:
+            span.set_attribute("agent_app.status", event.status)
+        if event.error:
+            span.set_attribute("agent_app.error_type", event.error.get("type", ""))
+            span.record_exception(Exception(event.error.get("message", "")))
+        for k, v in event.data.items():
+            if isinstance(v, (str, int, float, bool)):
+                span.set_attribute(f"agent_app.data.{k}", v)
+        span.end(end_time=end_time_ns)
 
     async def get_events(self, trace_id: str) -> list[RunEvent]:
         return await self._buffer.get_events(trace_id)
