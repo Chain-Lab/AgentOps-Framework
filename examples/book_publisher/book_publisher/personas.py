@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
 from book_publisher.models import PersonaSpec
 
@@ -23,8 +24,11 @@ class PersonaRegistry:
     def load(cls, dir_path: str | Path) -> PersonaRegistry:
         registry = cls()
         for path in sorted(Path(dir_path).glob("*.yaml")):
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-            persona = PersonaSpec.model_validate(data)
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            try:
+                persona = PersonaSpec.model_validate(data)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid persona file '{path}': {exc}") from exc
             if persona.name in registry._personas:
                 raise ValueError(
                     f"Duplicate persona name '{persona.name}' found in {path}"
@@ -36,7 +40,13 @@ class PersonaRegistry:
         return list(self._personas.values())
 
     def get(self, name: str) -> PersonaSpec:
-        return self._personas[name]
+        try:
+            return self._personas[name]
+        except KeyError:
+            raise KeyError(
+                f"'{name}' is not a registered persona. "
+                f"Registered personas: {sorted(self._personas)}"
+            ) from None
 
     def __len__(self) -> int:
         return len(self._personas)
