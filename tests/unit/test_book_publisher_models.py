@@ -9,7 +9,7 @@ _EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "book_publishe
 if str(_EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(_EXAMPLE_DIR))
 
-from book_publisher.models import (
+from book_publisher.models import (  # noqa: E402
     BookInput,
     GeneratedContent,
     PersonaSpec,

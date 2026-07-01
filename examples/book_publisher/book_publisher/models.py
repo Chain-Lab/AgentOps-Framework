@@ -17,7 +17,7 @@ class BookInput(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "BookInput":
+    def from_yaml(cls, path: str | Path) -> BookInput:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         return cls.model_validate(data)
 
