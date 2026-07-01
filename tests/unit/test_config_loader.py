@@ -207,3 +207,61 @@ governance:
 
     assert len(calls) == 1
     assert calls[0]["backend"] == "memory"
+
+
+def test_build_app_wires_otel_trace_collector(tmp_path):
+    from agent_app.observability.otel import OtelTraceCollector
+
+    if not _otel_installed():
+        pytest.skip("opentelemetry not installed")
+
+    config_path = tmp_path / "agentapp.yaml"
+    config_path.write_text("""
+app:
+  name: test-app
+observability:
+  tracing:
+    type: otel
+    otel_service_name: test-app
+    otel_exporter: console
+""")
+    app = build_app(str(config_path))
+    assert isinstance(app.trace_collector, OtelTraceCollector)
+
+
+def test_build_app_raises_clear_error_when_otel_type_requested_without_package(tmp_path, monkeypatch):
+    """Regression: misconfiguration must surface at build_app() time, not
+    fail silently or crash deep inside a run."""
+    import builtins
+    import sys
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("opentelemetry"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    for mod in list(sys.modules):
+        if mod.startswith("opentelemetry"):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+
+    config_path = tmp_path / "agentapp.yaml"
+    config_path.write_text("""
+app:
+  name: test-app
+observability:
+  tracing:
+    type: otel
+""")
+    with pytest.raises(RuntimeError, match="OpenTelemetry"):
+        build_app(str(config_path))
+
+
+def _otel_installed() -> bool:
+    try:
+        import opentelemetry.sdk.trace  # noqa: F401
+        return True
+    except ImportError:
+        return False

@@ -346,7 +346,7 @@ def build_app(
         rate_limiter=rate_limiter,
     )
 
-    # -- Observability: trace collector (Phase 12) --
+    # -- Observability: trace collector (Phase 12, otel added Phase 65) --
     trace_collector: Any = None
     obs_cfg = getattr(config, "observability", None)
     if obs_cfg and obs_cfg.tracing and obs_cfg.tracing.type != "noop":
@@ -361,6 +361,20 @@ def build_app(
             from agent_app.observability.exporters import JSONLTraceCollector
             path = obs_cfg.tracing.path or ".agent_app/traces.jsonl"
             trace_collector = JSONLTraceCollector(path=path)
+        elif tracing_type == "otel":
+            from agent_app.observability.otel import OtelTraceCollector, OpenTelemetryNotInstalledError
+            try:
+                trace_collector = OtelTraceCollector(
+                    service_name=obs_cfg.tracing.otel_service_name,
+                    exporter=obs_cfg.tracing.otel_exporter,
+                    otlp_endpoint=obs_cfg.tracing.otel_otlp_endpoint,
+                    max_traces=obs_cfg.tracing.max_traces,
+                    max_events_per_trace=obs_cfg.tracing.max_events_per_trace,
+                )
+            except OpenTelemetryNotInstalledError as exc:
+                raise RuntimeError(
+                    f"tracing.type is 'otel' but OpenTelemetry is not installed: {exc}"
+                ) from exc
 
     app = AgentApp(
         registry=_bundle(agent_registry, tool_registry, workflow_registry),
