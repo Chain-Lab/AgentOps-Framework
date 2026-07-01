@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 
 from agent_app.core.context import RunContext
+from agent_app.governance.risk import ApprovalStatus
 
 from book_publisher.models import (
     BookInput,
@@ -29,15 +30,25 @@ from book_publisher.platforms import PlatformRegistry
 async def generate_content(
     app, book: BookInput, personas: PersonaRegistry
 ) -> dict[str, GeneratedContent]:
-    """Runs the book_generation DAG and collects one GeneratedContent per persona."""
+    """Runs the book_generation DAG and collects one GeneratedContent per persona.
+
+    Raises RuntimeError naming any persona whose write_{persona} node did not
+    complete, rather than silently omitting it — a caller with a partial
+    `generated` dict has no way to tell "persona wasn't configured" apart
+    from "persona's generation failed" without this.
+    """
     result = await app.run(workflow="book_generation", input=book.to_prompt_text())
 
     generated: dict[str, GeneratedContent] = {}
+    failed: dict[str, str] = {}
     for node_result in result.node_results:
         node_id = node_result["node_id"]
-        if not node_id.startswith("write_") or node_result["status"] != "completed":
+        if not node_id.startswith("write_"):
             continue
         persona_name = node_id.removeprefix("write_")
+        if node_result["status"] != "completed":
+            failed[persona_name] = node_result["status"]
+            continue
         generated[persona_name] = GeneratedContent(
             persona=persona_name,
             book_title=book.title,
@@ -46,6 +57,11 @@ async def generate_content(
             status=node_result["status"],
             tags=book.tags,
         )
+
+    if failed:
+        details = ", ".join(f"{name} ({status})" for name, status in sorted(failed.items()))
+        raise RuntimeError(f"Content generation failed for persona(s): {details}")
+
     return generated
 
 
@@ -123,7 +139,24 @@ async def complete_approved_publish(
     integration, not usable here). tool_registry.get_fn() is the legitimate,
     publicly-exposed escape hatch: it returns the exact same callable
     ToolExecutor would have invoked had the approval gate not fired.
+
+    Because this bypasses ToolExecutor.execute() (and the permission/audit
+    logging it would normally perform), the approval itself must be checked
+    here explicitly — ToolExecutor's approval gate is the only thing that
+    would otherwise have enforced it.
     """
+    if receipt.approval_id is None:
+        raise ValueError(
+            f"Receipt for persona '{receipt.persona}' / platform '{receipt.platform}' "
+            "has no approval_id — it was never gated on approval."
+        )
+    approval = await app.approval_store.get(receipt.approval_id)
+    if approval.status != ApprovalStatus.APPROVED:
+        raise ValueError(
+            f"Cannot complete publish: approval '{receipt.approval_id}' is "
+            f"'{approval.status}', not '{ApprovalStatus.APPROVED}'."
+        )
+
     content = generated[receipt.persona]
     fn = app.tool_registry.get_fn(f"publish_{receipt.platform}")
     result_dict = await fn(

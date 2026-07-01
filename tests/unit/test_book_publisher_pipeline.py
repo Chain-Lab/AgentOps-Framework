@@ -9,6 +9,8 @@ _EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "book_publishe
 if str(_EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(_EXAMPLE_DIR))
 
+import pytest
+
 from book_publisher.build_app import build_app
 from book_publisher.models import BookInput
 from book_publisher.pipeline import complete_approved_publish, generate_content, publish_all
@@ -95,3 +97,20 @@ async def test_approve_then_complete_approved_publish_marks_it_published(tmp_pat
     assert completed.status == "published"
     assert completed.platform == pending.platform
     assert completed.persona == pending.persona
+
+
+async def test_complete_approved_publish_rejects_unapproved_receipt(tmp_path):
+    """Regression test: complete_approved_publish must not bypass the approval
+    gate — calling it before app.approve() must be rejected, not silently
+    publish the high-risk content."""
+    bp_app = build_app(log_path=tmp_path / "log.jsonl")
+    book = _book()
+    generated = await generate_content(bp_app.app, book, bp_app.personas)
+    report = await publish_all(
+        bp_app.app, bp_app.tool_executor, book, bp_app.personas, bp_app.platforms, generated
+    )
+
+    pending = next(r for r in report.receipts if r.status == "approval_required")
+
+    with pytest.raises(ValueError):
+        await complete_approved_publish(bp_app.app, book, generated, pending)
