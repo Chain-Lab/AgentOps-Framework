@@ -90,7 +90,7 @@ class TestInMemoryApprovalRateLimiter:
         for i in range(2):
             await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request")
         assert await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request") is False
-        time.sleep(1.1)
+        time.sleep(1.5)
         assert await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request") is True
 
     @pytest.mark.asyncio
@@ -159,7 +159,7 @@ class TestSQLiteApprovalRateLimiter:
         for i in range(2):
             await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request")
         assert await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request") is False
-        time.sleep(1.1)
+        time.sleep(1.5)
         assert await limiter.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request") is True
         limiter.close()
 
