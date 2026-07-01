@@ -1224,14 +1224,37 @@ class TestOpenTelemetryBridge:
         # This should not raise — the module itself must not import opentelemetry at top level
         import agent_app.observability.otel  # noqa: F401
 
-    def test_exporter_raises_without_opentelemetry(self):
+    @staticmethod
+    def _simulate_opentelemetry_missing(monkeypatch):
+        """Force `import opentelemetry...` to fail, regardless of whether the
+        real package is installed in this environment (Phase 65 installs it
+        as an optional extra, so these tests can no longer rely on ambient
+        absence)."""
+        import sys
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("opentelemetry"):
+                raise ImportError(f"No module named '{name}'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        for mod in list(sys.modules):
+            if mod.startswith("opentelemetry"):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
+
+    def test_exporter_raises_without_opentelemetry(self, monkeypatch):
         """Instantiating exporter without opentelemetry gives clear error."""
+        self._simulate_opentelemetry_missing(monkeypatch)
         import agent_app.observability.otel as otel_mod
         with pytest.raises(otel_mod.OpenTelemetryNotInstalledError, match="pip install"):
             otel_mod.OpenTelemetryTraceExporter()
 
-    def test_exporter_error_message(self):
+    def test_exporter_error_message(self, monkeypatch):
         """Error message contains the correct pip install command."""
+        self._simulate_opentelemetry_missing(monkeypatch)
         import agent_app.observability.otel as otel_mod
         try:
             otel_mod.OpenTelemetryTraceExporter()
@@ -1239,8 +1262,9 @@ class TestOpenTelemetryBridge:
             assert "agent-app-framework[otel]" in str(exc)
 
     @pytest.mark.asyncio
-    async def test_export_events_raises_without_otel(self):
+    async def test_export_events_raises_without_otel(self, monkeypatch):
         """export_events also raises when opentelemetry is not installed."""
+        self._simulate_opentelemetry_missing(monkeypatch)
         import agent_app.observability.otel as otel_mod
         exporter = otel_mod.OpenTelemetryTraceExporter.__new__(otel_mod.OpenTelemetryTraceExporter)
         exporter._service_name = "test"
