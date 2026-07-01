@@ -1,0 +1,57 @@
+# Git and Python artifacts
+.git/
+.gitignore
+.github/
+.gitlab-ci.yml
+.pre-commit-config.yaml
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.conda/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Local data and logs
+.agent_app/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# Project-specific
+.agent_app/
+control_plane.db
+
+# Phase 64 internal artifacts
+docker/*.sh

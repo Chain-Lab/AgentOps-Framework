@@ -1,0 +1,22 @@
+# Phase 64 — Kubernetes PodDisruptionBudget for agent-app daemon
+#
+# Single replica + SQLite = no HA guarantee.
+# minAvailable: 0 allows voluntary eviction (node drain, cluster upgrade).
+# This prevents PDB from blocking cluster operations while acknowledging
+# that single-replica is not highly available.
+#
+# For multi-replica (future), consider minAvailable: 1 or maxUnavailable: 1.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-app-daemon-pdb
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-app-daemon
+      app.kubernetes.io/part-of: agent-app-framework

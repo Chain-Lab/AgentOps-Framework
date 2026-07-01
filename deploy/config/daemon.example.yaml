@@ -1,0 +1,103 @@
+# ============================================================================
+# Phase 64 — Daemon deployment config example (generic / local)
+# ============================================================================
+# Covers Phase 61/62/63 daemon configuration fields.
+# Use this as a reference for custom deployments.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# App metadata
+# ---------------------------------------------------------------------------
+app:
+  name: agent-app-daemon
+  environment: production
+
+# ---------------------------------------------------------------------------
+# Alert delivery retry daemon
+# ---------------------------------------------------------------------------
+# Phase 55: Core daemon settings
+runtime:
+  alerts:
+    delivery:
+      retry_daemon:
+        # ---- Core daemon controls (Phase 55) ----
+        enabled: true
+        interval_seconds: 60.0
+        jitter_seconds: 5.0
+        batch_limit: 100
+        stop_on_error: false
+        run_immediately: true
+
+        # ---- Daemon identity (Phase 57) ----
+        daemon_id: default
+        worker_id: null
+        claim_lease_seconds: 300
+        reset_expired_leases_on_run: true
+
+        # ---- Daemon state store (Phase 57) ----
+        # state_store:
+        #   type: memory
+
+        # ---- Distributed lock (Phase 60) ----
+        distributed_lock_enabled: false
+        lock_name: notification-replay-daemon
+        lock_lease_seconds: 30
+        lock_renew_interval_seconds: 10
+
+        # ---- Webhook key rotation (Phase 60) ----
+        key_rotation_enabled: false
+
+        # ---- Replay idempotency (Phase 60) ----
+        idempotency_enabled: false
+        idempotency_ttl_hours: 24
+
+        # ---- Rate limiting (Phase 60) ----
+        rate_limit_enabled: false
+        rate_limit_window_seconds: 60
+        rate_limit_max_attempts: 10
+        rate_limit_scope: target
+
+        # ---- Dead letter queue (Phase 60) ----
+        dead_letter_enabled: false
+        dead_letter_max_retries: 5
+
+        # ---- Continuous loop controls (Phase 61) ----
+        poll_interval_seconds: 1.0
+        idle_sleep_seconds: 1.0
+        error_sleep_seconds: 5.0
+        max_consecutive_errors: 10
+        shutdown_timeout_seconds: 10.0
+
+        # ---- Graceful shutdown / drain (Phase 62) ----
+        graceful_shutdown_enabled: true
+        drain_timeout_seconds: 30.0
+        cancel_inflight_on_timeout: true
+
+        # ---- Metrics ring buffer (Phase 62) ----
+        metrics_buffer_enabled: true
+        metrics_buffer_max_size: 1000
+        metrics_flush_interval_seconds: 10.0
+        flush_metrics_on_stop: true
+
+        # ---- Lock lease extension (Phase 62) ----
+        renew_lock_during_batch: true
+        lock_renewal_failure_policy: standby
+
+        # ---- Health HTTP server (Phase 62) ----
+        health_http_enabled: false
+        health_http_host: 127.0.0.1
+        health_http_port: 8080
+        ready_requires_leader: false
+
+        # ---- Persistent control plane (Phase 63) ----
+        control_plane_enabled: false
+        control_plane_db_path: .agent_app/control_plane.db
+        control_command_poll_interval_seconds: 1.0
+        control_command_max_age_seconds: 86400
+
+        # ---- Control HTTP server (Phase 63) ----
+        control_http_enabled: false
+        control_http_host: 127.0.0.1
+        control_http_port: 8090
+        control_http_token: null
+        control_http_token_env: AGENT_APP_CONTROL_TOKEN

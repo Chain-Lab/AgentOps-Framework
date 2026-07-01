@@ -1,0 +1,49 @@
+# Phase 64 — Kubernetes Job for pre-deployment config validation
+#
+# Runs agent-app daemon validate-config against the ConfigMap config
+# before the Deployment is applied. Fails fast if config is invalid.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-app-validate-config
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: validate-config
+          image: agent-app:0.49.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /opt/agent-app/.venv/bin/agent-app
+          args:
+            - alerts
+            - delivery
+            - daemon
+            - validate-config
+            - --config
+            - /app/config/daemon.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: agent-app-daemon-config

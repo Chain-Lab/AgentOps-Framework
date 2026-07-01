@@ -1,0 +1,26 @@
+# Phase 64 — Kubernetes Service for agent-app daemon
+#
+# Exposes health (8080) and control (8090) ports within the cluster.
+# Type: ClusterIP (default) — use NodePort or LoadBalancer if needed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-app-daemon
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+  ports:
+    - name: health
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: control
+      port: 8090
+      targetPort: 8090
+      protocol: TCP

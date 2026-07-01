@@ -1,0 +1,74 @@
+# Phase 64 — Kubernetes NetworkPolicy for agent-app daemon
+#
+# Conservative default: restrict ingress to health/control ports.
+#
+# Policy rules:
+# 1. Allow DNS (required for K8s cluster operation)
+# 2. Allow health port (8080) from same namespace (for K8s probes)
+# 3. Allow control port (8090) from pods with label app=operator
+#    (adjust as needed for your operator namespace)
+# 4. Default deny all other ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-app-daemon-network-policy
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-app-daemon
+      app.kubernetes.io/part-of: agent-app-framework
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # ---- Ingress rules ----
+  ingress:
+    # Allow health port from same namespace (K8s probes, Service mesh)
+    - from:
+        - podSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-app
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow control port from operator-labeled pods
+    # Adjust the from selector to match your operator's namespace/labels
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-app
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agent-app-operator
+      ports:
+        - protocol: TCP
+          port: 8090
+
+  # ---- Egress rules ----
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow outbound HTTP/HTTPS for alert delivery
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

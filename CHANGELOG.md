@@ -2,6 +2,48 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.49.0 — Phase 64: Kubernetes and Deployment Hardening
+
+### Added
+- Dockerfile: multi-stage slim Python image with non-root user (`agent-app`), HEALTHCHECK instruction
+- `.dockerignore`: excludes `.git`, `.venv`, `__pycache__`, local DBs, logs
+- `docker/entrypoint.sh`: config validation, version info, command dispatch
+- `docker/healthcheck.sh`: Python stdlib-based `/health` check (no curl dependency)
+- Kubernetes manifests: Namespace, ServiceAccount, ConfigMap, Secret, PVC, Deployment, Service, NetworkPolicy, PodDisruptionBudget, validate-config Job
+- K8s Deployment: replicas=1, non-root securityContext, readOnlyRootFilesystem, liveness/readiness/startup probes, preStop drain hook, terminationGracePeriodSeconds=60
+- K8s ConfigMap: daemon YAML with Phase 61/62/63 fields, health_http_enabled=true, control_plane_enabled=true
+- K8s Secret: control token placeholder with README warning
+- K8s PVC: 1Gi ReadWriteOnce for SQLite control plane DB
+- K8s NetworkPolicy: conservative ingress restriction (health from same-namespace, control from operator)
+- K8s PodDisruptionBudget: minAvailable=0 (single-replica SQLite, no HA)
+- systemd unit template: security hardening (NoNewPrivileges, PrivateTmp, ProtectSystem, ProtectHome), ExecStop drain
+- systemd environment file template with config paths
+- Deployment config templates: `daemon.example.yaml`, `daemon.kubernetes.yaml`, `daemon.systemd.yaml`
+- Smoke test scripts: `smoke_docker.sh`, `smoke_k8s_manifests.sh`, `smoke_control_plane.sh`
+- Deployment documentation: `docs/deployment_phase64.md` with Docker, K8s, systemd, control plane, rollback, troubleshooting
+- Release checklist: `docs/release_checklist_phase64.md`
+- 72 new Phase 64 unit tests across 5 test files
+
+### Changed
+- Version: 0.48.0 → 0.49.0
+
+## v0.48.0 — Phase 63: Persistent Approval / Control Plane
+
+### Added
+- Persistent control plane store (`ControlPlaneStore`): SQLite-backed control command state machine (PENDING → ACCEPTED → RUNNING → COMPLETED/FAILED/REJECTED/EXPIRED)
+- Persistent approval store (`PersistentApprovalStore`): operator approve/reject/expire lifecycle for shutdown and pause requests
+- Persistent audit store (`PersistentAuditStore`): append-only audit events with filters for event_type, command_id, approval_id
+- Control HTTP server (`_ControlHTTPServer`): stdlib-based REST API with Bearer token authentication
+- Daemon control polling: background asyncio task polls pending commands, executes them, writes audit events
+- Daemon control commands: pause (skip batch processing), resume (unpause), drain, shutdown, flush_metrics, release_lock, health_snapshot
+- Health status extensions: `control_plane_enabled`, `control_paused`, `last_control_command_id`, `last_control_error`, `pending_control_commands`, `pending_approvals`
+- CLI control commands: `daemon control status`, `daemon control commands list/send/get`
+- Config extensions: `control_plane_enabled`, `control_plane_db_path`, `control_command_poll_interval_seconds`, `control_http_*`
+- 79 new Phase 63 unit tests across 5 test files
+
+### Changed
+- `AlertDeliveryRetryDaemon`: control plane stores lazily initialized, start/stop wired for polling + HTTP server, `_loop()` respects `_control_paused`
+
 ## v0.47.0 — Phase 62: Daemon Production Operations Hardening
 
 ### Added

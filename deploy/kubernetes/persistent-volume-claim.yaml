@@ -1,0 +1,24 @@
+# Phase 64 — Kubernetes PersistentVolumeClaim for control plane SQLite DB
+#
+# IMPORTANT: SQLite is a single-writer database. This PVC is designed for
+# a SINGLE replica deployment. Multi-replica deployments require:
+# - A shared storage backend (NFS, CSI with ReadWriteMany), OR
+# - A future PostgreSQL/Redis control plane backend (not in Phase 64)
+#
+# Do NOT scale the Deployment above replicas: 1 without changing the
+# control plane backend.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-app-control-plane-pvc
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard  # Uncomment and set to your cluster's default

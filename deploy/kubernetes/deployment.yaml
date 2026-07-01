@@ -1,0 +1,164 @@
+# Phase 64 — Kubernetes Deployment for agent-app daemon
+#
+# Default: single replica with SQLite control plane.
+# For multi-replica, see PVC limitations in persistent-volume-claim.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-app-daemon
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+    app.kubernetes.io/version: "0.49.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-app-daemon
+      app.kubernetes.io/part-of: agent-app-framework
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-app-daemon
+        app.kubernetes.io/part-of: agent-app-framework
+        app.kubernetes.io/version: "0.49.0"
+      annotations:
+        # Prometheus scraping annotation (if Prometheus Operator is used)
+        # prometheus.io/scrape: "true"
+        # prometheus.io/port: "8080"
+    spec:
+      # Non-root security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      serviceAccountName: agent-app-daemon
+
+      # Graceful termination: SIGTERM → drain → wait → SIGKILL
+      # Must be >= drain_timeout_seconds (30s) + buffer
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: agent-app-daemon
+          # Replace with your registry/image:tag
+          image: agent-app:0.49.0
+          imagePullPolicy: IfNotPresent
+
+          # Container security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          # Command uses absolute path to venv binary in production
+          # Override via args if using a different layout
+          command:
+            - /opt/agent-app/.venv/bin/agent-app
+          args:
+            - alerts
+            - delivery
+            - daemon
+            - serve
+            - --config
+            - /app/config/daemon.yaml
+
+          # Ports
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+            - name: control
+              containerPort: 8090
+              protocol: TCP
+
+          # Environment
+          env:
+            - name: AGENT_APP_CONFIG
+              value: /app/config/daemon.yaml
+            - name: AGENT_APP_CONTROL_DB
+              value: /data/control_plane.db
+            - name: AGENT_APP_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-app-daemon-secret
+                  key: AGENT_APP_CONTROL_TOKEN
+
+          # Volume mounts
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+
+          # Resource requests/limits
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          # Liveness probe — restarts pod if daemon is unresponsive
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # Readiness probe — removes pod from Service if not ready
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # Startup probe — gives daemon time to initialize
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 5
+            failureThreshold: 30
+
+          # Graceful termination: drain before shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    agent-app alerts delivery daemon control commands send \
+                      --db /data/control_plane.db \
+                      --command drain \
+                      --requested-by k8s-prestop \
+                      --reason "Pod termination" || true
+                    sleep 5
+
+      # Volumes
+      volumes:
+        - name: config
+          configMap:
+            name: agent-app-daemon-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: agent-app-control-plane-pvc
+        - name: tmp
+          emptyDir: {}

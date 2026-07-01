@@ -1,0 +1,71 @@
+# Phase 64 — Kubernetes ConfigMap for daemon configuration
+#
+# Contains the daemon YAML config with Phase 61/62/63 fields.
+# Mounted as /app/config/daemon.yaml in the pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-app-daemon-config
+  namespace: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app-daemon
+    app.kubernetes.io/part-of: agent-app-framework
+data:
+  daemon.yaml: |
+    app:
+      name: agent-app-daemon
+      environment: production
+    runtime:
+      alerts:
+        delivery:
+          retry_daemon:
+            enabled: true
+            interval_seconds: 60.0
+            jitter_seconds: 5.0
+            batch_limit: 100
+            stop_on_error: false
+            run_immediately: true
+            daemon_id: default
+            worker_id: null
+            claim_lease_seconds: 300
+            reset_expired_leases_on_run: true
+            distributed_lock_enabled: false
+            lock_name: notification-replay-daemon
+            lock_lease_seconds: 30
+            lock_renew_interval_seconds: 10
+            key_rotation_enabled: false
+            rate_limit_enabled: false
+            rate_limit_window_seconds: 60
+            rate_limit_max_attempts: 10
+            rate_limit_scope: target
+            idempotency_enabled: false
+            idempotency_ttl_hours: 24
+            dead_letter_enabled: false
+            dead_letter_max_retries: 5
+            poll_interval_seconds: 1.0
+            idle_sleep_seconds: 1.0
+            error_sleep_seconds: 5.0
+            max_consecutive_errors: 10
+            shutdown_timeout_seconds: 10.0
+            graceful_shutdown_enabled: true
+            drain_timeout_seconds: 30.0
+            cancel_inflight_on_timeout: true
+            metrics_buffer_enabled: true
+            metrics_buffer_max_size: 1000
+            metrics_flush_interval_seconds: 10.0
+            flush_metrics_on_stop: true
+            renew_lock_during_batch: true
+            lock_renewal_failure_policy: standby
+            health_http_enabled: true
+            health_http_host: 0.0.0.0
+            health_http_port: 8080
+            ready_requires_leader: false
+            control_plane_enabled: true
+            control_plane_db_path: /data/control_plane.db
+            control_command_poll_interval_seconds: 1.0
+            control_command_max_age_seconds: 86400
+            control_http_enabled: true
+            control_http_host: 0.0.0.0
+            control_http_port: 8090
+            control_http_token: null
+            control_http_token_env: AGENT_APP_CONTROL_TOKEN

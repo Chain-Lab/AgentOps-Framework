@@ -1,0 +1,58 @@
+# ============================================================================
+# Phase 64 — systemd unit file for agent-app daemon
+# ============================================================================
+# Install:
+#   sudo cp agent-app-daemon.service /etc/systemd/system/
+#   sudo cp agent-app-daemon.env /etc/agent-app/agent-app-daemon.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now agent-app-daemon
+# ============================================================================
+
+[Unit]
+Description=Agent App Delivery Retry Daemon
+Documentation=https://github.com/agentops/agent-app-framework
+After=network-online.target
+Wants=network-online.target
+
+# If you use a local database (e.g., SQLite), ensure it's available
+# Before=local-fs.target
+
+[Service]
+Type=simple
+User=agent-app
+Group=agent-app
+WorkingDirectory=/opt/agent-app
+
+# Environment file — contains AGENT_APP_CONFIG, AGENT_APP_CONTROL_TOKEN, etc.
+EnvironmentFile=/etc/agent-app/agent-app-daemon.env
+
+# Main daemon command
+# Uses venv Python directly for reliability (no PATH dependency)
+ExecStart=/opt/agent-app/.venv/bin/agent-app alerts delivery daemon serve --config ${AGENT_APP_CONFIG}
+
+# Graceful stop: send drain command via control API before shutdown
+# || true ensures stop doesn't fail if control API is unreachable
+ExecStop=/opt/agent-app/.venv/bin/agent-app alerts delivery daemon control commands send \
+  --db ${AGENT_APP_CONTROL_DB} \
+  --command drain \
+  --requested-by systemd \
+  --reason "systemd stop" || true
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Timeouts
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+# ---- Security hardening ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# If logs go to /var/log, add:
+# ReadWritePaths=/var/log/agent-app /var/lib/agent-app
+
+[Install]
+WantedBy=multi-user.target

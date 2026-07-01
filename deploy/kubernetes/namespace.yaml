@@ -1,0 +1,8 @@
+# Phase 64 — Kubernetes namespace for agent-app
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-app
+  labels:
+    app.kubernetes.io/name: agent-app
+    app.kubernetes.io/part-of: agent-app-framework
