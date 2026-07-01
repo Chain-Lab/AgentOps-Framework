@@ -2,6 +2,24 @@
 
 All notable changes to Agent App Framework are documented here.
 
+## v0.50.0 — Phase 65: Gap Closure — Webhook Signing Fix, Rate Limiter Persistence, OpenTelemetry
+
+### Fixed
+- Federation webhook signature service loader wiring: two independent bugs (wrong import module paths, invalid constructor kwargs) meant `webhook_signing.enabled: true` silently did nothing since Phase 51 — the failure was swallowed by a bare `except Exception: pass`. Now correctly wires `FederationWebhookSignatureService`.
+- `nonce_replay_protection` config field: previously never read anywhere (even the CLI `webhook verify` command never passed `nonce_store` to `verify()`). Now the CLI verify command reads the config flag and nonce store off the app and enforces replay detection accordingly.
+- `require_promotion_approval` config field: previously `execute_promotion()` unconditionally required `APPROVED` status regardless of this flag (fail-safe but non-functional). Now `false` allows executing promotions directly from a non-approved status; `true` (default) is unchanged.
+
+### Added
+- `SQLiteApprovalRateLimiter`: persistent, cross-instance approval rate limiting backend (WAL-mode SQLite with `BEGIN IMMEDIATE` for cross-connection safety), selectable via new `RateLimitConfig.backend`/`db_path` fields. Previously only an in-process, restart-losing in-memory limiter existed.
+- `OtelTraceCollector`: OpenTelemetry integration as a fourth `TracingConfig.type` option (`otel`), dual-writing every `RunEvent` as both a real OTel span (console or OTLP HTTP exporter, with accurate start/end timestamps from `RunEvent.timestamp`/`duration_ms`) and to an internal in-memory buffer so existing `get_events()`/`list_traces()` consumers (FastAPI trace endpoints, CLI trace commands) keep working.
+- `opentelemetry-exporter-otlp-proto-http` added to the `otel` optional dependency group.
+- Backfilled `docs/release_checklist_phase{59,60,61,63}.md` — four phases that shipped without a standalone release checklist document (Phase 56 and 58 were investigated but found to have no standalone CHANGELOG entry of their own; their work was folded into Phase 57 and Phase 59 respectively, so no checklist was fabricated for them).
+
+### Changed
+- `PolicyReleaseService.__init__` gained `require_promotion_approval: bool = True` parameter.
+- `ApprovalRateLimiter` construction in `config/loader.py` now goes through a `create_approval_rate_limiter()` factory instead of hardcoding `InMemoryApprovalRateLimiter`.
+- Fixed a pre-existing bug in `AppConfig._normalize_dicts_to_lists` where `governance.rate_limit` YAML blocks were silently dropped before validation (missing from a hardcoded section whitelist) — discovered while adding rate limiter backend selection tests.
+
 ## v0.49.0 — Phase 64: Kubernetes and Deployment Hardening
 
 ### Added
