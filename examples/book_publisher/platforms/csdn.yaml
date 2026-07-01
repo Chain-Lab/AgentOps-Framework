@@ -1,0 +1,7 @@
+name: csdn
+display_name: "CSDN"
+max_length: 4000
+format: markdown
+hashtag_style: "#{tag}"
+risk_level: low
+requires_approval: false
