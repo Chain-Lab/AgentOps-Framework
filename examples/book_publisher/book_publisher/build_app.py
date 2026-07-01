@@ -8,8 +8,8 @@ AgentApp directly, with every registry and governance store explicit.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 from agent_app import AgentApp, AgentSpec, Workflow
 from agent_app.governance.approval import InMemoryApprovalStore
@@ -28,6 +28,19 @@ from book_publisher.publishers.mock import MockPublisher
 from book_publisher.tools import build_publish_tools
 
 _EXAMPLE_DIR = Path(__file__).resolve().parent.parent
+
+
+@dataclass
+class _RegistryBundle:
+    """Duck-types as AgentApp's registry= argument (agent_registry/tool_registry/
+    workflow_registry attributes), isolated per build_app() call — NOT the
+    process-global default ToolRegistry that AgentApp() falls back to when
+    registry= is omitted.
+    """
+
+    agent_registry: AgentRegistry
+    tool_registry: ToolRegistry
+    workflow_registry: WorkflowRegistry
 
 
 class BookPublisherApp:
@@ -52,6 +65,12 @@ def build_app(
     prompt_path: str | Path | None = None,
     log_path: str | Path | None = None,
 ) -> BookPublisherApp:
+    """Load personas/platforms from YAML and assemble the AgentApp + ToolExecutor bundle.
+
+    All directory/path arguments default to the paths shipped alongside this
+    example (examples/book_publisher/{personas,platforms,prompts}/); override
+    them for tests or alternate persona/platform sets.
+    """
     personas_dir = Path(personas_dir) if personas_dir else _EXAMPLE_DIR / "personas"
     platforms_dir = Path(platforms_dir) if platforms_dir else _EXAMPLE_DIR / "platforms"
     prompt_path = (
@@ -61,9 +80,7 @@ def build_app(
     personas = PersonaRegistry.load(personas_dir)
     platforms = PlatformRegistry.load(platforms_dir)
 
-    # Explicit, isolated registries — NOT the process-global default
-    # ToolRegistry that AgentApp() falls back to when registry= is omitted.
-    registry = SimpleNamespace(
+    registry = _RegistryBundle(
         agent_registry=AgentRegistry(),
         tool_registry=ToolRegistry(),
         workflow_registry=WorkflowRegistry(),
@@ -82,7 +99,7 @@ def build_app(
     )
 
     template = prompt_path.read_text(encoding="utf-8")
-    dag_nodes = []
+    dag_nodes: list[dict[str, str]] = []
     for persona in personas.all():
         agent_name = f"book_writer__{persona.name}"
         instructions = template.format(
@@ -107,6 +124,8 @@ def build_app(
         )
         dag_nodes.append({"id": f"write_{persona.name}", "type": "agent", "ref": agent_name})
 
+    # Safe to run in parallel: each persona's write_{name} node is fully
+    # independent — no shared mutable state, no cross-persona ordering.
     wf = Workflow.dag(name="book_generation", nodes=dag_nodes, execution_mode="parallel")
     app.register_workflow(wf)
 
