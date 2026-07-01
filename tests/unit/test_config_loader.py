@@ -151,7 +151,8 @@ governance:
     assert headers["X-AgentApp-Key-ID"] == "test-key"
 
 
-def test_build_app_wires_sqlite_rate_limiter(tmp_path, monkeypatch):
+def _patch_rate_limiter_factory(monkeypatch):
+    """Intercept create_approval_rate_limiter calls; returns the list of kwargs each call received."""
     calls = []
 
     def fake_create_approval_rate_limiter(**kwargs):
@@ -163,6 +164,11 @@ def test_build_app_wires_sqlite_rate_limiter(tmp_path, monkeypatch):
 
     import agent_app.runtime.approval_rate_limit as rl_module
     monkeypatch.setattr(rl_module, "create_approval_rate_limiter", fake_create_approval_rate_limiter)
+    return calls
+
+
+def test_build_app_wires_sqlite_rate_limiter(tmp_path, monkeypatch):
+    calls = _patch_rate_limiter_factory(monkeypatch)
 
     config_path = tmp_path / "agentapp.yaml"
     db_path = str(tmp_path / "rl.db")
@@ -186,17 +192,7 @@ governance:
 
 
 def test_build_app_wires_memory_rate_limiter_by_default(tmp_path, monkeypatch):
-    calls = []
-
-    def fake_create_approval_rate_limiter(**kwargs):
-        calls.append(kwargs)
-        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
-        return InMemoryApprovalRateLimiter(
-            max_requests=kwargs["max_requests"], window_seconds=kwargs["window_seconds"]
-        )
-
-    import agent_app.runtime.approval_rate_limit as rl_module
-    monkeypatch.setattr(rl_module, "create_approval_rate_limiter", fake_create_approval_rate_limiter)
+    calls = _patch_rate_limiter_factory(monkeypatch)
 
     config_path = tmp_path / "agentapp.yaml"
     config_path.write_text("""
