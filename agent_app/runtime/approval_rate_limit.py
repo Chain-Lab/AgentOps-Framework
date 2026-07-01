@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -115,12 +116,11 @@ class SQLiteApprovalRateLimiter(ApprovalRateLimiter):
         db_path: str = ".agent_app/approval_rate_limit.db",
         audit_logger: AuditLogger | None = None,
     ) -> None:
-        import sqlite3
-
         self._max_requests = max_requests
         self._window_seconds = window_seconds
         self._audit_logger = audit_logger
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.isolation_level = None
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
@@ -147,13 +147,12 @@ class SQLiteApprovalRateLimiter(ApprovalRateLimiter):
         user_id: str | None,
         tool_name: str,
     ) -> bool:
-        import time
-
         key = self._key(tenant_id, user_id, tool_name)
         now = time.time()
         cutoff = now - self._window_seconds
 
-        with self._conn:
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
             self._conn.execute(
                 "DELETE FROM approval_rate_limit_hits WHERE key=? AND hit_time<?",
                 (key, cutoff),
@@ -165,6 +164,7 @@ class SQLiteApprovalRateLimiter(ApprovalRateLimiter):
             count = row["cnt"] if row is not None else 0
 
             if count >= self._max_requests:
+                self._conn.commit()
                 await self._log_rate_limited(tenant_id, user_id, tool_name)
                 return False
 
@@ -172,6 +172,10 @@ class SQLiteApprovalRateLimiter(ApprovalRateLimiter):
                 "INSERT INTO approval_rate_limit_hits (key, hit_time) VALUES (?, ?)",
                 (key, now),
             )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
         return True
 
     async def _log_rate_limited(

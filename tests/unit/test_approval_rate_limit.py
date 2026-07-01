@@ -191,6 +191,24 @@ class TestSQLiteApprovalRateLimiter:
         assert len(events) == 1
         limiter.close()
 
+    @pytest.mark.asyncio
+    async def test_concurrent_instances_do_not_exceed_limit(self, tmp_path) -> None:
+        """Regression: BEGIN IMMEDIATE must prevent two connections from
+        both reading a stale count and both inserting past the limit."""
+        import asyncio
+        db_path = str(tmp_path / "rate_limit.db")
+        limiter_a = SQLiteApprovalRateLimiter(max_requests=5, window_seconds=60, db_path=db_path)
+        limiter_b = SQLiteApprovalRateLimiter(max_requests=5, window_seconds=60, db_path=db_path)
+        results = await asyncio.gather(*[
+            limiter_a.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request")
+            if i % 2 == 0 else
+            limiter_b.check_allowed(tenant_id="t1", user_id="u1", tool_name="refund.request")
+            for i in range(10)
+        ])
+        assert sum(1 for r in results if r) == 5
+        limiter_a.close()
+        limiter_b.close()
+
 
 class TestCreateApprovalRateLimiter:
     def test_creates_memory_backend(self) -> None:
