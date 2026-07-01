@@ -149,3 +149,65 @@ governance:
     headers = service.sign("test-body")
     assert headers["X-AgentApp-Signature"].startswith("v1=")
     assert headers["X-AgentApp-Key-ID"] == "test-key"
+
+
+def test_build_app_wires_sqlite_rate_limiter(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_create_approval_rate_limiter(**kwargs):
+        calls.append(kwargs)
+        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        return InMemoryApprovalRateLimiter(
+            max_requests=kwargs["max_requests"], window_seconds=kwargs["window_seconds"]
+        )
+
+    import agent_app.runtime.approval_rate_limit as rl_module
+    monkeypatch.setattr(rl_module, "create_approval_rate_limiter", fake_create_approval_rate_limiter)
+
+    config_path = tmp_path / "agentapp.yaml"
+    db_path = str(tmp_path / "rl.db")
+    config_path.write_text(f"""
+app:
+  name: test-app
+governance:
+  rate_limit:
+    max_requests: 5
+    window_seconds: 60
+    backend: sqlite
+    db_path: {db_path}
+""")
+    build_app(str(config_path))
+
+    assert len(calls) == 1
+    assert calls[0]["backend"] == "sqlite"
+    assert calls[0]["max_requests"] == 5
+    assert calls[0]["window_seconds"] == 60
+    assert calls[0]["db_path"] == db_path
+
+
+def test_build_app_wires_memory_rate_limiter_by_default(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_create_approval_rate_limiter(**kwargs):
+        calls.append(kwargs)
+        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        return InMemoryApprovalRateLimiter(
+            max_requests=kwargs["max_requests"], window_seconds=kwargs["window_seconds"]
+        )
+
+    import agent_app.runtime.approval_rate_limit as rl_module
+    monkeypatch.setattr(rl_module, "create_approval_rate_limiter", fake_create_approval_rate_limiter)
+
+    config_path = tmp_path / "agentapp.yaml"
+    config_path.write_text("""
+app:
+  name: test-app
+governance:
+  rate_limit:
+    max_requests: 5
+    window_seconds: 60
+""")
+    build_app(str(config_path))
+
+    assert len(calls) == 1
+    assert calls[0]["backend"] == "memory"

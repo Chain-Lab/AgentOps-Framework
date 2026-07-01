@@ -208,6 +208,15 @@ class RateLimitConfig(BaseModel):
 
     max_requests: int = Field(default=10, ge=1, description="Max approval requests per window")
     window_seconds: int = Field(default=60, ge=1, description="Rate limit window in seconds")
+    backend: str = Field(default="memory", description="Rate limiter backend: memory | sqlite (Phase 65)")
+    db_path: str | None = Field(default=None, description="SQLite db path (Phase 65)")
+
+    @field_validator("backend")
+    @classmethod
+    def _validate_backend(cls, v: str) -> str:
+        if v not in ("memory", "sqlite"):
+            raise ValueError(f"Invalid backend '{v}'. Must be: memory, sqlite")
+        return v
 
 
 class AuditConfig(BaseModel):
@@ -1514,7 +1523,7 @@ class AppConfig(BaseModel):
         gov = result.get("governance")
         if isinstance(gov, dict):
             normalized_gov = {}
-            for section in ("approvals", "audit", "permissions", "policies",
+            for section in ("approvals", "audit", "permissions", "rate_limit", "policies",
                             "policy_decisions", "policy_console", "policy_release",
                             "runtime_policies", "policy_observability", "policy_simulation"):
                 val = gov.get(section)

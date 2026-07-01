@@ -214,14 +214,16 @@ def build_app(
     # -- Governance: permission checker --
     permission_checker: Any = DefaultPermissionChecker() if gov else None
 
-    # -- Governance: rate limiter (Phase 21) --
+    # -- Governance: rate limiter (Phase 21, backend selection Phase 65) --
     rate_limiter: Any = None
     if gov and getattr(gov, "rate_limit", None):
-        from agent_app.runtime.approval_rate_limit import InMemoryApprovalRateLimiter
+        from agent_app.runtime.approval_rate_limit import create_approval_rate_limiter
         rl_cfg = gov.rate_limit
-        rate_limiter = InMemoryApprovalRateLimiter(
+        rate_limiter = create_approval_rate_limiter(
+            backend=getattr(rl_cfg, "backend", "memory"),
             max_requests=getattr(rl_cfg, "max_requests", 10),
             window_seconds=getattr(rl_cfg, "window_seconds", 60),
+            db_path=getattr(rl_cfg, "db_path", None),
             audit_logger=audit_logger,
         )
 
