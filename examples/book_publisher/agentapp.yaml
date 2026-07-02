@@ -1,0 +1,25 @@
+# examples/book_publisher/agentapp.yaml
+#
+# This file documents intent (governance/tracing store types) for a human
+# reader. book_publisher/build_app.py does NOT call
+# agent_app.config.loader.build_app() against this file — that loader always
+# defaults to DryRunBackend with no supported hook to swap it post-construction
+# without reaching into AgentApp._runner internals. Instead build_app.py
+# constructs AgentApp directly with the equivalent wiring shown below.
+# Swapping to a real LLM backend (e.g. LMStudio's OpenAI-compatible /v1
+# server) later is a one-line change to the `backend=` argument in
+# build_app.py — everything else is backend-agnostic.
+
+app:
+  name: book-publisher
+  environment: dev
+
+governance:
+  approvals:
+    type: memory
+  audit:
+    type: memory
+
+observability:
+  tracing:
+    type: memory

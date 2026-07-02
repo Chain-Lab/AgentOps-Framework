@@ -1,0 +1,7 @@
+name: children
+display_name: "Children"
+tone: "simple, playful, lots of metaphors and questions"
+reading_level: "early elementary"
+max_length: 300
+extra_instructions: "avoid any violent or scary descriptions; use encouraging language"
+target_platforms: [csdn]

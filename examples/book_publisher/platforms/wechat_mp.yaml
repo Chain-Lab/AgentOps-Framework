@@ -1,0 +1,7 @@
+name: wechat_mp
+display_name: "WeChat Official Account"
+max_length: 3000
+format: markdown
+hashtag_style: "#{tag}"
+risk_level: high
+requires_approval: true

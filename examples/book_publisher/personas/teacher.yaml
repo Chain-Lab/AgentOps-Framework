@@ -1,0 +1,6 @@
+name: teacher
+display_name: "Teacher"
+tone: "professional, instruction-oriented, surfaces classroom discussion angles"
+reading_level: "educator reference"
+max_length: 600
+extra_instructions: "distill 2-3 discussion questions suitable for classroom use"

@@ -1,0 +1,37 @@
+# examples/book_publisher/evals/book_publisher.yaml
+#
+# Covers book_generation (the DAG that runs one mock-LLM agent node per
+# persona) only. Governed publishing (publish_all / complete_approved_publish
+# in book_publisher/pipeline.py) deliberately runs outside app.run() — it
+# drives a directly-constructed ToolExecutor instead of DAG tool nodes, per
+# the design note in pipeline.py — so EvalRunner, which only calls
+# app.run(agent=..., workflow=..., input=...), has no way to exercise it.
+# Approval-gating and auto-publish behavior are covered instead by
+# tests/unit/test_book_publisher_pipeline.py.
+#
+# Also note: the generic `agentapp eval run --config <agentapp.yaml> <this
+# file>` CLI command won't work for this suite, for the same reason noted in
+# agentapp.yaml — that command builds the app via agent_app.config.loader,
+# which has no way to register book_publisher's dynamically YAML-driven
+# personas as agents. Run this suite with EvalRunner against the app returned
+# by book_publisher.build_app.build_app() instead.
+
+name: book_publisher_eval
+description: Book generation DAG regression tests — one mock-LLM agent per persona
+
+defaults:
+  workflow: book_generation
+  user_id: eval_editor
+  tenant_id: eval_tenant
+
+cases:
+  - id: book_generation_completes_for_all_personas
+    input: |
+      Title: Deep Echo
+      Summary: A crew finds an ancient signal beneath the sea.
+      Key points:
+      - found footage
+      - twist ending
+      Tags: scifi, mystery
+    expect:
+      status: completed
